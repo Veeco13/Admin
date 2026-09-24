@@ -21,3 +21,4 @@ Thumbs.db
 generated_contracts/
 backups/
 .env
+.claude/settings.local.json
