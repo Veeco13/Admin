@@ -357,6 +357,15 @@ def redact_salary(label):
     return SALARY_IN_LOG.sub("الراتب: •••", label or "")
 
 
+def cost_center_companies(s):
+    """اسم مركز التكلفة ← الشركة الفعلية (الموظفين مربوطين بالمركز بالاسم)."""
+    return dict(s.execute(select(M.CostCenter.name, M.CostCenter.companyId)).all())
+
+
+def cost_center_company(s, name):
+    return s.scalar(select(M.CostCenter.companyId).where(M.CostCenter.name == name)) if name else None
+
+
 def dump_state(s, ctx=None):
     """الحالة للواجهة. ctx = صلاحيات المستخدم (perms.UserCtx): بيتفلتر حسب الأقسام ونطاق الشركات
     وبتتشال الحقول الحساسة — اللي مش مسموح بيه مابيوصلش للمتصفح أصلًا. ctx=None ← كل حاجة."""
@@ -365,6 +374,36 @@ def dump_state(s, ctx=None):
     all_companies = ctx.allCompanies if ctx else True
     strip = ctx.strip if ctx else (lambda kind, d: d)
     see_salary = can("sensitive.salary")
+
+    cc_co = cost_center_companies(s)
+
+    employees = []
+    if can("employees.view") or can("contract.view"):
+        affs = {}
+        for a in s.scalars(select(M.EmployeeAffiliation).order_by(M.EmployeeAffiliation.employeeId,
+                                                                  M.EmployeeAffiliation.position)):
+            affs.setdefault(a.employeeId, []).append({"companyId": a.companyId, "projectId": a.projectId})
+        for e in s.scalars(select(M.Employee).order_by(M.Employee.name)):
+            a = affs.get(e.id, [])
+            if ctx and not ctx.affs_ok(a, cc_co.get(e.costCenter)):
+                continue
+            d = strip("employee", to_dict(e))
+            d["affiliations"] = a
+            employees.append(d)
+    emp_ids = {e["id"] for e in employees}
+
+    def in_scope(cid):
+        return company_ok(cid) if cid else all_companies
+
+    candidates = [strip("candidate", to_dict(x)) for x in s.scalars(select(M.Candidate)
+                                                                    .order_by(M.Candidate.appliedDate.desc()))
+                  if not ctx or ctx.record_ok(x.targetCompanyId, cc_co.get(x.costCenter))] \
+        if can("recruitment.view") else []
+
+    # شركات/مشاريع برّه النطاق بس مذكورة عند موظف أو مترشّح ظاهر (شركة الورق) ← الاسم بس، للعرض
+    ref_companies = {a["companyId"] for e in employees for a in e["affiliations"] if a["companyId"]} \
+        | {c["targetCompanyId"] for c in candidates if c.get("targetCompanyId")}
+    ref_projects = {a["projectId"] for e in employees for a in e["affiliations"] if a["projectId"]}
 
     companies_full = can("companies.view") or can("contract.view")   # العقد محتاج المفوّضين
     sigs = [to_dict(x) for x in s.scalars(select(M.Signatory))] if companies_full else []
@@ -376,6 +415,9 @@ def dump_state(s, ctx=None):
     companies = []
     for c in s.scalars(select(M.Company).order_by(M.Company.nameAr)):
         if not company_ok(c.id):
+            if c.id in ref_companies:
+                companies.append({"id": c.id, "nameAr": c.nameAr, "nameEn": c.nameEn, "signatories": [], "docs": {},
+                                  "logoUrl": None, "outOfScope": True})
             continue
         logo = f"/files/logo/{c.id}" if c.logoPath else None
         if companies_full:
@@ -389,21 +431,6 @@ def dump_state(s, ctx=None):
         companies.append(d)
     visible_sigs = {x["civilId"] for c in companies for x in c["signatories"] if x.get("civilId")}
 
-    employees = []
-    if can("employees.view") or can("contract.view"):
-        affs = {}
-        for a in s.scalars(select(M.EmployeeAffiliation).order_by(M.EmployeeAffiliation.employeeId,
-                                                                  M.EmployeeAffiliation.position)):
-            affs.setdefault(a.employeeId, []).append({"companyId": a.companyId, "projectId": a.projectId})
-        for e in s.scalars(select(M.Employee).order_by(M.Employee.name)):
-            a = affs.get(e.id, [])
-            if ctx and not ctx.affs_ok(a):
-                continue
-            d = strip("employee", to_dict(e))
-            d["affiliations"] = a
-            employees.append(d)
-    emp_ids = {e["id"] for e in employees}
-
     timeline = {}
     if can("employees.view"):
         for r in s.scalars(select(M.EmployeeTimeline).order_by(M.EmployeeTimeline.date)):
@@ -412,9 +439,6 @@ def dump_state(s, ctx=None):
                 if not see_salary:
                     d["label"] = redact_salary(d["label"])
                 timeline.setdefault(r.employeeId, []).append(d)
-
-    def in_scope(cid):
-        return company_ok(cid) if cid else all_companies
 
     audit = []
     if can("companylog.view") and all_companies:     # سجل التدقيق مش مربوط بشركة ← للنطاق الكامل بس
@@ -426,8 +450,9 @@ def dump_state(s, ctx=None):
 
     return {
         "companies": companies,
-        "projects": [to_dict(x) for x in s.scalars(select(M.Project).order_by(M.Project.nameAr))
-                     if company_ok(x.companyId)],
+        "projects": [to_dict(x) if company_ok(x.companyId) else {**to_dict(x), "outOfScope": True}
+                     for x in s.scalars(select(M.Project).order_by(M.Project.nameAr))
+                     if company_ok(x.companyId) or x.id in ref_projects],
         "employees": employees,
         "vehicles": [to_dict(x) for x in s.scalars(select(M.Vehicle).order_by(M.Vehicle.plate))
                      if in_scope(x.companyId)] if can("vehicles.view") else [],
@@ -435,9 +460,7 @@ def dump_state(s, ctx=None):
         "companyHistory": [to_dict(x) for x in s.scalars(select(M.CompanyHistory)
                                                          .order_by(M.CompanyHistory.date.desc()))
                            if in_scope(x.companyId)] if can("companylog.view") else [],
-        "candidates": [strip("candidate", to_dict(x)) for x in s.scalars(select(M.Candidate)
-                                                                         .order_by(M.Candidate.appliedDate.desc()))
-                       if in_scope(x.targetCompanyId)] if can("recruitment.view") else [],
+        "candidates": candidates,
         "signatoryDocs": {
             r.civilId: {"name": r.name, "url": f"/files/signatory/{r.civilId}",
                         "expiryDate": ser(r.expiryDate), "uploadedAt": ser(r.uploadedAt)}

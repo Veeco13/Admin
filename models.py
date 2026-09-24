@@ -80,6 +80,8 @@ class CostCenter(Base):
     id: Mapped[str] = col("id", ID, primary_key=True)
     name: Mapped[str] = col("name", NAME, nullable=False, unique=True)
     nameEn: Mapped[Optional[str]] = col("name_en", NAME)
+    # الشركة اللي موظفين المركز شغالين فيها فعلًا (ممكن تختلف عن شركة الورق) ← بتدخل في نطاق الشركات
+    companyId: Mapped[Optional[str]] = col("company_id", ID, fk("companies.id"), index=True)
 
 
 class Vehicle(Base):

@@ -161,21 +161,32 @@ OUT_OF_SCOPE = "السجل ده خارج نطاق الشركات المسموح 
 
 
 def emp_ok(s, emp_id):
-    return me().affs_ok(db.get_affiliations(s, emp_id))
+    """الموظف في نطاق المستخدم: شركة الورق أو الشركة الفعلية (مركز التكلفة)."""
+    e = s.get(M.Employee, emp_id)
+    return bool(e) and me().affs_ok(db.get_affiliations(s, emp_id), db.cost_center_company(s, e.costCenter))
 
 
-def affs_allowed(affs, existing=()):
-    """الانتماءات الجاية في طلب حفظ موظف: المستخدم المحدود لازم يسيب الموظف في شركة من نطاقه،
-    ومايضيفش شركة برّه نطاقه (الشركات اللي الموظف كان تابع لها أصلًا بتفضل زي ما هي)."""
+LEAVES_SCOPE = "بعد الحفظ السجل هيبقى برّه نطاقك: لازم يكون على ورق شركة من نطاقك أو على مركز تكلفة تابع لها"
+NEW_OUT_OF_SCOPE = "مش هينفع تضيف شركة برّه نطاقك"
+
+
+def scoped_affs(s, sent, existing, cost_center):
+    """انتماءات موظف جاية من مستخدم محدود ← (الانتماءات بعد الدمج، رسالة خطأ أو None).
+    - مايضيفش شركة برّه نطاقه.
+    - انتماءات الموظف لشركات برّه نطاقه (شركة الورق) بتفضل زي ما هي.
+    - الموظف لازم يفضل ظاهر له بعد الحفظ (بالورق أو بمركز التكلفة)."""
     u = me()
-    if u.allCompanies:
-        return True
-    cids = [a.get("companyId") for a in (affs or []) if a.get("companyId")]
-    return any(u.company_ok(c) for c in cids) and all(u.company_ok(c) or c in existing for c in cids)
+    old = {a["companyId"] for a in existing}
+    if any(a.get("companyId") and not u.company_ok(a["companyId"]) and a["companyId"] not in old for a in sent or []):
+        return None, NEW_OUT_OF_SCOPE
+    merged = u.merge_affs(sent, existing)
+    if not u.affs_ok(merged, db.cost_center_company(s, cost_center)):
+        return None, LEAVES_SCOPE
+    return merged, None
 
 
 def opt_company_ok(cid):
-    """شركة اختيارية (سيارة/مترشّح): من غير شركة = للنطاق الكامل بس."""
+    """شركة اختيارية (سيارة): من غير شركة = للنطاق الكامل بس."""
     u = me()
     return u.company_ok(cid) if cid else u.allCompanies
 
@@ -324,11 +335,18 @@ def save_employee(orig_id):
     dup_extra = (lambda d: {"dup": d}) if u.allCompanies else (lambda d: {})
     try:
         with db.session_scope() as s:
-            existing = [a["companyId"] for a in db.get_affiliations(s, orig_id)] if orig_id else []
-            if orig_id and not u.affs_ok([{"companyId": c} for c in existing]):
+            old_e = s.get(M.Employee, orig_id) if orig_id else None
+            if orig_id and not old_e:
+                return err("الموظف غير موجود", 404)
+            if orig_id and not emp_ok(s, orig_id):
                 return forbidden(OUT_OF_SCOPE)
-            if ("affiliations" in data or not orig_id) and not affs_allowed(data.get("affiliations"), existing):
-                return forbidden("لازم الموظف يكون تابع لشركة من الشركات المسموح لك بيها")
+            existing = db.get_affiliations(s, orig_id) if orig_id else []
+            cc = data["costCenter"] if "costCenter" in data else (old_e.costCenter if old_e else None)
+            merged, msg = scoped_affs(s, data["affiliations"] if "affiliations" in data else existing, existing, cc)
+            if msg:
+                return forbidden(msg)
+            if "affiliations" in data or not u.allCompanies:
+                data["affiliations"] = merged
             d = find_duplicate_civil_id(s, new_id, exclude_emp=orig_id)
             if d:
                 return err(f"الرقم المدني مسجّل بالفعل لـ {dup_name(d)}", 409, block=True, **dup_extra(d))
@@ -417,10 +435,17 @@ def bulk_assign():
             e = s.get(M.Employee, eid)
             if not e:
                 continue
+            existing = db.get_affiliations(s, eid)
+            affs = existing
             if comp or proj:
-                affs = db.get_affiliations(s, eid)
                 new = {"companyId": comp, "projectId": proj}
-                affs = affs + [new] if d.get("mode") == "add" else [new] + affs[1:]
+                affs = existing + [new] if d.get("mode") == "add" else [new] + existing[1:]
+            new_cc = (cc or None) if cc is not None else e.costCenter
+            affs, msg = scoped_affs(s, affs, existing, new_cc)
+            if msg:
+                s.rollback()
+                return forbidden(f"{e.name}: {msg}")
+            if comp or proj:
                 db.set_affiliations(s, eid, affs)
             if cc is not None:
                 e.costCenter = cc or None
@@ -618,6 +643,7 @@ def delete_company(cid):
         # فك الارتباطات بالترتيب (المفاتيح الأجنبية NO ACTION)
         s.query(M.Vehicle).filter(M.Vehicle.companyId == cid).update({"companyId": None})
         s.query(M.Candidate).filter(M.Candidate.targetCompanyId == cid).update({"targetCompanyId": None})
+        s.query(M.CostCenter).filter(M.CostCenter.companyId == cid).update({"companyId": None})
         pids = [p.id for p in s.scalars(select(M.Project).where(M.Project.companyId == cid))]
         if pids:
             s.query(M.EmployeeAffiliation).filter(M.EmployeeAffiliation.projectId.in_(pids)) \
@@ -876,9 +902,16 @@ def save_cost_center(ccid=None):
     name = (d.get("name") or "").strip()
     if not name:
         return err("الاسم مطلوب")
+    if "companyId" in d:
+        d["companyId"] = d["companyId"] or None
     with db.session_scope() as s:
         if s.scalar(select(M.CostCenter).where(M.CostCenter.name == name, M.CostCenter.id != (ccid or ""))):
             return err("مركز التكلفة موجود بالفعل", 409)
+        old = s.get(M.CostCenter, ccid) if ccid else None
+        if "companyId" in d and d["companyId"] != (old.companyId if old else None) and not me().allCompanies:
+            return forbidden("ربط مركز التكلفة بشركة محتاج صلاحية على كل الشركات")
+        if d.get("companyId") and not s.get(M.Company, d["companyId"]):
+            return err("الشركة غير موجودة")
         if ccid:
             c = s.get(M.CostCenter, ccid)
             if not c:
@@ -919,9 +952,15 @@ def save_candidate(cand_id=None):
         return err("الاسم مطلوب")
     with db.session_scope() as s:
         old = s.get(M.Candidate, cand_id) if cand_id else None
-        if (old and not opt_company_ok(old.targetCompanyId)) or \
-                ("targetCompanyId" in d or not old) and not opt_company_ok(d.get("targetCompanyId") or None):
-            return forbidden("لازم تحدد شركة مستهدفة من نطاقك")
+        u = me()
+        if old and not u.record_ok(old.targetCompanyId, db.cost_center_company(s, old.costCenter)):
+            return forbidden(OUT_OF_SCOPE)
+        target = (d.get("targetCompanyId") or None) if "targetCompanyId" in d else (old.targetCompanyId if old else None)
+        if target and not u.company_ok(target) and target != (old.targetCompanyId if old else None):
+            return forbidden(NEW_OUT_OF_SCOPE)
+        cc = d["costCenter"] if "costCenter" in d else (old.costCenter if old else None)
+        if not u.record_ok(target, db.cost_center_company(s, cc)):
+            return forbidden(LEAVES_SCOPE)
         x = find_duplicate_civil_id(s, (d.get("civilId") or "").strip(), exclude_cand=cand_id)
         if x:
             return err(f"الرقم المدني مسجّل بالفعل لـ {dup_name(x)}", 409, block=True)
@@ -955,7 +994,7 @@ def save_candidate(cand_id=None):
 def delete_candidate(cand_id):
     with db.session_scope() as s:
         c = s.get(M.Candidate, cand_id)
-        if c and not opt_company_ok(c.targetCompanyId):
+        if c and not me().record_ok(c.targetCompanyId, db.cost_center_company(s, c.costCenter)):
             return forbidden(OUT_OF_SCOPE)
         if c:
             s.delete(c)
@@ -970,7 +1009,7 @@ def convert_candidate(cand_id):
         c = s.get(M.Candidate, cand_id)
         if not c:
             return err("غير موجود", 404)
-        if not opt_company_ok(c.targetCompanyId) or not affs_allowed([{"companyId": c.targetCompanyId}]):
+        if not me().record_ok(c.targetCompanyId, db.cost_center_company(s, c.costCenter)):
             return forbidden(OUT_OF_SCOPE)
         civil = (c.civilId or "").strip()
         if not civil:
@@ -1005,7 +1044,7 @@ def _contract_bundle(args):
         emp = db.employee_full(s, args.get("emp", ""))
         if not emp:
             abort(404, "الموظف غير موجود")
-        if not me().affs_ok(emp["affiliations"]) or (args.get("company") and not me().company_ok(args["company"])):
+        if not emp_ok(s, emp["id"]) or (args.get("company") and not me().company_ok(args["company"])):
             abort(403, OUT_OF_SCOPE)
         tpl = s.get(M.Template, args.get("tpl", "")) or \
             s.scalar(select(M.Template).order_by(M.Template.isDefault.desc(), M.Template.createdAt))

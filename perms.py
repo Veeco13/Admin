@@ -110,11 +110,28 @@ class UserCtx:
     def company_ok(self, company_id):
         return self.allCompanies or (company_id in self.companies)
 
-    def affs_ok(self, affs):
-        """الموظف في النطاق لو أي انتماء ليه في شركة مسموحة."""
+    def affs_ok(self, affs, cc_company=None):
+        """الموظف في النطاق لو أي انتماء ليه (شركة الورق) في شركة مسموحة،
+        أو مركز التكلفة بتاعه تابع لشركة مسموحة (شغال فيها فعلًا وهو على ورق شركة تانية)."""
         if self.allCompanies:
             return True
-        return any(a.get("companyId") in self.companies for a in (affs or []))
+        return cc_company in self.companies or any(a.get("companyId") in self.companies for a in (affs or []))
+
+    def record_ok(self, company_id, cc_company=None):
+        """مترشّح/سجل ليه شركة واحدة + مركز تكلفة. من غير الاتنين = للنطاق الكامل بس."""
+        return self.allCompanies or company_id in self.companies or cc_company in self.companies
+
+    def merge_affs(self, sent, existing):
+        """الانتماءات لشركات برّه النطاق (زي شركة الورق لموظف شايفه عن طريق مركز التكلفة)
+        مابتتشالش ولا بتتغيّر من المستخدم المحدود — بتفضل زي ما هي، والأساسي يفضل أساسي."""
+        if self.allCompanies:
+            return list(sent or [])
+        locked = [a for a in existing if a.get("companyId") and a["companyId"] not in self.companies]
+        mine = [{"companyId": a.get("companyId") or None, "projectId": a.get("projectId") or None}
+                for a in (sent or []) if not a.get("companyId") or a["companyId"] in self.companies]
+        if locked and existing and existing[0] is locked[0]:
+            return [locked[0]] + mine + locked[1:]
+        return mine + locked
 
     def to_api(self):
         return {

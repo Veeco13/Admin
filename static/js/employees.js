@@ -24,7 +24,7 @@ function filteredEmployees() {
   const q = norm(f.q);
   return scopedEmployees().filter(e => {
     if (q && ![e.name, e.nameEn, e.id, e.passportNo, e.fileNo, e.profession, e.phone, e.nationality].some(v => norm(v).includes(q))) return false;
-    if (f.company && !(e.affiliations || []).some(a => a.companyId === f.company)) return false;
+    if (f.company && !empInCompany(e, f.company)) return false;
     if (f.project === '__none') { if (primaryAff(e).projectId) return false; }
     else if (f.project && !(e.affiliations || []).some(a => a.projectId === f.project)) return false;
     if (f.status && (e.employmentStatus || 'active') !== f.status) return false;
@@ -76,7 +76,7 @@ function renderEmployees() {
     <div class="filters no-print">
       <input type="search" id="f-q" placeholder="بحث بالاسم، الرقم المدني، الجواز، رقم الملف…" value="${esc(f.q)}">
       <select id="f-company">${companyOptions(f.company, '— كل الشركات —')}</select>
-      <select id="f-project">${opt('', t('— كل المشاريع —'), !f.project)}${opt('__none', t('بدون مشروع'), f.project === '__none')}${STATE.projects.filter(p => !f.company || p.companyId === f.company).map(p => opt(p.id, projectName(p.id), p.id === f.project)).join('')}</select>
+      <select id="f-project">${opt('', t('— كل المشاريع —'), !f.project)}${opt('__none', t('بدون مشروع'), f.project === '__none')}${scopedProjects().filter(p => !f.company || p.companyId === f.company).map(p => opt(p.id, projectName(p.id), p.id === f.project)).join('')}</select>
       <select id="f-status">${opt('', t('— كل الحالات —'), !f.status)}${Object.entries(EMP_STATUS_LABELS).map(([k, v]) => opt(k, LANG === 'en' ? v.en : v.ar, k === f.status)).join('')}</select>
       <select id="f-stage">${opt('', t('— كل مراحل المعاملات —'), !f.stage)}${opt('__none', t('بدون معاملة'), f.stage === '__none')}${opt('__note', t('عليها ملاحظة تعطّل'), f.stage === '__note')}${GOV_STAGES.map(g => opt(g.id, g.dot + ' ' + t(g.label), g.id === f.stage)).join('')}</select>
       <select id="f-nat">${opt('', t('— كل الجنسيات —'), !f.nationality)}${nats.map(n => opt(n, n, n === f.nationality)).join('')}</select>
@@ -239,6 +239,8 @@ async function openProfileCard(id, tab = 'info') {
         ${field('مرجع إضافي', esc(e.dpId))}
       </div>
       <h4>${t('الشركات والمشاريع')}</h4>
+      ${costCenterCompanyId(e.costCenter) && !(e.affiliations || []).some(a => a.companyId === costCenterCompanyId(e.costCenter))
+        ? `<div class="notice" style="margin:4px 0">🏭 ${t('شغال فعليًا في')}: <b>${esc(companyName(costCenterCompanyId(e.costCenter)) || '—')}</b> <span class="small">(${t('مركز التكلفة')}: ${esc(e.costCenter)})</span></div>` : ''}
       ${(e.affiliations || []).map((a, i) => `<div class="row" style="padding:4px 0">${i === 0 ? '<span class="chip on">' + t('أساسي') + '</span>' : '<span class="chip">' + t('إضافي') + '</span>'} <b>${esc(companyName(a.companyId) || '—')}</b> <span class="muted">${esc(projectName(a.projectId))}</span></div>`).join('') || '<div class="muted">—</div>'}
       ${vehicles.length ? `<h4>${t('السيارات')}</h4>` + vehicles.map(v => `<div>🚗 ${esc(v.plate)} ${esc(v.model || '')}</div>`).join('') : ''}
       ${e.notes ? `<h4>${t('ملاحظات')}</h4><div style="white-space:pre-line">${esc(e.notes)}</div>` : ''}
@@ -312,18 +314,25 @@ async function uploadFileForEmployee(empId, root) {
    ===================================================================== */
 function renderAffRows(affs) {
   if (!affs.length) affs = [{ companyId: '', projectId: '' }];
-  return affs.map((a, i) => `<div class="row aff-row" style="margin-bottom:6px">
+  return affs.map((a, i) => companyInScope(a.companyId) ? `<div class="row aff-row" style="margin-bottom:6px">
     <span class="chip ${i === 0 ? 'on' : ''}">${i === 0 ? t('أساسي') : t('إضافي')}</span>
     <select data-aff="company">${companyOptions(a.companyId)}</select>
     <select data-aff="project">${projectOptions(a.companyId, a.projectId)}</select>
-    ${i > 0 ? '<button type="button" class="btn sm danger" data-aff-del>✕</button>' : ''}</div>`).join('');
+    ${i > 0 ? '<button type="button" class="btn sm danger" data-aff-del>✕</button>' : ''}</div>`
+    : `<div class="row aff-row" data-locked="${esc(a.companyId)}|${esc(a.projectId || '')}" style="margin-bottom:6px">
+    <span class="chip ${i === 0 ? 'on' : ''}">${i === 0 ? t('أساسي') : t('إضافي')}</span>
+    📄 <b>${esc(companyName(a.companyId))}</b> <span class="muted">${esc(projectName(a.projectId))}</span>
+    <span class="small muted">(${t('شركة الورق — خارج نطاقك، للعرض بس')})</span></div>`).join('');
 }
 function collectAffRows(root) {
-  return $$('.aff-row', root).map(r => ({ companyId: $('[data-aff="company"]', r).value || null, projectId: $('[data-aff="project"]', r).value || null }))
-    .filter(a => a.companyId || a.projectId);
+  return $$('.aff-row', root).map(r => {
+    if (r.dataset.locked) { const [companyId, projectId] = r.dataset.locked.split('|'); return { companyId, projectId: projectId || null }; }
+    return { companyId: $('[data-aff="company"]', r).value || null, projectId: $('[data-aff="project"]', r).value || null };
+  }).filter(a => a.companyId || a.projectId);
 }
 function bindAffRows(root) {
   $$('.aff-row', root).forEach(r => {
+    if (r.dataset.locked) return;
     $('[data-aff="company"]', r).onchange = (ev) => { $('[data-aff="project"]', r).innerHTML = projectOptions(ev.target.value, ''); translateDomText(r); };
     const d = $('[data-aff-del]', r); if (d) d.onclick = () => { r.remove(); };
   });

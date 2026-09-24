@@ -50,7 +50,7 @@ function renderCompanies() {
       </tbody></table>` : '<div class="muted small">—</div>'}
     </div>`;
   }).join('');
-  viewRoot().innerHTML = `<div class="page-head"><div><h1>مركز إدارة الشركات والمشاريع</h1><div class="sub">${scopedCompanies().length} ${t('شركة')} · ${STATE.projects.length} ${t('مشروع')}</div></div>
+  viewRoot().innerHTML = `<div class="page-head"><div><h1>مركز إدارة الشركات والمشاريع</h1><div class="sub">${scopedCompanies().length} ${t('شركة')} · ${scopedProjects().length} ${t('مشروع')}</div></div>
     <div class="actions"><button class="btn primary write-only" data-p="companies.edit scope.all" id="co-add">➕ إضافة شركة</button><button class="btn" id="co-org">🏗️ الهيكل التنظيمي</button></div></div>
     <div class="grid two">${cards || '<div class="empty">لا توجد شركات</div>'}</div>`;
   const R = viewRoot();
@@ -240,10 +240,10 @@ function renderCostCenters() {
   const unassigned = emps.filter(e => !e.costCenter);
   viewRoot().innerHTML = `<div class="page-head"><div><h1>مراكز التكلفة</h1><div class="sub">${STATE.costCenters.length} ${t('مركز')}</div></div>
     <div class="actions"><button class="btn primary write-only" data-p="costcenters.edit" id="cc-add">➕ إضافة مركز تكلفة</button></div></div>
-    <div class="table-wrap"><table class="data"><thead><tr><th>${t('الاسم')}</th><th>${t('الاسم (إنجليزي)')}</th><th>${t('الموظفين')}</th><th data-p="sensitive.salary">${t('إجمالي الرواتب')}</th><th data-p="sensitive.salary">${t('تكلفة المعاملات')}</th><th></th></tr></thead><tbody>
-    ${rows.map(r => `<tr><td><b>${esc(r.c.name)}</b></td><td>${esc(r.c.nameEn || '')}</td><td><a href="#" data-go="${esc(r.c.name)}">${r.n}</a></td><td class="num" data-p="sensitive.salary">${fmtMoney(r.sal)}</td><td class="num" data-p="sensitive.salary">${fmtMoney(r.gov)}</td>
+    <div class="table-wrap"><table class="data"><thead><tr><th>${t('الاسم')}</th><th>${t('الاسم (إنجليزي)')}</th><th>${t('الشركة الفعلية')}</th><th>${t('الموظفين')}</th><th data-p="sensitive.salary">${t('إجمالي الرواتب')}</th><th data-p="sensitive.salary">${t('تكلفة المعاملات')}</th><th></th></tr></thead><tbody>
+    ${rows.map(r => `<tr><td><b>${esc(r.c.name)}</b></td><td>${esc(r.c.nameEn || '')}</td><td>${r.c.companyId ? esc(companyName(r.c.companyId) || '—') : `<span class="muted">${t('غير محددة')}</span>`}</td><td><a href="#" data-go="${esc(r.c.name)}">${r.n}</a></td><td class="num" data-p="sensitive.salary">${fmtMoney(r.sal)}</td><td class="num" data-p="sensitive.salary">${fmtMoney(r.gov)}</td>
       <td class="row"><button class="btn sm write-only" data-p="costcenters.edit" data-edit="${r.c.id}">✏️</button><button class="btn sm danger write-only" data-p="costcenters.delete" data-del="${r.c.id}">✕</button></td></tr>`).join('')}
-    <tr><td class="muted">${t('بدون مركز تكلفة')}</td><td></td><td>${unassigned.length}</td><td class="num" data-p="sensitive.salary">${fmtMoney(sum(unassigned.map(e => e.salary)))}</td><td data-p="sensitive.salary"></td><td></td></tr>
+    <tr><td class="muted">${t('بدون مركز تكلفة')}</td><td></td><td></td><td>${unassigned.length}</td><td class="num" data-p="sensitive.salary">${fmtMoney(sum(unassigned.map(e => e.salary)))}</td><td data-p="sensitive.salary"></td><td></td></tr>
     </tbody></table></div>
     <p class="small muted">${t('لتعيين مركز تكلفة لمجموعة موظفين: حددهم في شاشة الموظفين ثم «تعيين جماعي».')}</p>`;
   $('#cc-add').onclick = () => openCostCenterModal(null);
@@ -256,12 +256,15 @@ function openCostCenterModal(c) {
   const m = openModal({
     title: c.id ? t('تعديل مركز تكلفة') : t('إضافة مركز تكلفة'), size: 'narrow',
     body: `<div class="form"><label class="full"><span class="req">${t('الاسم')}</span><input name="name" value="${esc(c.name || '')}"></label>
-      <label class="full">${t('الاسم (إنجليزي)')}<input name="nameEn" value="${esc(c.nameEn || '')}" dir="ltr"></label></div>`,
+      <label class="full">${t('الاسم (إنجليزي)')}<input name="nameEn" value="${esc(c.nameEn || '')}" dir="ltr"></label>
+      <label class="full">${t('الشركة الفعلية (اللي الموظفين شغالين فيها)')}<select name="companyId" ${can('scope.all') ? '' : 'disabled'}>${companyOptions(c.companyId, '— غير محددة —')}</select>
+        <span class="small muted">${t('المستخدم المحصور في الشركة دي هيشوف موظفين المركز ده حتى لو على ورق شركة تانية.')}</span></label></div>`,
     foot: `<button class="btn primary" data-save>حفظ</button><button class="btn" data-close>إلغاء</button>`,
   });
   $('[data-save]', m.el).onclick = async () => {
     const d = formValues(m.el);
     if (!d.name) return openBlockAlert(t('الاسم مطلوب'));
+    if (!can('scope.all')) delete d.companyId;
     await persist(c.id ? 'PUT' : 'POST', c.id ? '/api/cost-centers/' + c.id : '/api/cost-centers', d, 'تم الحفظ');
     m.close();
   };

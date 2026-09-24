@@ -181,10 +181,16 @@ function applyPermStyles() {
 /* ---------- إعدادات العرض (لهذا المتصفح بس — تفضيل شخصي، مش صلاحية) ---------- */
 function loadViewPerms() { return lsJson('mv_viewPerms', { hidden: [] }); }
 function saveViewPerms(p) { lsSet('mv_viewPerms', JSON.stringify({ hidden: p.hidden || [] })); }
-// نطاق الشركات بقى على السيرفر: STATE فيه بس الشركات والموظفين المسموحين
-function companyInScope(cid) { return true; }
+// نطاق الشركات بقى على السيرفر: STATE فيه بس الموظفين المسموحين. الشركات/المشاريع اللي عليها outOfScope
+// جاية بالاسم بس (شركة الورق لموظف شايفه عن طريق مركز التكلفة) ← للعرض، مش للاختيار.
+function companyInScope(cid) { const c = cid && IDX.company[cid]; return !c || !c.outOfScope; }
 function scopedEmployees() { return STATE.employees; }
-function scopedCompanies() { return STATE.companies; }
+function scopedCompanies() { return STATE.companies.filter(c => !c.outOfScope); }
+function scopedProjects() { return STATE.projects.filter(p => !p.outOfScope); }
+/** الشركة الفعلية لمركز تكلفة (بالاسم) */
+function costCenterCompanyId(name) { const c = name && STATE.costCenters.find(x => x.name === name); return (c && c.companyId) || null; }
+/** الموظف تابع للشركة: على الورق أو شغال فيها فعلًا (مركز التكلفة) */
+function empInCompany(e, cid) { return (e.affiliations || []).some(a => a.companyId === cid) || costCenterCompanyId(e.costCenter) === cid; }
 function applyNavVisibility() {
   const hidden = loadViewPerms().hidden || [];
   $$('#navrail button[data-view]').forEach(b => { b.hidden = hidden.includes(b.dataset.view) || !viewAllowed(b.dataset.view); });
@@ -283,7 +289,7 @@ function companyOptions(sel, blank = '— اختر الشركة —') {
   return opt('', t(blank), !sel) + scopedCompanies().map(c => opt(c.id, companyName(c.id), c.id === sel)).join('');
 }
 function projectOptions(companyId, sel, blank = '— بدون مشروع —') {
-  return opt('', t(blank), !sel) + STATE.projects.filter(p => !companyId || p.companyId === companyId).map(p => opt(p.id, projectName(p.id), p.id === sel)).join('');
+  return opt('', t(blank), !sel) + scopedProjects().filter(p => !companyId || p.companyId === companyId).map(p => opt(p.id, projectName(p.id), p.id === sel)).join('');
 }
 function costCenterOptions(sel, blank = '— بدون —') {
   return opt('', t(blank), !sel) + STATE.costCenters.map(c => opt(c.name, LANG === 'en' && c.nameEn ? c.nameEn : c.name, c.name === sel)).join('');
@@ -533,7 +539,7 @@ function runGlobalSearch(q) {
     add('المترشّحين', c.name, c.passportNo || '', () => { setView('recruitment'); setTimeout(() => openCandidateModal(c.id), 50); });
   for (const c of scopedCompanies()) if ([c.nameAr, c.nameEn, c.mainFileNumber, c.commercialLicenseNo].some(v => norm(v).includes(n)))
     add('الشركات', companyName(c.id), c.mainFileNumber || '', () => { VIEW_ARGS = { focusCompany: c.id }; setView('companies'); });
-  for (const p of STATE.projects) if ([p.nameAr, p.nameEn, p.fileNumber].some(v => norm(v).includes(n)))
+  for (const p of scopedProjects()) if ([p.nameAr, p.nameEn, p.fileNumber].some(v => norm(v).includes(n)))
     add('المشاريع', projectName(p.id), companyName(p.companyId), () => { VIEW_ARGS = { focusCompany: p.companyId }; setView('companies'); });
   for (const v of STATE.vehicles) if ([v.plate, v.model].some(x => norm(x).includes(n)))
     add('السيارات', v.plate, v.model || '', () => { setView('vehicles'); setTimeout(() => openVehicleModal(v.id), 50); });
@@ -768,9 +774,9 @@ function openUserEditModal(u, roles, done) {
       <label class="full"><span class="req">${t('الدور')}</span><select name="roleId" ${isSelf ? 'disabled' : ''}>${roles.map(r => opt(r.id, r.name, r.id === u.roleId)).join('')}</select><div id="role-help">${roleHelp(u.roleId)}</div></label>
       <h4>${t('نطاق الشركات')}</h4>
       <label class="check full"><input type="radio" name="scope" value="all" ${u.allCompanies ? 'checked' : ''}> ${t('كل الشركات')}</label>
-      <label class="check full"><input type="radio" name="scope" value="some" ${u.allCompanies ? '' : 'checked'}> ${t('شركات محددة بس — مايشوفش ولا يعدّل أي حاجة برّاها')}</label>
+      <label class="check full"><input type="radio" name="scope" value="some" ${u.allCompanies ? '' : 'checked'}> ${t('شركات محددة بس — يشوف موظفين الشركة على الورق + الموظفين اللي على مراكز تكلفة تابعة لها، ومايشوفش أي حاجة تانية')}</label>
       <div class="full" id="scope-box" style="grid-column:1/-1;${u.allCompanies ? 'display:none' : ''}"><div class="form">
-        ${STATE.companies.map(c => `<label class="check"><input type="checkbox" data-co="${c.id}" ${u.companies.includes(c.id) ? 'checked' : ''}> ${esc(companyName(c.id))}</label>`).join('')}</div></div>
+        ${scopedCompanies().map(c => `<label class="check"><input type="checkbox" data-co="${c.id}" ${u.companies.includes(c.id) ? 'checked' : ''}> ${esc(companyName(c.id))}</label>`).join('')}</div></div>
       </form>
       ${isSelf ? `<div class="notice">${t('ده حسابك: مش هينفع تغيّر دورك أو توقفه من هنا.')}</div>` : ''}`,
     foot: `${!isNew && !isSelf ? `<button class="btn danger" data-del>🗑️ ${t('حذف')}</button><span class="spacer"></span>` : ''}
