@@ -21,21 +21,19 @@ import re
 import sys
 
 import db
+import models as M
 
-DATA_TABLES = ["companies", "projects", "cost_centers", "vehicles", "employees", "employee_affiliations",
-               "candidates", "signatories", "signatory_docs", "company_docs", "company_history",
-               "audit_log", "employee_timeline"]
+# الجداول اللي بتتمسح وتتملى من النسخة (المستخدمين والقوالب مش بيتلمسوا)
+DATA_MODELS = [M.Company, M.Project, M.CostCenter, M.Vehicle, M.Employee, M.EmployeeAffiliation, M.Candidate,
+               M.Signatory, M.SignatoryDoc, M.CompanyDoc, M.CompanyHistory, M.AuditLog, M.EmployeeTimeline]
 
 
 def is_lunx_state(obj):
     return isinstance(obj, dict) and "employees" in obj and "companies" in obj and "tables" not in obj
 
 
-def _norm_dt(s):
-    """2026-09-23T10:56:53.807Z → 2026-09-23T10:56:53"""
-    if not s:
-        return s
-    return re.sub(r"(\.\d+)?Z$", "", str(s))
+def _norm_dt(v):
+    return db.parse_datetime(v)
 
 
 def _save_data_url(data_url, folder, basename, orig_name=None):
@@ -56,38 +54,38 @@ def _save_data_url(data_url, folder, basename, orig_name=None):
     return os.path.relpath(path, db.BASE_DIR)
 
 
-def import_lunx_state(conn, st, user=None):
-    for t in DATA_TABLES:
-        conn.execute(f"DELETE FROM {t}")
+def import_lunx_state(s, st, user=None):
+    for model in reversed(DATA_MODELS):
+        s.query(model).delete()
+    s.flush()
     stats = {}
 
     # الشركات + المفوّضين + المستندات + الشعار
     for c in st.get("companies", []):
-        obj = dict(c)
-        db.insert(conn, "companies", obj)
-        logo = _save_data_url(c.get("logoDataUrl"), "logos", f"{c['id']}_logo")
-        if logo:
-            conn.execute("UPDATE companies SET logo_path=? WHERE id=?", (logo, c["id"]))
-        for s in c.get("signatories") or []:
-            s = dict(s)
-            s.setdefault("id", db.new_id("sig"))
-            s["companyId"] = c["id"]
-            db.insert(conn, "signatories", s)
+        co = db.build(M.Company, c)
+        co.logoPath = _save_data_url(c.get("logoDataUrl"), "logos", f"{c['id']}_logo")
+        s.add(co)
+        for sg in c.get("signatories") or []:
+            sg = dict(sg)
+            sg.setdefault("id", db.new_id("sig"))
+            sg["companyId"] = c["id"]
+            s.add(db.build(M.Signatory, sg))
         for kind, d in (c.get("docs") or {}).items():
             if not d:
                 continue
             p = _save_data_url(d.get("dataUrl"), "companies", f"{c['id']}_{kind}", d.get("name"))
             if p:
-                conn.execute("INSERT OR REPLACE INTO company_docs VALUES(?,?,?,?,?)",
-                             (c["id"], kind, d.get("name"), p, _norm_dt(d.get("uploadedAt"))))
+                s.add(M.CompanyDoc(companyId=c["id"], kind=kind, name=d.get("name"), path=p,
+                                   uploadedAt=_norm_dt(d.get("uploadedAt"))))
     stats["companies"] = len(st.get("companies", []))
 
     for p in st.get("projects", []):
-        db.insert(conn, "projects", p)
+        s.add(db.build(M.Project, p))
     for cc in st.get("costCenters", []):
-        db.insert(conn, "costCenters", cc)
+        s.add(db.build(M.CostCenter, cc))
     for v in st.get("vehicles", []):
-        db.insert(conn, "vehicles", v)
+        s.add(db.build(M.Vehicle, v))
+    s.flush()
 
     # الموظفين
     n = 0
@@ -99,11 +97,11 @@ def import_lunx_state(conn, st, user=None):
             obj["housingAmount"] = ha.get("amount")
         elif isinstance(ha, bool):
             obj["housingIncluded"] = ha
-        obj["lastUpdated"] = _norm_dt(e.get("lastUpdated"))
-        if not obj.get("employmentStatus"):
-            obj["employmentStatus"] = "active"
-        db.insert(conn, "employees", obj)
-        db.set_affiliations(conn, e["id"], e.get("affiliations") or [])
+        obj["employmentStatus"] = obj.get("employmentStatus") or "active"
+        s.add(db.build(M.Employee, obj))
+        for i, a in enumerate(x for x in (e.get("affiliations") or []) if x.get("companyId") or x.get("projectId")):
+            s.add(M.EmployeeAffiliation(employeeId=e["id"], position=i, companyId=a.get("companyId") or None,
+                                        projectId=a.get("projectId") or None))
         n += 1
     stats["employees"] = n
 
@@ -112,28 +110,27 @@ def import_lunx_state(conn, st, user=None):
         ha = c.get("housingAllowance")
         if isinstance(ha, dict):
             obj["housingAllowance"] = bool(ha.get("included"))
-        db.insert(conn, "candidates", obj)
+        s.add(db.build(M.Candidate, obj))
     stats["candidates"] = len(st.get("candidates", []))
 
     for civil, d in (st.get("signatoryDocs") or {}).items():
         p = _save_data_url(d.get("dataUrl"), "signatories", str(civil), d.get("name"))
-        conn.execute("INSERT OR REPLACE INTO signatory_docs VALUES(?,?,?,?,?)",
-                     (civil, d.get("name") if p else None, p, d.get("expiryDate"), _norm_dt(d.get("uploadedAt"))))
+        s.add(M.SignatoryDoc(civilId=civil, name=d.get("name") if p else None, path=p,
+                             expiryDate=db.parse_date(d.get("expiryDate")), uploadedAt=_norm_dt(d.get("uploadedAt"))))
 
     for h in st.get("companyHistory", []):
-        conn.execute("INSERT INTO company_history(id, company_id, type, label, date, user) VALUES(?,?,?,?,?,?)",
-                     (h.get("id") or db.new_id("ch"), h.get("companyId"), h.get("type"), h.get("label"),
-                      _norm_dt(h.get("date")), h.get("user")))
+        s.add(M.CompanyHistory(id=h.get("id") or db.new_id("ch"), companyId=h.get("companyId"), type=h.get("type"),
+                               label=h.get("label"), date=_norm_dt(h.get("date")), user=h.get("user")))
     for a in st.get("auditLog", []):
-        conn.execute("INSERT INTO audit_log(id, type, category, label, date, user) VALUES(?,?,?,?,?,?)",
-                     (a.get("id") or db.new_id("aud"), a.get("type"), a.get("category") or (a.get("type") or "").split("_")[0],
-                      a.get("label"), _norm_dt(a.get("date")), a.get("user")))
+        s.add(M.AuditLog(id=a.get("id") or db.new_id("aud"), type=a.get("type"),
+                         category=a.get("category") or (a.get("type") or "").split("_")[0],
+                         label=a.get("label"), date=_norm_dt(a.get("date")), user=a.get("user")))
     for emp_id, events in (st.get("employeeTimeline") or {}).items():
         for ev in events or []:
-            conn.execute("INSERT INTO employee_timeline(id, employee_id, type, label, date, user) VALUES(?,?,?,?,?,?)",
-                         (ev.get("id") or db.new_id("tl"), emp_id, ev.get("type"), ev.get("label"),
-                          _norm_dt(ev.get("date")), ev.get("user")))
-    db.log_audit(conn, "backup_restore",
+            s.add(M.EmployeeTimeline(id=ev.get("id") or db.new_id("tl"), employeeId=emp_id, type=ev.get("type"),
+                                     label=ev.get("label"), date=_norm_dt(ev.get("date")), user=ev.get("user")))
+    s.flush()
+    db.log_audit(s, "backup_restore",
                  f"استعادة نسخة Lunx: {stats['employees']} موظف، {stats['companies']} شركة، {stats['candidates']} مترشّح", user)
     return stats
 
@@ -143,16 +140,8 @@ if __name__ == "__main__":
         print(__doc__)
         sys.exit(1)
     db.init_db()
-    state = json.load(open(sys.argv[1], encoding="utf-8"))
+    state = json.load(open(sys.argv[1], encoding="utf-8-sig"))
     if not is_lunx_state(state):
         sys.exit("الملف ده مش نسخة احتياطية من Lunx")
-    conn = db.connect()
-    try:
-        s = import_lunx_state(conn, state, "استعادة من سطر الأوامر")
-        conn.commit()
-        print("تمت الاستعادة:", s)
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+    with db.session_scope() as s:
+        print("تمت الاستعادة:", import_lunx_state(s, state, "استعادة من سطر الأوامر"))

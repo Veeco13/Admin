@@ -13,6 +13,8 @@ from datetime import datetime, date
 import pandas as pd
 
 import db
+import models as M
+from sqlalchemy import select
 from docx_engine import NATIONALITY_EN
 
 HEADER_MAP = {
@@ -88,38 +90,42 @@ def clean(v):
     return s
 
 
-def _find_company(conn, name, cache):
+def _norm_co(name):
+    return re.sub(r"\s+", "", name or "").replace("ه", "ة").replace("أ", "ا").replace("إ", "ا")
+
+
+def _find_company(s, name, cache):
     if not name:
         return None
-    key = re.sub(r"\s+", "", name).replace("ه", "ة").replace("أ", "ا").replace("إ", "ا")
+    key = _norm_co(name)
     if key in cache:
         return cache[key]
-    for r in conn.execute("SELECT id, name_ar FROM companies"):
-        k2 = re.sub(r"\s+", "", r["name_ar"] or "").replace("ه", "ة").replace("أ", "ا").replace("إ", "ا")
-        if k2 == key:
-            cache[key] = r["id"]
-            return r["id"]
+    for cid, name_ar in s.execute(select(M.Company.id, M.Company.nameAr)):
+        if _norm_co(name_ar) == key:
+            cache[key] = cid
+            return cid
     cid = db.new_id("co")
-    conn.execute("INSERT INTO companies(id, name_ar) VALUES(?, ?)", (cid, name.strip()))
-    db.log_company_history(conn, cid, "company_created", f"إنشاء الشركة (استيراد): {name.strip()}")
+    s.add(M.Company(id=cid, nameAr=name.strip()))
+    db.log_company_history(s, cid, "company_created", f"إنشاء الشركة (استيراد): {name.strip()}")
+    s.flush()
     cache[key] = cid
     return cid
 
 
-def _affiliation_for_file(conn, file_no, company_id=None):
+def _affiliation_for_file(s, file_no):
     """رقم الملف ← مشروع (رقم ملف المشروع) أو شركة (رقم الملف الرئيسي)."""
     if not file_no:
         return None
-    r = conn.execute("SELECT id, company_id FROM projects WHERE file_number=?", (file_no,)).fetchone()
-    if r:
-        return {"companyId": r["company_id"], "projectId": r["id"]}
-    r = conn.execute("SELECT id FROM companies WHERE main_file_number=?", (file_no,)).fetchone()
-    if r:
-        return {"companyId": r["id"], "projectId": None}
+    p = s.scalar(select(M.Project).where(M.Project.fileNumber == file_no))
+    if p:
+        return {"companyId": p.companyId, "projectId": p.id}
+    c = s.scalar(select(M.Company).where(M.Company.mainFileNumber == file_no))
+    if c:
+        return {"companyId": c.id, "projectId": None}
     return None
 
 
-def upsert_employee(conn, rec, user, stats, company_cache):
+def upsert_employee(s, rec, user, stats, company_cache):
     emp_id = clean(rec.get("id"))
     if not emp_id or not rec.get("name"):
         stats["skipped"] += 1
@@ -130,35 +136,34 @@ def upsert_employee(conn, rec, user, stats, company_cache):
         rec["nationalityEn"] = NATIONALITY_EN.get(rec["nationality"])
     data = {k: v for k, v in rec.items() if v not in (None, "")}
     data["id"] = emp_id
-    data["lastUpdated"] = db.now_iso()
+    data["lastUpdated"] = db.now()
     data["lastUpdatedBy"] = user
-    existing = conn.execute("SELECT id FROM employees WHERE id=?", (emp_id,)).fetchone()
     # منع تكرار الجواز
-    if data.get("passportNo"):
-        dup = conn.execute("SELECT id FROM employees WHERE passport_no=? AND id<>?", (data["passportNo"], emp_id)).fetchone()
-        if dup:
-            data.pop("passportNo")
-    if existing:
-        db.update(conn, "employees", emp_id, data)
+    if data.get("passportNo") and s.scalar(select(M.Employee.id).where(
+            M.Employee.passportNo == data["passportNo"], M.Employee.id != emp_id)):
+        data.pop("passportNo")
+    e = s.get(M.Employee, emp_id)
+    if e:
+        db.apply(e, data)
         stats["updated"] += 1
-        db.push_timeline(conn, emp_id, "import_update", "تحديث من ملف استيراد", user)
+        db.push_timeline(s, emp_id, "import_update", "تحديث من ملف استيراد", user)
     else:
         data.setdefault("employmentStatus", "active")
-        db.insert(conn, "employees", data)
+        s.add(db.build(M.Employee, data))
         stats["added"] += 1
-        db.push_timeline(conn, emp_id, "import_add", "إضافة من ملف استيراد", user)
+        db.push_timeline(s, emp_id, "import_add", "إضافة من ملف استيراد", user)
+    s.flush()
     # الانتماء
-    has_aff = conn.execute("SELECT 1 FROM employee_affiliations WHERE employee_id=?", (emp_id,)).fetchone()
-    if not has_aff:
-        aff = _affiliation_for_file(conn, data.get("fileNo"))
-        cid = _find_company(conn, company_name, company_cache) if company_name else None
+    if not db.get_affiliations(s, emp_id):
+        aff = _affiliation_for_file(s, data.get("fileNo"))
+        cid = _find_company(s, company_name, company_cache) if company_name else None
         if cid and (not aff or aff["companyId"] != cid):
             aff = {"companyId": cid, "projectId": None}
         if aff:
-            db.set_affiliations(conn, emp_id, [aff])
+            db.set_affiliations(s, emp_id, [aff])
 
 
-def import_dataframe_with_headers(conn, df, user, stats, cache):
+def import_dataframe_with_headers(s, df, user, stats, cache):
     cols = {}
     for c in df.columns:
         key = str(c).strip().lower()
@@ -176,11 +181,11 @@ def import_dataframe_with_headers(conn, df, user, stats, cache):
                 rec["salary"] = float(rec["salary"])
             except ValueError:
                 rec["salary"] = None
-        upsert_employee(conn, rec, user, stats, cache)
+        upsert_employee(s, rec, user, stats, cache)
     return True
 
 
-def import_manpower_headerless(conn, df, user, stats, cache):
+def import_manpower_headerless(s, df, user, stats, cache):
     if df.shape[1] < 9:
         return False
     for _, row in df.iterrows():
@@ -198,18 +203,18 @@ def import_manpower_headerless(conn, df, user, stats, cache):
         }
         if rec["profession"] and "سائق" in rec["profession"]:
             rec["isDriver"] = True
-        upsert_employee(conn, rec, user, stats, cache)
+        upsert_employee(s, rec, user, stats, cache)
     return True
 
 
-def import_file(conn, path, user):
+def import_file(s, path, user):
     stats = {"added": 0, "updated": 0, "skipped": 0, "sheets": []}
     cache = {}
     if path.lower().endswith(".csv"):
         frames = {"csv": pd.read_csv(path, header=None, dtype=object, encoding="utf-8-sig")}
     else:
         xl = pd.ExcelFile(path)
-        frames = {s: xl.parse(s, header=None, dtype=object) for s in xl.sheet_names}
+        frames = {sh: xl.parse(sh, header=None, dtype=object) for sh in xl.sheet_names}
     for name, raw in frames.items():
         if raw.empty:
             continue
@@ -217,9 +222,9 @@ def import_file(conn, path, user):
         if any(h in HEADER_MAP and HEADER_MAP[h] in ("id", "name") for h in first):
             df = raw.iloc[1:].copy()
             df.columns = [str(x).strip() for x in raw.iloc[0].tolist()]
-            ok = import_dataframe_with_headers(conn, df, user, stats, cache)
+            ok = import_dataframe_with_headers(s, df, user, stats, cache)
         else:
-            ok = import_manpower_headerless(conn, raw, user, stats, cache)
+            ok = import_manpower_headerless(s, raw, user, stats, cache)
         if ok:
             stats["sheets"].append(name)
     return stats

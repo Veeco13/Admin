@@ -1,4 +1,10 @@
 Flask>=3.0
+SQLAlchemy>=2.0
 pandas>=2.1
 openpyxl>=3.1
 python-docx>=1.1
+
+# اختياري حسب نوع قاعدة البيانات (LUNX_DATABASE_URL):
+# psycopg[binary]>=3.1     ← PostgreSQL
+# PyMySQL>=1.1             ← MySQL / MariaDB
+# pyodbc>=5.0              ← SQL Server

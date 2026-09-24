@@ -1,402 +1,398 @@
 # -*- coding: utf-8 -*-
 """
-Lunx — طبقة قاعدة البيانات (SQLite)
-الجداول مطابقة لنموذج البيانات في وثيقة Lunx (القسم 6) مع تحويل camelCase إلى أعمدة SQL.
+Lunx — طبقة قاعدة البيانات (SQLAlchemy)
+
+نوع قاعدة البيانات بيتحدد من متغير البيئة LUNX_DATABASE_URL:
+    sqlite:///lunx.db                                   (الافتراضي)
+    postgresql+psycopg://user:pass@host/lunx
+    mysql+pymysql://user:pass@host/lunx?charset=utf8mb4
+    mssql+pyodbc://user:pass@DSN
+
+كل الكود بيتعامل مع الـ ORM (models.py) — مفيش SQL خاص بنوع معيّن.
 """
 import os
-import sqlite3
-import json
+import re
 import uuid
-from datetime import datetime
+from contextlib import contextmanager
+from datetime import date, datetime
+
+from sqlalchemy import Boolean, Date, DateTime, Float, Integer, create_engine, event, inspect, select, text
+from sqlalchemy.orm import sessionmaker
+
+import models as M
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.environ.get("LUNX_DB", os.path.join(BASE_DIR, "lunx.db"))
+SCHEMA_VERSION = "2"
 
-SCHEMA_VERSION = 1
+
+def default_url():
+    if os.environ.get("LUNX_DATABASE_URL"):
+        return os.environ["LUNX_DATABASE_URL"]
+    path = os.environ.get("LUNX_DB", os.path.join(BASE_DIR, "lunx.db"))  # توافق مع الإصدار السابق
+    return "sqlite:///" + path.replace("\\", "/")
+
+
+def make_engine(url):
+    kw = {"future": True, "pool_pre_ping": True}
+    if url.startswith("sqlite"):
+        kw["connect_args"] = {"check_same_thread": False, "timeout": 30}
+    eng = create_engine(url, **kw)
+    if url.startswith("sqlite"):
+        @event.listens_for(eng, "connect")
+        def _sqlite_pragmas(dbapi_conn, _):
+            cur = dbapi_conn.cursor()
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA foreign_keys=OFF")
+            cur.close()
+    return eng
+
+
+DATABASE_URL = default_url()
+engine = make_engine(DATABASE_URL)
+Session = sessionmaker(bind=engine, expire_on_commit=False, future=True)
+
+
+@contextmanager
+def session_scope(commit=True):
+    s = Session()
+    try:
+        yield s
+        if commit:
+            s.commit()
+    except Exception:
+        s.rollback()
+        raise
+    finally:
+        s.close()
+
 
 # ---------------------------------------------------------------------------
-# تعريف الكيانات: اسم الجدول ← [(اسم الحقل في الـ API, اسم العمود, النوع)]
+# تحويل القيم (نص ← نوع العمود) وتحويل الكائنات للـ API
 # ---------------------------------------------------------------------------
-ENTITIES = {
-    "companies": [
-        ("id", "id", "TEXT PRIMARY KEY"),
-        ("nameAr", "name_ar", "TEXT NOT NULL"),
-        ("nameEn", "name_en", "TEXT"),
-        ("laborOffice", "labor_office", "TEXT"),
-        ("mainFileNumber", "main_file_number", "TEXT"),
-        ("commercialLicenseNo", "commercial_license_no", "TEXT"),
-        ("commercialLicenseExpiry", "commercial_license_expiry", "TEXT"),
-        ("licenseCivilNo", "license_civil_no", "TEXT"),
-        ("trafficAuthExpiry", "traffic_auth_expiry", "TEXT"),
-        ("civilAffairsAuthExpiry", "civil_affairs_auth_expiry", "TEXT"),
-        ("activity", "activity", "TEXT"),
-        ("logoPath", "logo_path", "TEXT"),
-    ],
-    "projects": [
-        ("id", "id", "TEXT PRIMARY KEY"),
-        ("companyId", "company_id", "TEXT"),
-        ("nameAr", "name_ar", "TEXT NOT NULL"),
-        ("nameEn", "name_en", "TEXT"),
-        ("fileNumber", "file_number", "TEXT"),
-        ("laborOffice", "labor_office", "TEXT"),
-        ("expiryDate", "expiry_date", "TEXT"),
-    ],
-    "costCenters": [
-        ("id", "id", "TEXT PRIMARY KEY"),
-        ("name", "name", "TEXT NOT NULL"),
-        ("nameEn", "name_en", "TEXT"),
-    ],
-    "vehicles": [
-        ("id", "id", "TEXT PRIMARY KEY"),
-        ("plate", "plate", "TEXT NOT NULL UNIQUE"),
-        ("model", "model", "TEXT"),
-        ("companyId", "company_id", "TEXT"),
-        ("driverId", "driver_id", "TEXT"),
-        ("insuranceExpiry", "insurance_expiry", "TEXT"),
-        ("govLicenseExpiry", "gov_license_expiry", "TEXT"),
-        ("notes", "notes", "TEXT"),
-    ],
-    "employees": [
-        ("id", "id", "TEXT PRIMARY KEY"),              # الرقم المدني
-        ("name", "name", "TEXT NOT NULL"),
-        ("nameEn", "name_en", "TEXT"),
-        ("nationality", "nationality", "TEXT"),
-        ("nationalityEn", "nationality_en", "TEXT"),
-        ("profession", "profession", "TEXT"),
-        ("professionEn", "profession_en", "TEXT"),
-        ("dateOfBirth", "date_of_birth", "TEXT"),
-        ("dateOfHire", "date_of_hire", "TEXT"),
-        ("salary", "salary", "REAL"),
-        ("housingIncluded", "housing_included", "INTEGER DEFAULT 0"),
-        ("housingAmount", "housing_amount", "REAL"),
-        ("employmentStatus", "employment_status", "TEXT DEFAULT 'active'"),
-        ("contractType", "contract_type", "TEXT"),
-        ("residencyExp", "residency_exp", "TEXT"),
-        ("workPermitExp", "work_permit_exp", "TEXT"),
-        ("workPermitIssue", "work_permit_issue", "TEXT"),
-        ("passportNo", "passport_no", "TEXT"),
-        ("passportExp", "passport_exp", "TEXT"),
-        ("healthCardExp", "health_card_exp", "TEXT"),
-        ("isDriver", "is_driver", "INTEGER DEFAULT 0"),
-        ("drivingLicenseExp", "driving_license_exp", "TEXT"),
-        ("costCenter", "cost_center", "TEXT"),
-        ("actualWorkplace", "actual_workplace", "TEXT"),
-        ("fileNo", "file_no", "TEXT"),
-        ("govStage", "gov_stage", "TEXT"),
-        ("govStageNote", "gov_stage_note", "TEXT"),
-        ("govStageResponsible", "gov_stage_responsible", "TEXT"),
-        ("govStageStartDate", "gov_stage_start_date", "TEXT"),
-        ("govTransactionCost", "gov_transaction_cost", "REAL"),
-        ("transferNote", "transfer_note", "TEXT"),
-        ("bank", "bank", "TEXT"),
-        ("iban", "iban", "TEXT"),
-        ("dpId", "dp_id", "TEXT"),
-        ("phone", "phone", "TEXT"),
-        ("notes", "notes", "TEXT"),
-        ("lastUpdated", "last_updated", "TEXT"),
-        ("lastUpdatedBy", "last_updated_by", "TEXT"),
-    ],
-    "candidates": [
-        ("id", "id", "TEXT PRIMARY KEY"),
-        ("name", "name", "TEXT NOT NULL"),
-        ("nameEn", "name_en", "TEXT"),
-        ("nationality", "nationality", "TEXT"),
-        ("dateOfBirth", "date_of_birth", "TEXT"),
-        ("profession", "profession", "TEXT"),
-        ("phone", "phone", "TEXT"),
-        ("salary", "salary", "REAL"),
-        ("housingAllowance", "housing_allowance", "INTEGER DEFAULT 0"),
-        ("source", "source", "TEXT DEFAULT 'outside'"),
-        ("stage", "stage", "TEXT"),
-        ("appliedDate", "applied_date", "TEXT"),
-        ("passportNo", "passport_no", "TEXT"),
-        ("passportIssueDate", "passport_issue_date", "TEXT"),
-        ("passportExp", "passport_exp", "TEXT"),
-        ("visaIssueDate", "visa_issue_date", "TEXT"),
-        ("visaExp", "visa_exp", "TEXT"),
-        ("entryDate", "entry_date", "TEXT"),
-        ("oldSponsorResidencyExp", "old_sponsor_residency_exp", "TEXT"),
-        ("civilId", "civil_id", "TEXT"),
-        ("targetCompanyId", "target_company_id", "TEXT"),
-        ("costCenter", "cost_center", "TEXT"),
-        ("notes", "notes", "TEXT"),
-    ],
-    "signatories": [
-        ("id", "id", "TEXT PRIMARY KEY"),
-        ("companyId", "company_id", "TEXT NOT NULL"),
-        ("nameAr", "name_ar", "TEXT NOT NULL"),
-        ("nameEn", "name_en", "TEXT"),
-        ("civilId", "civil_id", "TEXT"),
-    ],
-    "templates": [
-        ("id", "id", "TEXT PRIMARY KEY"),
-        ("name", "name", "TEXT NOT NULL"),
-        ("filename", "filename", "TEXT NOT NULL"),
-        ("isDefault", "is_default", "INTEGER DEFAULT 0"),
-        ("createdAt", "created_at", "TEXT"),
-    ],
-}
-
-# كيانات السجلات والملفات (بدون CRUD عام)
-EXTRA_SCHEMA = """
-CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
-CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT UNIQUE NOT NULL,
-    display_name TEXT,
-    password_hash TEXT NOT NULL,
-    role TEXT NOT NULL DEFAULT 'editor'          -- admin | editor | viewer
-);
-CREATE TABLE IF NOT EXISTS employee_affiliations (
-    employee_id TEXT NOT NULL,
-    position INTEGER NOT NULL DEFAULT 0,          -- 0 = الأساسي
-    company_id TEXT,
-    project_id TEXT
-);
-CREATE INDEX IF NOT EXISTS ix_aff_emp ON employee_affiliations(employee_id);
-CREATE TABLE IF NOT EXISTS company_docs (
-    company_id TEXT NOT NULL,
-    kind TEXT NOT NULL,                           -- trafficAuth | civilAffairs | commercialLicense
-    name TEXT, path TEXT, uploaded_at TEXT,
-    PRIMARY KEY (company_id, kind)
-);
-CREATE TABLE IF NOT EXISTS signatory_docs (
-    civil_id TEXT PRIMARY KEY,
-    name TEXT, path TEXT, expiry_date TEXT, uploaded_at TEXT
-);
-CREATE TABLE IF NOT EXISTS employee_files (
-    id TEXT PRIMARY KEY,
-    employee_id TEXT NOT NULL,
-    name TEXT, path TEXT, size INTEGER, uploaded_at TEXT, uploaded_by TEXT
-);
-CREATE TABLE IF NOT EXISTS company_history (
-    id TEXT PRIMARY KEY, company_id TEXT, type TEXT, label TEXT, date TEXT, user TEXT
-);
-CREATE TABLE IF NOT EXISTS audit_log (
-    id TEXT PRIMARY KEY, type TEXT, category TEXT, label TEXT, date TEXT, user TEXT
-);
-CREATE TABLE IF NOT EXISTS employee_timeline (
-    id TEXT PRIMARY KEY, employee_id TEXT, type TEXT, label TEXT, date TEXT, user TEXT
-);
-CREATE INDEX IF NOT EXISTS ix_tl_emp ON employee_timeline(employee_id);
-"""
-
-INT_BOOL_FIELDS = {"housingIncluded", "isDriver", "housingAllowance", "isDefault"}
+_DATE_FORMATS = ("%Y-%m-%d", "%d/%m/%Y", "%Y/%m/%d", "%d-%m-%Y")
 
 
-def connect():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = OFF")
-    conn.execute("PRAGMA journal_mode = WAL")
-    return conn
+def parse_date(v):
+    if v in (None, ""):
+        return None
+    if isinstance(v, datetime):
+        return v.date()
+    if isinstance(v, date):
+        return v
+    s = str(v).strip().split("T")[0].split(" ")[0]
+    for f in _DATE_FORMATS:
+        try:
+            return datetime.strptime(s, f).date()
+        except ValueError:
+            pass
+    return None
+
+
+def parse_datetime(v):
+    if v in (None, ""):
+        return None
+    if isinstance(v, datetime):
+        return v.replace(tzinfo=None)
+    if isinstance(v, date):
+        return datetime(v.year, v.month, v.day)
+    s = re.sub(r"(Z|[+-]\d{2}:?\d{2})$", "", str(v).strip()).replace(" ", "T")
+    s = re.sub(r"(\.\d{1,6})\d*$", r"\1", s)
+    for f in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s, f)
+        except ValueError:
+            pass
+    return None
+
+
+def coerce(column_type, v):
+    """يحوّل قيمة جاية من JSON/Excel/قاعدة قديمة لنوع العمود."""
+    if isinstance(v, str):
+        v = v.strip()
+        if v == "":
+            return None
+    if v is None:
+        return None
+    if isinstance(column_type, DateTime):
+        return parse_datetime(v)
+    if isinstance(column_type, Date):
+        return parse_date(v)
+    if isinstance(column_type, Boolean):
+        return v in (True, 1, "1", "true", "True", "on", "yes")
+    if isinstance(column_type, Float):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+    if isinstance(column_type, Integer):
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+    if isinstance(v, float) and v.is_integer():
+        v = int(v)
+    return str(v)
+
+
+def _columns(model):
+    return {c.key: c for c in inspect(model).column_attrs}
+
+
+def ser(v):
+    if isinstance(v, datetime):
+        return v.strftime("%Y-%m-%dT%H:%M:%S")
+    if isinstance(v, date):
+        return v.isoformat()
+    return v
+
+
+def to_dict(obj):
+    if obj is None:
+        return None
+    return {k: ser(getattr(obj, k)) for k in _columns(type(obj))}
+
+
+def apply(obj, data, skip=("id",)):
+    """ينسخ الحقول المعروفة من data (مفاتيح camelCase) للكائن مع تحويل النوع."""
+    cols = _columns(type(obj))
+    for k, v in (data or {}).items():
+        if k in cols and k not in skip:
+            setattr(obj, k, coerce(cols[k].columns[0].type, v))
+    return obj
+
+
+def build(model, data):
+    obj = model()
+    apply(obj, data, skip=())
+    return obj
+
+
+def now():
+    return datetime.now().replace(microsecond=0)
 
 
 def now_iso():
-    return datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    return ser(now())
 
 
 def new_id(prefix):
     return f"{prefix}_{uuid.uuid4().hex[:10]}"
 
 
-def init_db():
-    """ينشئ الجداول ويضيف أي عمود ناقص (Migrations تلقائية)."""
-    conn = connect()
-    for table, fields in ENTITIES.items():
-        tname = sql_table(table)
-        cols = ", ".join(f"{col} {typ}" for _, col, typ in fields)
-        conn.execute(f"CREATE TABLE IF NOT EXISTS {tname} ({cols})")
-        existing = {r[1] for r in conn.execute(f"PRAGMA table_info({tname})")}
-        for _, col, typ in fields:
-            if col not in existing:
-                typ_clean = typ.replace("PRIMARY KEY", "").replace("NOT NULL", "").replace("UNIQUE", "")
-                conn.execute(f"ALTER TABLE {tname} ADD COLUMN {col} {typ_clean}")
-    conn.executescript(EXTRA_SCHEMA)
-    conn.execute(
-        "INSERT OR IGNORE INTO meta(key, value) VALUES('schema_version', ?)", (str(SCHEMA_VERSION),)
-    )
-    conn.commit()
-    conn.close()
+# ---------------------------------------------------------------------------
+# إنشاء الجداول + ترقية تلقائية (إضافة الأعمدة الناقصة)
+# ---------------------------------------------------------------------------
+def _needs_v1_upgrade(eng):
+    """الإصدار الأول (sqlite3 مباشر): جدول employee_affiliations بدون عمود id."""
+    insp = inspect(eng)
+    if "employee_affiliations" not in insp.get_table_names():
+        return False
+    return "id" not in {c["name"] for c in insp.get_columns("employee_affiliations")}
 
 
-def sql_table(entity):
-    return {"costCenters": "cost_centers"}.get(entity, entity)
+def upgrade_v1_sqlite(eng):
+    """ترقية تلقائية لقاعدة الإصدار الأول: نسخة احتياطية من الملف ثم نقل البيانات للهيكل الجديد."""
+    import shutil
+    path = eng.url.database
+    eng.dispose()
+    backup = path.replace(".db", "") + f".v1-backup-{datetime.now().strftime('%Y%m%d%H%M%S')}.db"
+    shutil.move(path, backup)
+    for ext in ("-wal", "-shm"):
+        if os.path.exists(path + ext):
+            shutil.move(path + ext, backup + ext)
+    print(f"[Lunx] ترقية قاعدة البيانات للهيكل الجديد… (نسخة من القديمة: {os.path.basename(backup)})")
+    import db_transfer
+    db_transfer.transfer("sqlite:///" + backup.replace("\\", "/"), str(eng.url), quiet=True)
 
 
-def row_to_obj(entity, row):
-    if row is None:
-        return None
-    obj = {}
-    keys = row.keys()
-    for api, col, _ in ENTITIES[entity]:
-        if col in keys:
-            v = row[col]
-            if api in INT_BOOL_FIELDS:
-                v = bool(v)
-            obj[api] = v
-    return obj
+def init_db(eng=None):
+    eng = eng or engine
+    if eng.url.get_backend_name() == "sqlite" and eng.url.database and os.path.exists(eng.url.database) \
+            and _needs_v1_upgrade(eng):
+        upgrade_v1_sqlite(eng)
+    M.Base.metadata.create_all(eng)
+    insp = inspect(eng)
+    with eng.begin() as conn:
+        for table in M.Base.metadata.sorted_tables:
+            existing = {c["name"] for c in insp.get_columns(table.name)}
+            for c in table.columns:
+                if c.name not in existing and not c.primary_key:
+                    ddl = c.type.compile(dialect=eng.dialect)
+                    conn.execute(text(f'ALTER TABLE {eng.dialect.identifier_preparer.quote(table.name)} '
+                                      f'ADD COLUMN {eng.dialect.identifier_preparer.quote(c.name)} {ddl}'))
+    S = sessionmaker(bind=eng, expire_on_commit=False)
+    with S() as s:
+        set_meta(s, "schema_version", SCHEMA_VERSION)
+        s.commit()
 
 
-def obj_to_cols(entity, obj):
-    """يحوّل كائن API إلى أعمدة (يتجاهل الحقول غير المعروفة)."""
-    out = {}
-    for api, col, _ in ENTITIES[entity]:
-        if api in obj:
-            v = obj[api]
-            if isinstance(v, str):
-                v = v.strip()
-                if v == "":
-                    v = None
-            if api in INT_BOOL_FIELDS:
-                v = 1 if v in (True, 1, "1", "true", "on") else 0
-            out[col] = v
-    return out
+def get_meta(s, key, default=None):
+    m = s.get(M.Meta, key)
+    return m.value if m else default
 
 
-def list_all(conn, entity, order=None):
-    t = sql_table(entity)
-    q = f"SELECT * FROM {t}"
-    if order:
-        q += f" ORDER BY {order}"
-    return [row_to_obj(entity, r) for r in conn.execute(q)]
-
-
-def get_one(conn, entity, id_):
-    r = conn.execute(f"SELECT * FROM {sql_table(entity)} WHERE id=?", (id_,)).fetchone()
-    return row_to_obj(entity, r)
-
-
-def insert(conn, entity, obj):
-    cols = obj_to_cols(entity, obj)
-    names = ", ".join(cols.keys())
-    qs = ", ".join("?" for _ in cols)
-    conn.execute(f"INSERT INTO {sql_table(entity)} ({names}) VALUES ({qs})", list(cols.values()))
-
-
-def update(conn, entity, id_, obj):
-    cols = obj_to_cols(entity, obj)
-    cols.pop("id", None)
-    if not cols:
-        return
-    sets = ", ".join(f"{c}=?" for c in cols)
-    conn.execute(f"UPDATE {sql_table(entity)} SET {sets} WHERE id=?", list(cols.values()) + [id_])
-
-
-def delete(conn, entity, id_):
-    conn.execute(f"DELETE FROM {sql_table(entity)} WHERE id=?", (id_,))
+def set_meta(s, key, value):
+    m = s.get(M.Meta, key) or M.Meta(key=key)
+    m.value = value
+    s.merge(m)
 
 
 # ---------------------------------------------------------------------------
 # السجلات
 # ---------------------------------------------------------------------------
-def log_audit(conn, type_, label, user=None):
-    category = type_.split("_")[0]
-    conn.execute(
-        "INSERT INTO audit_log(id, type, category, label, date, user) VALUES(?,?,?,?,?,?)",
-        (new_id("aud"), type_, category, label, now_iso(), user),
-    )
+def log_audit(s, type_, label, user=None):
+    s.add(M.AuditLog(id=new_id("aud"), type=type_, category=type_.split("_")[0], label=label, date=now(), user=user))
 
 
-def log_company_history(conn, company_id, type_, label, user=None, date=None):
-    conn.execute(
-        "INSERT INTO company_history(id, company_id, type, label, date, user) VALUES(?,?,?,?,?,?)",
-        (new_id("ch"), company_id, type_, label, date or now_iso(), user),
-    )
+def log_company_history(s, company_id, type_, label, user=None, when=None):
+    s.add(M.CompanyHistory(id=new_id("ch"), companyId=company_id, type=type_, label=label,
+                           date=parse_datetime(when) or now(), user=user))
 
 
-def push_timeline(conn, employee_id, type_, label, user=None):
-    conn.execute(
-        "INSERT INTO employee_timeline(id, employee_id, type, label, date, user) VALUES(?,?,?,?,?,?)",
-        (new_id("tl"), employee_id, type_, label, now_iso(), user),
-    )
+def push_timeline(s, employee_id, type_, label, user=None):
+    s.add(M.EmployeeTimeline(id=new_id("tl"), employeeId=employee_id, type=type_, label=label, date=now(), user=user))
 
 
 # ---------------------------------------------------------------------------
 # الموظفين مع الانتماءات
 # ---------------------------------------------------------------------------
-def load_affiliations(conn):
-    aff = {}
-    for r in conn.execute(
-        "SELECT employee_id, company_id, project_id FROM employee_affiliations ORDER BY employee_id, position"
-    ):
-        aff.setdefault(r["employee_id"], []).append({"companyId": r["company_id"], "projectId": r["project_id"]})
-    return aff
+def get_affiliations(s, emp_id):
+    rows = s.scalars(select(M.EmployeeAffiliation).where(M.EmployeeAffiliation.employeeId == emp_id)
+                     .order_by(M.EmployeeAffiliation.position)).all()
+    return [{"companyId": a.companyId, "projectId": a.projectId} for a in rows]
 
 
-def employee_full(conn, emp_id):
-    e = get_one(conn, "employees", emp_id)
-    if e:
-        e["affiliations"] = [
-            {"companyId": r["company_id"], "projectId": r["project_id"]}
-            for r in conn.execute(
-                "SELECT company_id, project_id FROM employee_affiliations WHERE employee_id=? ORDER BY position",
-                (emp_id,),
-            )
-        ]
-    return e
-
-
-def set_affiliations(conn, emp_id, affs):
-    conn.execute("DELETE FROM employee_affiliations WHERE employee_id=?", (emp_id,))
-    for i, a in enumerate(affs or []):
+def set_affiliations(s, emp_id, affs):
+    s.query(M.EmployeeAffiliation).filter(M.EmployeeAffiliation.employeeId == emp_id).delete()
+    i = 0
+    for a in affs or []:
         if not a.get("companyId") and not a.get("projectId"):
             continue
-        conn.execute(
-            "INSERT INTO employee_affiliations(employee_id, position, company_id, project_id) VALUES(?,?,?,?)",
-            (emp_id, i, a.get("companyId") or None, a.get("projectId") or None),
-        )
+        s.add(M.EmployeeAffiliation(employeeId=emp_id, position=i,
+                                    companyId=a.get("companyId") or None, projectId=a.get("projectId") or None))
+        i += 1
+    s.flush()
 
 
-def get_meta(conn, key, default=None):
-    r = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
-    return r["value"] if r else default
+def employee_full(s, emp_id):
+    e = s.get(M.Employee, emp_id)
+    if not e:
+        return None
+    d = to_dict(e)
+    d["affiliations"] = get_affiliations(s, emp_id)
+    return d
 
 
-def set_meta(conn, key, value):
-    conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES(?,?)", (key, value))
+def rename_employee(s, old_id, new_id_):
+    """تغيير الرقم المدني (المفتاح الأساسي) مع كل ما يرتبط به."""
+    s.flush()
+    s.query(M.Employee).filter(M.Employee.id == old_id).update({"id": new_id_}, synchronize_session=False)
+    s.expire_all()
+    for model, attr in ((M.EmployeeAffiliation, "employeeId"), (M.EmployeeTimeline, "employeeId"),
+                        (M.EmployeeFile, "employeeId"), (M.Vehicle, "driverId")):
+        s.query(model).filter(getattr(model, attr) == old_id).update({attr: new_id_}, synchronize_session=False)
+    s.flush()
 
 
-def dump_state(conn):
-    """كل البيانات في كائن واحد بنفس شكل STATE في الوثيقة (للنسخ الاحتياطي والتحميل الأولي)."""
-    aff = load_affiliations(conn)
-    employees = list_all(conn, "employees", "name")
-    for e in employees:
-        e["affiliations"] = aff.get(e["id"], [])
-    companies = list_all(conn, "companies", "name_ar")
-    sigs = list_all(conn, "signatories")
+# ---------------------------------------------------------------------------
+# الحالة الكاملة (STATE) للواجهة
+# ---------------------------------------------------------------------------
+def dump_state(s):
+    affs = {}
+    for a in s.scalars(select(M.EmployeeAffiliation).order_by(M.EmployeeAffiliation.employeeId,
+                                                              M.EmployeeAffiliation.position)):
+        affs.setdefault(a.employeeId, []).append({"companyId": a.companyId, "projectId": a.projectId})
+    employees = []
+    for e in s.scalars(select(M.Employee).order_by(M.Employee.name)):
+        d = to_dict(e)
+        d["affiliations"] = affs.get(e.id, [])
+        employees.append(d)
+
+    sigs = [to_dict(x) for x in s.scalars(select(M.Signatory))]
     docs = {}
-    for r in conn.execute("SELECT * FROM company_docs"):
-        docs.setdefault(r["company_id"], {})[r["kind"]] = {
-            "name": r["name"], "url": f"/files/company/{r['company_id']}/{r['kind']}", "uploadedAt": r["uploaded_at"]
-        }
-    for c in companies:
-        c["signatories"] = [s for s in sigs if s["companyId"] == c["id"]]
-        d = docs.get(c["id"], {})
-        c["docs"] = {k: d.get(k) for k in ("trafficAuth", "civilAffairs", "commercialLicense")}
-        c["logoUrl"] = f"/files/logo/{c['id']}" if c.get("logoPath") else None
+    for r in s.scalars(select(M.CompanyDoc)):
+        docs.setdefault(r.companyId, {})[r.kind] = {
+            "name": r.name, "url": f"/files/company/{r.companyId}/{r.kind}", "uploadedAt": ser(r.uploadedAt)}
+    companies = []
+    for c in s.scalars(select(M.Company).order_by(M.Company.nameAr)):
+        d = to_dict(c)
+        d["signatories"] = [x for x in sigs if x["companyId"] == c.id]
+        dd = docs.get(c.id, {})
+        d["docs"] = {k: dd.get(k) for k in ("trafficAuth", "civilAffairs", "commercialLicense")}
+        d["logoUrl"] = f"/files/logo/{c.id}" if c.logoPath else None
+        companies.append(d)
+
     signatory_docs = {
-        r["civil_id"]: {
-            "name": r["name"], "url": f"/files/signatory/{r['civil_id']}",
-            "expiryDate": r["expiry_date"], "uploadedAt": r["uploaded_at"],
-        }
-        for r in conn.execute("SELECT * FROM signatory_docs")
+        r.civilId: {"name": r.name, "url": f"/files/signatory/{r.civilId}",
+                    "expiryDate": ser(r.expiryDate), "uploadedAt": ser(r.uploadedAt)}
+        for r in s.scalars(select(M.SignatoryDoc))
     }
     timeline = {}
-    for r in conn.execute("SELECT * FROM employee_timeline ORDER BY date, rowid"):
-        timeline.setdefault(r["employee_id"], []).append(
-            {"id": r["id"], "type": r["type"], "label": r["label"], "date": r["date"], "user": r["user"]}
-        )
+    for r in s.scalars(select(M.EmployeeTimeline).order_by(M.EmployeeTimeline.date)):
+        timeline.setdefault(r.employeeId, []).append(to_dict(r))
+
     return {
         "companies": companies,
-        "projects": list_all(conn, "projects", "name_ar"),
+        "projects": [to_dict(x) for x in s.scalars(select(M.Project).order_by(M.Project.nameAr))],
         "employees": employees,
-        "vehicles": list_all(conn, "vehicles", "plate"),
-        "costCenters": list_all(conn, "costCenters", "name"),
-        "companyHistory": [dict(r) | {"companyId": r["company_id"]} for r in conn.execute("SELECT * FROM company_history ORDER BY date DESC, rowid DESC")],
-        "candidates": list_all(conn, "candidates", "applied_date DESC"),
+        "vehicles": [to_dict(x) for x in s.scalars(select(M.Vehicle).order_by(M.Vehicle.plate))],
+        "costCenters": [to_dict(x) for x in s.scalars(select(M.CostCenter).order_by(M.CostCenter.name))],
+        "companyHistory": [to_dict(x) for x in s.scalars(select(M.CompanyHistory).order_by(M.CompanyHistory.date.desc()))],
+        "candidates": [to_dict(x) for x in s.scalars(select(M.Candidate).order_by(M.Candidate.appliedDate.desc()))],
         "signatoryDocs": signatory_docs,
-        "auditLog": [dict(r) for r in conn.execute("SELECT * FROM audit_log ORDER BY date DESC, rowid DESC LIMIT 2000")],
+        "auditLog": [to_dict(x) for x in s.scalars(select(M.AuditLog).order_by(M.AuditLog.date.desc()).limit(2000))],
         "employeeTimeline": timeline,
-        "templates": list_all(conn, "templates", "is_default DESC, created_at"),
+        "templates": [to_dict(x) for x in s.scalars(select(M.Template).order_by(M.Template.isDefault.desc(),
+                                                                                  M.Template.createdAt))],
     }
+
+
+# ---------------------------------------------------------------------------
+# نسخ الجداول (للنسخ الاحتياطي والاستعادة والنقل بين قواعد البيانات)
+# الصيغة: {اسم_الجدول: [ {اسم_العمود: قيمة} ]} — نفس أسماء الأعمدة من الإصدار الأول
+# ---------------------------------------------------------------------------
+def export_tables(s, include_users=False):
+    out = {}
+    for model in M.ALL_MODELS:
+        if model is M.User and not include_users:
+            continue
+        cols = [c for c in model.__table__.columns]
+        rows = []
+        for r in s.execute(select(model.__table__)).mappings():
+            rows.append({c.name: ser(r[c.name]) for c in cols})
+        out[model.__tablename__] = rows
+    return out
+
+
+def import_tables(s, tables, replace=True, skip=("users", "meta")):
+    """يستورد صفوف (أسماء أعمدة snake_case) مع تحويل الأنواع. يقبل نسخ الإصدار الأول (SQLite)."""
+    counts = {}
+    models = [m for m in M.ALL_MODELS if m.__tablename__ in tables and m.__tablename__ not in skip]
+    if replace:
+        for model in reversed(models):
+            s.execute(model.__table__.delete())
+    for model in models:
+        table = model.__table__
+        colmap = {c.name: c for c in table.columns}
+        rows = []
+        for row in tables[model.__tablename__]:
+            r = {k: coerce(colmap[k].type, v) for k, v in row.items() if k in colmap}
+            if r:
+                rows.append(r)
+        if rows:
+            s.execute(table.insert(), rows)
+        counts[model.__tablename__] = len(rows)
+    reset_sequences(s)
+    return counts
+
+
+def reset_sequences(s):
+    """PostgreSQL: بعد إدخال معرّفات رقمية صريحة لازم نحرّك الـ sequence."""
+    if s.get_bind().dialect.name != "postgresql":
+        return
+    for model in M.ALL_MODELS:
+        for c in model.__table__.primary_key.columns:
+            if isinstance(c.type, Integer) and c.autoincrement:
+                t = model.__tablename__
+                s.execute(text(f"SELECT setval(pg_get_serial_sequence('{t}', '{c.name}'), "
+                               f"COALESCE((SELECT MAX({c.name}) FROM {t}), 0) + 1, false)"))

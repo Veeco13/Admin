@@ -1,9 +1,9 @@
 # Lunx: هيكل النظام (نسخة Flask)
 
 **شركة أبراج انرجي ومجموعة شركاتها التابعة**
-الإصدار: **v353-flask.1** · مبني على مواصفات Lunx v353 · تاريخ التوثيق: 2026-09-24
+الإصدار: **v353-flask.2** · مبني على مواصفات Lunx v353 · تاريخ التوثيق: 2026-09-24
 
-دي نفس وثيقة Lunx بعد ما اتظبطت على مشروع **zahed**. الشاشات والكيانات وقواعد العمل زي ما هي، والمعمارية بقت سيرفر Flask مع قاعدة بيانات SQLite بدل ملف HTML واحد.
+دي نفس وثيقة Lunx بعد ما اتظبطت على مشروع **zahed**. الشاشات والكيانات وقواعد العمل زي ما هي، والمعمارية بقت سيرفر Flask مع SQLAlchemy بدل ملف HTML واحد، وتقدر تشغّلها على SQLite أو PostgreSQL أو MySQL أو SQL Server.
 
 ---
 
@@ -27,11 +27,13 @@ python app.py              # http://localhost:5050
 ```
 zahed/
 ├─ app.py              ← Flask: المصادقة + كل الـ API + تنزيل العقود
-├─ db.py               ← الجداول + Migrations تلقائية + السجلات + dump_state()
+├─ models.py           ← نماذج SQLAlchemy (كل الجداول والأنواع)
+├─ db.py               ← الاتصال (LUNX_DATABASE_URL) + الترقية التلقائية + السجلات + dump_state() + النسخ
+├─ db_transfer.py      ← نقل البيانات بين أي نوعين من قواعد البيانات
 ├─ docx_engine.py      ← محرك العقود ⚠️ مُجمَّد
 ├─ importer.py         ← استيراد Excel/CSV (بعناوين أو ملف القوى العاملة من غير عناوين)
 ├─ seed_import.py      ← الاستيراد الأولي من النظام القديم
-├─ lunx.db             ← قاعدة البيانات (SQLite)
+├─ lunx.db             ← قاعدة البيانات الافتراضية (SQLite)
 ├─ templates/          ← index.html (هيكل الـ SPA) + login.html
 ├─ static/
 │  ├─ app.css          ← متغيرات الألوان، الوضع الداكن/الفاتح، RTL، الطباعة
@@ -46,14 +48,14 @@ zahed/
 
 ```
 تحميل الصفحة → GET /api/state → STATE → render(VIEW)
-المستخدم يعدّل → persist(method, url, body) → API → SQLite + سجل التدقيق → reload() → render
+المستخدم يعدّل → persist(method, url, body) → API → SQLAlchemy (قاعدة البيانات) + سجل التدقيق → reload() → render
 ```
 
 ### مقارنة بنسخة الملف الواحد
 
 | في Lunx v353 | في النسخة دي |
 |---|---|
-| `seed-data` جوه ملف الـ HTML | `lunx.db` (SQLite) |
+| `seed-data` جوه ملف الـ HTML | قاعدة بيانات عبر SQLAlchemy (الافتراضي `lunx.db` SQLite) |
 | `persist()` بتعيد نشر الصفحة كلها | `persist()` بتنادي API وبعدين `reload()` |
 | `CAP.user` + وضع القراءة فقط | تسجيل دخول بصلاحيات: `admin` / `editor` / `viewer` (المشاهد = قراءة فقط، والسيرفر بيرفض أي تعديل منه بـ 403) |
 | `CAP.mcp` → Google Drive | المرفقات بتتخزن في `uploads/employees/<الرقم المدني>/` |
@@ -68,7 +70,7 @@ zahed/
 | الطبقة | التقنية |
 |---|---|
 | السيرفر | Python 3.10+ و Flask 3 |
-| قاعدة البيانات | SQLite (WAL) |
+| قاعدة البيانات | SQLAlchemy 2.x ORM، والافتراضي SQLite (WAL). يدعم PostgreSQL وMySQL/MariaDB وSQL Server |
 | الواجهة | HTML5 + CSS Variables + JavaScript Vanilla (بدون Framework) |
 | Excel / CSV | pandas + openpyxl |
 | Word | python-docx (بدل docxtpl) |
@@ -87,6 +89,7 @@ zahed/
 | `js/org.js` | COMPANIES & PROJECTS، VEHICLES، COST CENTERS | `renderCompanies`، `openCompanyModal`، `openProjectModal`، `openSignatoryModal`، `openTrafficAuthModal`، `openCivilAffairsAuthModal`، `openCivilIdDocModal`، `renderVehicles`، `openVehicleModal`، `renderCostCenters`، `openCostCenterModal` |
 | `js/contract.js` | CONTRACT GENERATOR، COMPANY LOG / AUDIT LOG | `renderContractView`، `buildContractHtml`، `renderCompanyLog` |
 | `js/recruit.js` | RECRUITMENT، CANDIDATES REPORT + MODAL | `recruitStagesForSource`، `recruitStageInfo`، `migrateRecruitStages`، `renderRecruitFunnelCard`، `renderRecruitment`، `renderCandidatesReportModal`، `printCandidatesReport`، `openCandidateModal`، `convertCandidateToEmployee` |
+| `models.py` / `db.py` / `db_transfer.py` | DATABASE (SQLAlchemy) | الموديلات، `session_scope`، `init_db`، `to_dict`، `apply`، `coerce`، `dump_state`، `export_tables`، `import_tables`، `transfer` |
 | `docx_engine.py` | DOCX TEMPLATE ENGINE ⚠️ | `resolve_contract_template`، `fill_docx_template`، `docx_to_html`، `docx_to_pdf`، `replace_literals` |
 
 > ⚠️ **محرك العقود** (`docx_engine.py`) **مُجمَّد**، وممنوع تعديله إلا بطلب صريح.
@@ -120,7 +123,7 @@ zahed/
   "employeeTimeline": {}, "templates": [], "me": {}, "version": "", "pdfAvailable": true }
 ```
 
-الحقول بأسماء camelCase في الـ API، وبـ snake_case في SQLite. التحويل بيحصل من جدول `ENTITIES` في `db.py`.
+النماذج في `models.py`. اسم الخاصية في بايثون هو نفس اسم الحقل في الـ API (camelCase)، واسم العمود في قاعدة البيانات snake_case. التواريخ بنوع `Date`، والأوقات `DateTime`، والقيم المنطقية `Boolean`. `db.to_dict()` بتحوّل الكائن للـ API، و`db.apply()` بتحوّل القيم الجاية للنوع الصح.
 
 | الجدول | ملاحظات |
 |---|---|
@@ -279,7 +282,41 @@ fill_docx_template()  ← {{ field }} حتى لو متقسّم على أكتر �
 
 ---
 
-## 15. استعادة نسخة احتياطية من Lunx (نسخة الملف الواحد)
+## 15. قاعدة البيانات (SQLAlchemy)
+
+### اختيار نوع القاعدة
+النوع بيتحدد من متغير البيئة `LUNX_DATABASE_URL`. لو مش متحدد، بيستخدم `sqlite:///lunx.db`.
+
+| النوع | الرابط | الحزمة المطلوبة |
+|---|---|---|
+| SQLite | `sqlite:///C:/path/lunx.db` | (مدمجة) |
+| PostgreSQL | `postgresql+psycopg://user:pass@host:5432/lunx` | `psycopg[binary]` |
+| MySQL / MariaDB | `mysql+pymysql://user:pass@host/lunx?charset=utf8mb4` | `PyMySQL` |
+| SQL Server | `mssql+pyodbc://user:pass@host/lunx?driver=ODBC+Driver+18+for+SQL+Server` | `pyodbc` |
+
+الجداول بتتعمل لوحدها أول ما السيرفر يشتغل. ولو ضفت عمود جديد في `models.py`، `init_db()` بتضيفه للقاعدة الموجودة تلقائي.
+
+### النقل من قاعدة لقاعدة
+```bash
+python db_transfer.py sqlite:///lunx.db "postgresql+psycopg://lunx:PASS@localhost/lunx"
+```
+الأداة بتقرا المصدر بالـ reflection، وبتحوّل الأنواع، وبتكتب في الهدف. الجداول في الهدف بتتمسح الأول، وده بيشمل المستخدمين. مجلد `uploads/` ملفات على القرص وملوش علاقة بالقاعدة، فانقله زي ما هو.
+
+### الترقية من الإصدار الأول
+أول تشغيل على `lunx.db` قديم (نسخة sqlite3) بيعمل الآتي لوحده:
+1. ينقل الملف القديم لـ `lunx.v1-backup-<التاريخ>.db`.
+2. ينقل كل البيانات للهيكل الجديد.
+
+### النسخ الاحتياطي
+- `/api/backup` بيطلّع JSON فيه كل الجداول بأسماء الأعمدة، ومستقل عن نوع القاعدة.
+- الاستعادة بتقبل 3 صيغ:
+  1. نسخة الإصدار ده.
+  2. نسخة الإصدار الأول.
+  3. نسخة Lunx القديمة (STATE).
+
+> ممنوع أي SQL خاص بنوع قاعدة معيّن في الكود. أي استعلام يتكتب بالـ ORM أو بـ `select()`.
+
+## 16. استعادة نسخة احتياطية من Lunx (نسخة الملف الواحد)
 
 ملف الـ JSON اللي بيطلع من زرار النسخ الاحتياطي في Lunx القديم (شكل `STATE`) بيترجع بطريقتين:
 - **من الواجهة:** 👤 ← «استعادة نسخة احتياطية». السيرفر بيتعرّف على الشكل لوحده.
@@ -287,7 +324,7 @@ fill_docx_template()  ← {{ field }} حتى لو متقسّم على أكتر �
 
 الاستعادة بتستبدل كل البيانات. المستخدمين وقوالب العقود بيفضلوا زي ما هم، والملفات المضمّنة (الشعارات، مستندات الشركات، بطاقات المفوّضين) بتتحفظ في `uploads/`.
 
-## 16. قائمة الفحص قبل أي تحديث
+## 17. قائمة الفحص قبل أي تحديث
 1. تأكد إن ملفات الـ JS سليمة:
    ```bash
    for f in static/js/*.js; do node --check $f; done
