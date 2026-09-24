@@ -20,3 +20,4 @@ venv/
 Thumbs.db
 generated_contracts/
 backups/
+.env

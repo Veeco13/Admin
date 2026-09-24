@@ -58,11 +58,11 @@ def _save_data_url(data_url, folder, basename, orig_name=None):
     ext = os.path.splitext(orig_name or "")[1].lower() or mimetypes.guess_extension(mime) or ".bin"
     if ext == ".jpe":
         ext = ".jpg"
-    path = os.path.join(db.BASE_DIR, "uploads", folder, basename + ext)
+    path = db.data_path("uploads", folder, basename + ext)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "wb") as f:
         f.write(raw)
-    return os.path.relpath(path, db.BASE_DIR)
+    return db.rel_file(path)
 
 
 def state_to_tables(st):

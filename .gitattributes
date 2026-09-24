@@ -1,0 +1,6 @@
+# ملفات لازم تفضل LF حتى على ويندوز (وإلا الـ container مش هيشتغل)
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
+.env.example text eol=lf
+*.bat text eol=crlf

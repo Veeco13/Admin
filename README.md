@@ -2,7 +2,18 @@
 
 شركة أبراج انرجي ومجموعة شركاتها التابعة. Flask + SQLAlchemy (SQLite افتراضيًا، ويدعم PostgreSQL / MySQL / SQL Server).
 
-## التشغيل
+## التشغيل في Docker (الإنتاج)
+```bash
+cp .env.example .env      # غيّر كلمات السر
+docker compose up -d --build
+```
+بيشغّل Lunx مع PostgreSQL. لنقل بيانات lunx.db الحالية:
+```bash
+docker compose run --rm -v C:/lunx-import:/import app import-sqlite /import/lunx.db
+```
+التفاصيل في SYSTEM.md (القسم 17).
+
+## التشغيل المحلي
 ```bash
 pip install -r requirements.txt
 python app.py        # http://localhost:5050

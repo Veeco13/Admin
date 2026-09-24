@@ -1,0 +1,49 @@
+# Lunx + PostgreSQL
+#   1) انسخ .env.example إلى .env وغيّر كلمات السر
+#   2) docker compose up -d --build
+#   3) افتح http://localhost:5050
+name: lunx
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-lunx}
+      POSTGRES_USER: ${POSTGRES_USER:-lunx}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?اكتب POSTGRES_PASSWORD في ملف .env}
+      TZ: Asia/Kuwait
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      args:
+        WITH_PDF: ${WITH_PDF:-1}
+    image: lunx:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      LUNX_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-lunx}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-lunx}
+      LUNX_SECRET: ${LUNX_SECRET:?اكتب LUNX_SECRET في ملف .env}
+      LUNX_ADMIN_PASSWORD: ${LUNX_ADMIN_PASSWORD:-admin123}
+      LUNX_BEHIND_PROXY: ${LUNX_BEHIND_PROXY:-0}
+      LUNX_COOKIE_SECURE: ${LUNX_COOKIE_SECURE:-0}
+      LUNX_BACKUP_KEEP: ${LUNX_BACKUP_KEEP:-30}
+      WORKERS: ${WORKERS:-3}
+    ports:
+      - "${LUNX_PORT:-5050}:5050"
+    volumes:
+      - lunxdata:/data          # المرفقات + القوالب + النسخ الاحتياطية اليومية
+
+volumes:
+  pgdata:
+  lunxdata:

@@ -33,6 +33,7 @@ zahed/
 ├─ manage_db.py        ← أداة إدارة القاعدة (info/check/upgrade/revision/backup/restore/transfer)
 ├─ alembic.ini + migrations/  ← تعديلات الهيكل (Alembic)
 ├─ backups/            ← نسخ JSON تلقائية يومية
+├─ Dockerfile · docker-compose*.yml · docker-entrypoint.sh · .env.example  ← التشغيل في Docker
 ├─ docx_engine.py      ← محرك العقود ⚠️ مُجمَّد
 ├─ importer.py         ← استيراد Excel/CSV (بعناوين أو ملف القوى العاملة من غير عناوين)
 ├─ seed_import.py      ← الاستيراد الأولي من النظام القديم
@@ -369,7 +370,66 @@ python manage_db.py transfer sqlite:///lunx.db "postgresql+psycopg://lunx:PASS@l
 
 الاستعادة بتستبدل كل البيانات. المستخدمين وقوالب العقود بيفضلوا زي ما هم، والملفات المضمّنة (الشعارات، مستندات الشركات، بطاقات المفوّضين) بتتحفظ في `uploads/`.
 
-## 17. قائمة الفحص قبل أي تحديث
+## 17. التشغيل في Docker (الإنتاج)
+
+### الملفات
+| الملف | الوظيفة |
+|---|---|
+| `Dockerfile` | صورة Python 3.12 slim + gunicorn + psycopg. بتشتغل بمستخدم `lunx` مش root، ووقتها `TZ=Asia/Kuwait`. `WITH_PDF=1` بيضيف LibreOffice وخطوط عربي (Noto وKacst) لتحويل العقود PDF |
+| `docker-entrypoint.sh` | `serve`: بيطبّق تعديلات الهيكل مرة واحدة، وبعدين بيشغّل gunicorn · `manage <أمر>`: أوامر `manage_db.py` · `import-sqlite <ملف>`: بينقل بيانات lunx.db القديمة |
+| `docker-compose.yml` | Lunx + PostgreSQL 16، ومعاهم volumes للبيانات |
+| `docker-compose.sqlite.yml` | Lunx لوحده بـ SQLite (worker واحد) |
+| `.env.example` | الإعدادات. انسخه إلى `.env` (مش بيترفع على GitHub) |
+| `requirements-docker.txt` | المتطلبات، ومعاها gunicorn وpsycopg |
+
+### أول تشغيل
+```bash
+cp .env.example .env              # غيّر POSTGRES_PASSWORD و LUNX_SECRET و LUNX_ADMIN_PASSWORD
+docker compose up -d --build
+docker compose logs -f app
+```
+افتح `http://السيرفر:5050`.
+
+### نقل البيانات الحالية (من ويندوز) للـ container
+حط `lunx.db` وفولدر `uploads/` في فولدر واحد، مثلًا `C:\lunx-import`، وبعدين:
+```bash
+docker compose run --rm -v C:/lunx-import:/import app import-sqlite /import/lunx.db
+```
+الأمر ده بينقل كل الجداول لـ PostgreSQL، وبينسخ المرفقات لـ volume البيانات، وبعدين بيعمل فحص سلامة. بعدها `docker compose up -d`.
+
+### أين البيانات؟
+| المكان | المحتوى |
+|---|---|
+| volume `pgdata` | قاعدة PostgreSQL |
+| volume `lunxdata` ← `/data` | `uploads/`، و`templates_docs/` (القوالب المرفوعة)، و`backups/` (نسخ JSON يومية)، و`lunx.db` في وضع SQLite |
+
+الكود جوه الـ image. تحديث النسخة (`docker compose up -d --build`) مش بيلمس البيانات، وتعديلات الهيكل بتتطبق لوحدها قبل ما السيرفر يشتغل.
+
+### أوامر مفيدة
+```bash
+docker compose exec app ./docker-entrypoint.sh manage info
+docker compose exec app ./docker-entrypoint.sh manage check
+docker compose exec app ./docker-entrypoint.sh manage backup /data/backups/manual.json
+docker compose exec db pg_dump -U lunx lunx > lunx.sql          # نسخة SQL من PostgreSQL
+```
+
+### متغيرات البيئة
+| المتغير | الافتراضي | الوصف |
+|---|---|---|
+| `LUNX_DATABASE_URL` | `sqlite:////data/lunx.db` | رابط القاعدة |
+| `LUNX_DATA_DIR` | `/data` (في Docker) | مكان البيانات المتغيّرة |
+| `LUNX_SECRET` | (مطلوب) | مفتاح الجلسات. لو اتغيّر، كل المستخدمين هيخرجوا |
+| `LUNX_ADMIN_PASSWORD` | `admin123` | كلمة سر admin **أول مرة بس** |
+| `LUNX_AUTO_MIGRATE` | `0` في Docker و`1` محليًا | تطبيق تعديلات الهيكل عند تحميل التطبيق |
+| `LUNX_BEHIND_PROXY` / `LUNX_COOKIE_SECURE` | `0` | خليهم `1` ورا Nginx/Traefik بـ HTTPS |
+| `LUNX_BACKUP_KEEP` / `LUNX_BACKUP_DIR` | `30` / `/data/backups` | النسخ اليومية |
+| `LUNX_MAX_UPLOAD_MB` | `25` | أقصى حجم مرفق |
+| `WORKERS` / `THREADS` / `TIMEOUT` | `3` / `4` / `120` | إعدادات gunicorn |
+
+- **فحص الحالة:** `GET /healthz`، ومستخدم في `HEALTHCHECK` جوه الصورة.
+- **النسخة اليومية:** بيعملها worker واحد بس، عن طريق قفل ملف يومي في `backups/`.
+
+## 18. قائمة الفحص قبل أي تحديث
 1. تأكد إن ملفات الـ JS سليمة:
    ```bash
    for f in static/js/*.js; do node --check $f; done

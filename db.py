@@ -12,6 +12,7 @@ Lunx — طبقة قاعدة البيانات (SQLAlchemy)
 """
 import os
 import re
+import sys
 import uuid
 from contextlib import contextmanager
 from datetime import date, datetime
@@ -21,14 +22,36 @@ from sqlalchemy.orm import sessionmaker
 
 import models as M
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# كونسول ويندوز العربي (cp1256) بيقع مع ✔ و→ — كل السكربتات بتستورد db فنثبّت UTF-8 هنا مرة واحدة
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
+BASE_DIR =os.path.dirname(os.path.abspath(__file__))          # الكود (جوه الـ image في Docker)
+# البيانات المتغيّرة: القاعدة (SQLite)، المرفقات، القوالب المرفوعة، النسخ الاحتياطية، مفتاح الجلسات.
+# في Docker بتبقى /data (volume). محليًا نفس فولدر المشروع زي ما كان.
+DATA_DIR = os.path.abspath(os.environ.get("LUNX_DATA_DIR", BASE_DIR))
+os.makedirs(DATA_DIR, exist_ok=True)
+
+
+def data_path(*parts):
+    return os.path.join(DATA_DIR, *parts)
+
+
+def resolve_file(rel):
+    """مسار ملف متخزن في القاعدة (نسبي زي uploads/...) ← مسار حقيقي جوه DATA_DIR."""
+    return rel if os.path.isabs(rel) else os.path.join(DATA_DIR, rel)
+
+
+def rel_file(path):
+    return os.path.relpath(path, DATA_DIR).replace("\\", "/")
 SCHEMA_VERSION = "3"          # 3 = Alembic + مفاتيح أجنبية
 
 
 def default_url():
     if os.environ.get("LUNX_DATABASE_URL"):
         return os.environ["LUNX_DATABASE_URL"]
-    path = os.environ.get("LUNX_DB", os.path.join(BASE_DIR, "lunx.db"))  # توافق مع الإصدار السابق
+    path = os.environ.get("LUNX_DB", data_path("lunx.db"))  # توافق مع الإصدار السابق
     return "sqlite:///" + path.replace("\\", "/")
 
 
@@ -463,7 +486,7 @@ def reset_sequences(s):
 # ---------------------------------------------------------------------------
 # نسخ احتياطي تلقائي يومي (JSON مستقل عن نوع القاعدة) في مجلد backups/
 # ---------------------------------------------------------------------------
-BACKUP_DIR = os.environ.get("LUNX_BACKUP_DIR", os.path.join(BASE_DIR, "backups"))
+BACKUP_DIR = os.environ.get("LUNX_BACKUP_DIR", data_path("backups"))
 BACKUP_KEEP = int(os.environ.get("LUNX_BACKUP_KEEP", "30"))
 
 
@@ -484,9 +507,23 @@ def write_backup(path=None, include_users=True):
 def auto_backup_if_due():
     """مرة واحدة في اليوم: نسخة JSON كاملة (بالمستخدمين) + الاحتفاظ بآخر BACKUP_KEEP نسخة."""
     today = date.today().isoformat()
-    with session_scope() as s:
+    with session_scope(commit=False) as s:
         if get_meta(s, "last_auto_backup") == today:
             return None
+    # قفل ملف يومي ← worker واحد بس (أو container واحد على نفس الـ volume) يعمل النسخة
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    try:
+        fd = os.open(os.path.join(BACKUP_DIR, f".lock-{today}"), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.close(fd)
+    except FileExistsError:
+        return None
+    for f in os.listdir(BACKUP_DIR):
+        if f.startswith(".lock-") and f != f".lock-{today}":
+            try:
+                os.remove(os.path.join(BACKUP_DIR, f))
+            except OSError:
+                pass
+    with session_scope() as s:
         set_meta(s, "last_auto_backup", today)
     path = write_backup()
     files = sorted(f for f in os.listdir(BACKUP_DIR) if f.startswith("lunx-auto-") and f.endswith(".json"))

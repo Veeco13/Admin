@@ -30,19 +30,31 @@ import models as M
 APP_VERSION = "v353-flask.3"
 
 BASE_DIR = db.BASE_DIR
-TEMPLATE_DOCS = os.path.join(BASE_DIR, "templates_docs")
-UPLOADS = os.path.join(BASE_DIR, "uploads")
+BUILTIN_TEMPLATES = os.path.join(BASE_DIR, "templates_docs")     # القوالب اللي جاية مع الكود
+TEMPLATE_DOCS = db.data_path("templates_docs")                  # القوالب المستخدمة (بتتحفظ مع البيانات)
+UPLOADS = db.data_path("uploads")
 for sub in ("", "employees", "companies", "signatories", "logos", "imports"):
     os.makedirs(os.path.join(UPLOADS, sub), exist_ok=True)
 os.makedirs(TEMPLATE_DOCS, exist_ok=True)
+if os.path.abspath(TEMPLATE_DOCS) != os.path.abspath(BUILTIN_TEMPLATES) and os.path.isdir(BUILTIN_TEMPLATES):
+    import shutil
+    for _fn in os.listdir(BUILTIN_TEMPLATES):
+        if _fn.endswith(".docx") and not os.path.exists(os.path.join(TEMPLATE_DOCS, _fn)):
+            shutil.copy2(os.path.join(BUILTIN_TEMPLATES, _fn), TEMPLATE_DOCS)
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("LUNX_MAX_UPLOAD_MB", "25")) * 1024 * 1024
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = os.environ.get("LUNX_COOKIE_SECURE", "0") == "1"   # 1 لو وراه HTTPS
 app.json.ensure_ascii = False
+if os.environ.get("LUNX_BEHIND_PROXY", "0") == "1":        # وراه Nginx / Traefik / Caddy
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 
 def _secret_key():
-    p = os.path.join(BASE_DIR, ".secret_key")
+    p = db.data_path(".secret_key")
     if not os.path.exists(p):
         open(p, "w").write(os.urandom(32).hex())
     return open(p).read().strip()
@@ -55,11 +67,14 @@ app.secret_key = os.environ.get("LUNX_SECRET") or _secret_key()
 # التهيئة
 # ---------------------------------------------------------------------------
 def bootstrap():
-    db.init_db()
+    # في Docker التعديلات بتتطبق مرة واحدة في entrypoint قبل تشغيل الـ workers (LUNX_AUTO_MIGRATE=0)
+    if os.environ.get("LUNX_AUTO_MIGRATE", "1") == "1":
+        db.init_db()
     with db.session_scope() as s:
         if not s.scalar(select(func.count()).select_from(M.User)):
             s.add(M.User(username="admin", displayName="مدير النظام",
-                         passwordHash=generate_password_hash("admin123"), role="admin"))
+                         passwordHash=generate_password_hash(os.environ.get("LUNX_ADMIN_PASSWORD") or "admin123"),
+                         role="admin"))
         defaults = [
             ("contract_template_v2.docx", "عقد حكومي — بدل سكن (الشركة والمفوّض تلقائي)", True),
             ("contract_template.docx", "القالب الافتراضي (عقد حكومي) — النسخة القديمة", False),
@@ -443,7 +458,7 @@ def upload_emp_file(emp_id):
     path = os.path.join(folder, fid + "_" + (secure_filename(f.filename) or "file"))
     f.save(path)
     with db.session_scope() as s:
-        s.add(M.EmployeeFile(id=fid, employeeId=emp_id, name=f.filename, path=os.path.relpath(path, BASE_DIR),
+        s.add(M.EmployeeFile(id=fid, employeeId=emp_id, name=f.filename, path=db.rel_file(path),
                              size=os.path.getsize(path), uploadedAt=db.now(), uploadedBy=uname()))
         db.push_timeline(s, emp_id, "file", f"رفع مرفق: {f.filename}", uname())
     return jsonify({"ok": True, "id": fid})
@@ -456,7 +471,7 @@ def delete_emp_file(fid):
         r = s.get(M.EmployeeFile, fid)
         if r:
             try:
-                os.remove(os.path.join(BASE_DIR, r.path))
+                os.remove(db.resolve_file(r.path))
             except OSError:
                 pass
             db.push_timeline(s, r.employeeId, "file", f"حذف مرفق: {r.name}", uname())
@@ -471,7 +486,7 @@ def get_emp_file(fid):
         r = s.get(M.EmployeeFile, fid)
     if not r:
         abort(404)
-    return send_file(os.path.join(BASE_DIR, r.path), download_name=r.name,
+    return send_file(db.resolve_file(r.path), download_name=r.name,
                      as_attachment=request.args.get("dl") == "1")
 
 
@@ -551,7 +566,7 @@ def upload_company_doc(cid, kind):
     folder = os.path.join(UPLOADS, "logos" if kind == "logo" else "companies")
     path = os.path.join(folder, f"{cid}_{kind}{os.path.splitext(f.filename)[1].lower()}")
     f.save(path)
-    rel = os.path.relpath(path, BASE_DIR)
+    rel = db.rel_file(path)
     with db.session_scope() as s:
         if kind == "logo":
             c = s.get(M.Company, cid)
@@ -579,7 +594,7 @@ def get_company_doc(cid, kind):
         r = s.get(M.CompanyDoc, (cid, kind))
     if not r or not r.path:
         abort(404)
-    return send_file(os.path.join(BASE_DIR, r.path), download_name=r.name)
+    return send_file(db.resolve_file(r.path), download_name=r.name)
 
 
 @app.get("/files/logo/<cid>")
@@ -589,7 +604,7 @@ def get_logo(cid):
         c = s.get(M.Company, cid)
     if not c or not c.logoPath:
         abort(404)
-    return send_file(os.path.join(BASE_DIR, c.logoPath))
+    return send_file(db.resolve_file(c.logoPath))
 
 
 @app.post("/api/signatories")
@@ -636,7 +651,7 @@ def upload_signatory_doc(civil_id):
         if f and f.filename:
             path = os.path.join(UPLOADS, "signatories", f"{civil_id}{os.path.splitext(f.filename)[1].lower()}")
             f.save(path)
-            doc.name, doc.path = f.filename, os.path.relpath(path, BASE_DIR)
+            doc.name, doc.path = f.filename, db.rel_file(path)
         doc.expiryDate = db.parse_date(request.form.get("expiryDate"))
         doc.uploadedAt = db.now()
         s.merge(doc)
@@ -650,7 +665,7 @@ def get_signatory_doc(civil_id):
         r = s.get(M.SignatoryDoc, civil_id)
     if not r or not r.path:
         abort(404)
-    return send_file(os.path.join(BASE_DIR, r.path), download_name=r.name)
+    return send_file(db.resolve_file(r.path), download_name=r.name)
 
 
 @app.post("/api/projects")
@@ -1072,6 +1087,17 @@ def change_my_password():
     return jsonify({"ok": True})
 
 
+@app.get("/healthz")
+def healthz():
+    """فحص الحالة (Docker HEALTHCHECK / Load balancer)."""
+    try:
+        with db.engine.connect() as conn:
+            conn.exec_driver_sql("SELECT 1")
+        return jsonify({"status": "ok", "version": APP_VERSION, "database": db.engine.dialect.name})
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 503
+
+
 @app.errorhandler(404)
 def not_found(e):
     if request.path.startswith("/api/"):
@@ -1081,5 +1107,5 @@ def not_found(e):
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5050))
-    print(f"Lunx {APP_VERSION} [{db.engine.dialect.name}] → http://localhost:{port}   (admin / admin123)")
+    print(f"Lunx {APP_VERSION} [{db.engine.dialect.name}] → http://localhost:{port}")
     app.run(host=os.environ.get("HOST", "127.0.0.1"), port=port, debug=bool(os.environ.get("DEBUG")))

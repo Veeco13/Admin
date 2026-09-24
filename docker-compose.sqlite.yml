@@ -1,0 +1,21 @@
+# Lunx لوحده بـ SQLite (من غير PostgreSQL) — مناسب لجهاز واحد أو تجربة
+#   docker compose -f docker-compose.sqlite.yml up -d --build
+name: lunx-sqlite
+
+services:
+  app:
+    build: .
+    image: lunx:latest
+    restart: unless-stopped
+    environment:
+      LUNX_SECRET: ${LUNX_SECRET:?اكتب LUNX_SECRET في ملف .env}
+      LUNX_ADMIN_PASSWORD: ${LUNX_ADMIN_PASSWORD:-admin123}
+      WORKERS: "1"            # SQLite: worker واحد + threads
+      THREADS: "8"
+    ports:
+      - "${LUNX_PORT:-5050}:5050"
+    volumes:
+      - lunxdata:/data          # lunx.db + المرفقات + القوالب + النسخ الاحتياطية
+
+volumes:
+  lunxdata:
