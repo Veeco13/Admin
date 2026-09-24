@@ -16,7 +16,13 @@ python app.py        # http://localhost:5050
 ```bash
 set LUNX_DATABASE_URL=postgresql+psycopg://lunx:PASS@localhost/lunx
 ```
-ولنقل البيانات من قاعدة لقاعدة: `python db_transfer.py <من> <إلى>`، والتفاصيل في SYSTEM.md (القسم 15).
+أداة الإدارة:
+```bash
+python manage_db.py info       # النوع والمراجعة وعدد الصفوف
+python manage_db.py check      # فحص سلامة البيانات
+python manage_db.py transfer sqlite:///lunx.db "postgresql+psycopg://..."
+```
+تعديلات الهيكل بتتطبق تلقائي (Alembic)، ونسخة احتياطية JSON بتتعمل كل يوم في `backups/`. التفاصيل في SYSTEM.md (القسم 15).
 
 ## البيانات
 قاعدة البيانات (`lunx.db`) والمرفقات (`uploads/`) **مش مرفوعة على GitHub** لأن فيها بيانات شخصية للموظفين.

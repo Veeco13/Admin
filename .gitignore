@@ -4,7 +4,7 @@ lunx.db-*
 *.db
 data/
 uploads/
-!uploads/.gitkeep
+templates_docs/original_contract_sample.docx
 .secret_key
 *.json.bak
 lunx-backup-*.json
@@ -19,3 +19,4 @@ venv/
 .DS_Store
 Thumbs.db
 generated_contracts/
+backups/

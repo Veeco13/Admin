@@ -4,27 +4,45 @@ Lunx — نماذج قاعدة البيانات (SQLAlchemy 2.x ORM)
 
 - أسماء الخصائص في بايثون = أسماء الحقول في الـ API (camelCase).
 - أسماء الأعمدة في قاعدة البيانات snake_case (زي ما هي من الأول، فالنسخ القديمة متوافقة).
-- الأنواع محايدة: String/Text/Date/DateTime/Boolean/Float/Integer
+- الأنواع محايدة: Unicode/UnicodeText/String/Date/DateTime/Boolean/Float/Integer
   ← تشتغل على SQLite و PostgreSQL و MySQL/MariaDB و SQL Server من غير تعديل.
 """
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, Date, DateTime, Float, Integer, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Unicode, UnicodeText
+from sqlalchemy import MetaData
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
+# أسماء ثابتة للقيود والفهارس ← لازمة لـ Alembic عشان التعديلات تشتغل بنفس الشكل على كل الأنواع
+NAMING = {
+    "ix": "ix_%(table_name)s_%(column_0_N_name)s",
+    "uq": "uq_%(table_name)s_%(column_0_N_name)s",
+    "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "pk": "pk_%(table_name)s",
+}
+
+
 class Base(DeclarativeBase):
-    pass
+    metadata = MetaData(naming_convention=NAMING)
 
 
 ID = String(64)          # معرّفات نصية (c1, cand_xxx, الرقم المدني …)
-NAME = String(300)
-SHORT = String(120)
+NAME = Unicode(300)       # Unicode ← NVARCHAR على SQL Server (عربي سليم)، VARCHAR على الباقي
+SHORT = Unicode(120)
+TEXT = UnicodeText()
 
 
-def col(name, type_, **kw):
-    return mapped_column(name, type_, **kw)
+def col(name, type_, *args, **kw):
+    return mapped_column(name, type_, *args, **kw)
+
+
+def fk(target):
+    """مفتاح أجنبي بدون ON DELETE/UPDATE (NO ACTION) — محمول على كل الأنواع حتى SQL Server.
+    الحذف والتغيير بيتعاملوا من كود التطبيق بترتيب صحيح."""
+    return ForeignKey(target, name=None)
 
 
 # ---------------------------------------------------------------------------
@@ -43,13 +61,13 @@ class Company(Base):
     trafficAuthExpiry: Mapped[Optional[date]] = col("traffic_auth_expiry", Date)
     civilAffairsAuthExpiry: Mapped[Optional[date]] = col("civil_affairs_auth_expiry", Date)
     activity: Mapped[Optional[str]] = col("activity", NAME)
-    logoPath: Mapped[Optional[str]] = col("logo_path", String(500))
+    logoPath: Mapped[Optional[str]] = col("logo_path", Unicode(500))
 
 
 class Project(Base):
     __tablename__ = "projects"
     id: Mapped[str] = col("id", ID, primary_key=True)
-    companyId: Mapped[Optional[str]] = col("company_id", ID, index=True)
+    companyId: Mapped[Optional[str]] = col("company_id", ID, fk("companies.id"), index=True)
     nameAr: Mapped[str] = col("name_ar", NAME, nullable=False)
     nameEn: Mapped[Optional[str]] = col("name_en", NAME)
     fileNumber: Mapped[Optional[str]] = col("file_number", SHORT, index=True)
@@ -69,11 +87,11 @@ class Vehicle(Base):
     id: Mapped[str] = col("id", ID, primary_key=True)
     plate: Mapped[str] = col("plate", SHORT, nullable=False, unique=True)
     model: Mapped[Optional[str]] = col("model", NAME)
-    companyId: Mapped[Optional[str]] = col("company_id", ID)
-    driverId: Mapped[Optional[str]] = col("driver_id", ID)
+    companyId: Mapped[Optional[str]] = col("company_id", ID, fk("companies.id"))
+    driverId: Mapped[Optional[str]] = col("driver_id", ID, fk("employees.id"))
     insuranceExpiry: Mapped[Optional[date]] = col("insurance_expiry", Date)
     govLicenseExpiry: Mapped[Optional[date]] = col("gov_license_expiry", Date)
-    notes: Mapped[Optional[str]] = col("notes", Text)
+    notes: Mapped[Optional[str]] = col("notes", TEXT)
 
 
 class Employee(Base):
@@ -104,16 +122,16 @@ class Employee(Base):
     actualWorkplace: Mapped[Optional[str]] = col("actual_workplace", NAME)
     fileNo: Mapped[Optional[str]] = col("file_no", SHORT)
     govStage: Mapped[Optional[str]] = col("gov_stage", String(60))
-    govStageNote: Mapped[Optional[str]] = col("gov_stage_note", Text)
+    govStageNote: Mapped[Optional[str]] = col("gov_stage_note", TEXT)
     govStageResponsible: Mapped[Optional[str]] = col("gov_stage_responsible", NAME)
     govStageStartDate: Mapped[Optional[date]] = col("gov_stage_start_date", Date)
     govTransactionCost: Mapped[Optional[float]] = col("gov_transaction_cost", Float)
-    transferNote: Mapped[Optional[str]] = col("transfer_note", Text)
+    transferNote: Mapped[Optional[str]] = col("transfer_note", TEXT)
     bank: Mapped[Optional[str]] = col("bank", NAME)
     iban: Mapped[Optional[str]] = col("iban", SHORT)
     dpId: Mapped[Optional[str]] = col("dp_id", SHORT)
     phone: Mapped[Optional[str]] = col("phone", SHORT)
-    notes: Mapped[Optional[str]] = col("notes", Text)
+    notes: Mapped[Optional[str]] = col("notes", TEXT)
     lastUpdated: Mapped[Optional[datetime]] = col("last_updated", DateTime)
     lastUpdatedBy: Mapped[Optional[str]] = col("last_updated_by", NAME)
 
@@ -140,15 +158,15 @@ class Candidate(Base):
     entryDate: Mapped[Optional[date]] = col("entry_date", Date)
     oldSponsorResidencyExp: Mapped[Optional[date]] = col("old_sponsor_residency_exp", Date)
     civilId: Mapped[Optional[str]] = col("civil_id", ID, index=True)
-    targetCompanyId: Mapped[Optional[str]] = col("target_company_id", ID)
+    targetCompanyId: Mapped[Optional[str]] = col("target_company_id", ID, fk("companies.id"))
     costCenter: Mapped[Optional[str]] = col("cost_center", NAME)
-    notes: Mapped[Optional[str]] = col("notes", Text)
+    notes: Mapped[Optional[str]] = col("notes", TEXT)
 
 
 class Signatory(Base):
     __tablename__ = "signatories"
     id: Mapped[str] = col("id", ID, primary_key=True)
-    companyId: Mapped[str] = col("company_id", ID, nullable=False, index=True)
+    companyId: Mapped[str] = col("company_id", ID, fk("companies.id"), nullable=False, index=True)
     nameAr: Mapped[str] = col("name_ar", NAME, nullable=False)
     nameEn: Mapped[Optional[str]] = col("name_en", NAME)
     civilId: Mapped[Optional[str]] = col("civil_id", ID)
@@ -158,7 +176,7 @@ class Template(Base):
     __tablename__ = "templates"
     id: Mapped[str] = col("id", ID, primary_key=True)
     name: Mapped[str] = col("name", NAME, nullable=False)
-    filename: Mapped[str] = col("filename", String(500), nullable=False)
+    filename: Mapped[str] = col("filename", Unicode(500), nullable=False)
     isDefault: Mapped[bool] = col("is_default", Boolean, default=False)
     createdAt: Mapped[Optional[datetime]] = col("created_at", DateTime)
 
@@ -169,7 +187,7 @@ class Template(Base):
 class Meta(Base):
     __tablename__ = "meta"
     key: Mapped[str] = col("key", String(100), primary_key=True)
-    value: Mapped[Optional[str]] = col("value", Text)
+    value: Mapped[Optional[str]] = col("value", TEXT)
 
 
 class User(Base):
@@ -184,26 +202,26 @@ class User(Base):
 class EmployeeAffiliation(Base):
     __tablename__ = "employee_affiliations"
     id: Mapped[int] = col("id", Integer, primary_key=True, autoincrement=True)
-    employeeId: Mapped[str] = col("employee_id", ID, nullable=False, index=True)
+    employeeId: Mapped[str] = col("employee_id", ID, fk("employees.id"), nullable=False, index=True)
     position: Mapped[int] = col("position", Integer, nullable=False, default=0)       # 0 = الأساسي
-    companyId: Mapped[Optional[str]] = col("company_id", ID, index=True)
-    projectId: Mapped[Optional[str]] = col("project_id", ID, index=True)
+    companyId: Mapped[Optional[str]] = col("company_id", ID, fk("companies.id"), index=True)
+    projectId: Mapped[Optional[str]] = col("project_id", ID, fk("projects.id"), index=True)
 
 
 class CompanyDoc(Base):
     __tablename__ = "company_docs"
-    companyId: Mapped[str] = col("company_id", ID, primary_key=True)
+    companyId: Mapped[str] = col("company_id", ID, fk("companies.id"), primary_key=True)
     kind: Mapped[str] = col("kind", String(40), primary_key=True)   # trafficAuth | civilAffairs | commercialLicense
-    name: Mapped[Optional[str]] = col("name", String(500))
-    path: Mapped[Optional[str]] = col("path", String(500))
+    name: Mapped[Optional[str]] = col("name", Unicode(500))
+    path: Mapped[Optional[str]] = col("path", Unicode(500))
     uploadedAt: Mapped[Optional[datetime]] = col("uploaded_at", DateTime)
 
 
 class SignatoryDoc(Base):
     __tablename__ = "signatory_docs"
     civilId: Mapped[str] = col("civil_id", ID, primary_key=True)
-    name: Mapped[Optional[str]] = col("name", String(500))
-    path: Mapped[Optional[str]] = col("path", String(500))
+    name: Mapped[Optional[str]] = col("name", Unicode(500))
+    path: Mapped[Optional[str]] = col("path", Unicode(500))
     expiryDate: Mapped[Optional[date]] = col("expiry_date", Date)
     uploadedAt: Mapped[Optional[datetime]] = col("uploaded_at", DateTime)
 
@@ -212,8 +230,8 @@ class EmployeeFile(Base):
     __tablename__ = "employee_files"
     id: Mapped[str] = col("id", ID, primary_key=True)
     employeeId: Mapped[str] = col("employee_id", ID, nullable=False, index=True)
-    name: Mapped[Optional[str]] = col("name", String(500))
-    path: Mapped[Optional[str]] = col("path", String(500))
+    name: Mapped[Optional[str]] = col("name", Unicode(500))
+    path: Mapped[Optional[str]] = col("path", Unicode(500))
     size: Mapped[Optional[int]] = col("size", Integer)
     uploadedAt: Mapped[Optional[datetime]] = col("uploaded_at", DateTime)
     uploadedBy: Mapped[Optional[str]] = col("uploaded_by", NAME)
@@ -224,7 +242,7 @@ class CompanyHistory(Base):
     id: Mapped[str] = col("id", ID, primary_key=True)
     companyId: Mapped[Optional[str]] = col("company_id", ID, index=True)
     type: Mapped[Optional[str]] = col("type", String(60))
-    label: Mapped[Optional[str]] = col("label", Text)
+    label: Mapped[Optional[str]] = col("label", TEXT)
     date: Mapped[Optional[datetime]] = col("date", DateTime, index=True)
     user: Mapped[Optional[str]] = col("user", NAME)
 
@@ -234,7 +252,7 @@ class AuditLog(Base):
     id: Mapped[str] = col("id", ID, primary_key=True)
     type: Mapped[Optional[str]] = col("type", String(60))
     category: Mapped[Optional[str]] = col("category", String(40), index=True)
-    label: Mapped[Optional[str]] = col("label", Text)
+    label: Mapped[Optional[str]] = col("label", TEXT)
     date: Mapped[Optional[datetime]] = col("date", DateTime, index=True)
     user: Mapped[Optional[str]] = col("user", NAME)
 
@@ -244,7 +262,7 @@ class EmployeeTimeline(Base):
     id: Mapped[str] = col("id", ID, primary_key=True)
     employeeId: Mapped[Optional[str]] = col("employee_id", ID, index=True)
     type: Mapped[Optional[str]] = col("type", String(60))
-    label: Mapped[Optional[str]] = col("label", Text)
+    label: Mapped[Optional[str]] = col("label", TEXT)
     date: Mapped[Optional[datetime]] = col("date", DateTime)
     user: Mapped[Optional[str]] = col("user", NAME)
 

@@ -31,7 +31,7 @@ import models as M
 def transfer(src_url, dst_url, quiet=False):
     src = create_engine(src_url)
     dst = db.make_engine(dst_url)
-    M.Base.metadata.create_all(dst)
+    db.init_db(dst)                      # الهيكل الكامل عن طريق Alembic
     # قراءة المصدر بالانعكاس (reflection) — يشتغل حتى مع هيكل الإصدار الأول
     md = MetaData()
     md.reflect(src)
@@ -42,7 +42,8 @@ def transfer(src_url, dst_url, quiet=False):
     src.dispose()
     S = sessionmaker(bind=dst, expire_on_commit=False)
     with S() as s:
-        counts = db.import_tables(s, tables, replace=True, skip=())
+        tables.pop("alembic_version", None)
+        counts = db.import_tables(s, tables, replace=True, skip=("meta",))
         db.set_meta(s, "schema_version", db.SCHEMA_VERSION)
         s.commit()
         total = {m.__tablename__: s.scalar(select(func.count()).select_from(m)) for m in M.ALL_MODELS}

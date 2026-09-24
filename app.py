@@ -27,7 +27,7 @@ import importer
 import lunx_restore
 import models as M
 
-APP_VERSION = "v353-flask.2"
+APP_VERSION = "v353-flask.3"
 
 BASE_DIR = db.BASE_DIR
 TEMPLATE_DOCS = os.path.join(BASE_DIR, "templates_docs")
@@ -164,6 +164,10 @@ def index():
 @app.get("/api/state")
 @login_required
 def api_state():
+    try:
+        db.auto_backup_if_due()          # نسخة JSON يومية في backups/
+    except Exception as e:               # النسخ الاحتياطي ما يوقفش النظام
+        app.logger.warning("auto backup failed: %s", e)
     with db.session_scope(commit=False) as s:
         state = db.dump_state(s)
     u = current_user()
@@ -172,6 +176,7 @@ def api_state():
     state["version"] = APP_VERSION
     state["pdfAvailable"] = bool(docx_engine.soffice_path())
     state["database"] = db.engine.dialect.name
+    state["schemaRevision"] = db.current_revision()
     return jsonify(state)
 
 
@@ -317,6 +322,7 @@ def delete_employee(emp_id):
             return err("غير موجود", 404)
         s.query(M.EmployeeAffiliation).filter(M.EmployeeAffiliation.employeeId == emp_id).delete()
         s.query(M.Vehicle).filter(M.Vehicle.driverId == emp_id).update({"driverId": None})
+        s.flush()
         db.log_audit(s, "employee_delete", f"حذف موظف: {e.name} ({emp_id})", uname())
         s.delete(e)
     return jsonify({"ok": True})
@@ -516,8 +522,16 @@ def delete_company(cid):
         n = s.scalar(select(func.count()).select_from(M.EmployeeAffiliation).where(M.EmployeeAffiliation.companyId == cid))
         if n:
             return err(f"لا يمكن حذف الشركة: مرتبط بها {n} موظف. انقلهم أولًا.")
+        # فك الارتباطات بالترتيب (المفاتيح الأجنبية NO ACTION)
+        s.query(M.Vehicle).filter(M.Vehicle.companyId == cid).update({"companyId": None})
+        s.query(M.Candidate).filter(M.Candidate.targetCompanyId == cid).update({"targetCompanyId": None})
+        pids = [p.id for p in s.scalars(select(M.Project).where(M.Project.companyId == cid))]
+        if pids:
+            s.query(M.EmployeeAffiliation).filter(M.EmployeeAffiliation.projectId.in_(pids)) \
+                .update({"projectId": None}, synchronize_session=False)
         for model in (M.Project, M.Signatory, M.CompanyDoc):
             s.query(model).filter(model.companyId == cid).delete()
+        s.flush()
         db.log_audit(s, "company_delete", f"حذف شركة: {c.nameAr}", uname())
         s.delete(c)
     return jsonify({"ok": True})
@@ -673,6 +687,7 @@ def update_project(pid):
 def delete_project(pid):
     with db.session_scope() as s:
         s.query(M.EmployeeAffiliation).filter(M.EmployeeAffiliation.projectId == pid).update({"projectId": None})
+        s.flush()
         p = s.get(M.Project, pid)
         if p:
             s.delete(p)

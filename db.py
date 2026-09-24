@@ -22,7 +22,7 @@ from sqlalchemy.orm import sessionmaker
 import models as M
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"          # 3 = Alembic + مفاتيح أجنبية
 
 
 def default_url():
@@ -42,7 +42,7 @@ def make_engine(url):
         def _sqlite_pragmas(dbapi_conn, _):
             cur = dbapi_conn.cursor()
             cur.execute("PRAGMA journal_mode=WAL")
-            cur.execute("PRAGMA foreign_keys=OFF")
+            cur.execute("PRAGMA foreign_keys=ON")
             cur.close()
     return eng
 
@@ -205,21 +205,44 @@ def upgrade_v1_sqlite(eng):
     db_transfer.transfer("sqlite:///" + backup.replace("\\", "/"), str(eng.url), quiet=True)
 
 
+def _alembic_config():
+    from alembic.config import Config
+    cfg = Config(os.path.join(BASE_DIR, "alembic.ini"))
+    cfg.set_main_option("script_location", os.path.join(BASE_DIR, "migrations"))
+    return cfg
+
+
+def run_migrations(eng=None, target="head"):
+    """يطبّق تعديلات الهيكل (Alembic). قاعدة فاضية ← بتتبني كاملة، قاعدة v353-flask.2 ← بتتعلّم على 0001 وتكمّل."""
+    from alembic import command
+    eng = eng or engine
+    tables = set(inspect(eng).get_table_names())
+    cfg = _alembic_config()
+    with eng.connect() as conn:
+        if conn.dialect.name == "sqlite":
+            conn.exec_driver_sql("PRAGMA foreign_keys=OFF")   # إعادة بناء الجداول في SQLite
+        cfg.attributes["connection"] = conn
+        if "alembic_version" not in tables and "employees" in tables:
+            command.stamp(cfg, "0001")                        # اتعملت بـ create_all قبل Alembic
+        command.upgrade(cfg, target)
+        conn.commit()
+        if conn.dialect.name == "sqlite":
+            conn.exec_driver_sql("PRAGMA foreign_keys=ON")
+
+
+def current_revision(eng=None):
+    from alembic.runtime.migration import MigrationContext
+    with (eng or engine).connect() as conn:
+        return MigrationContext.configure(conn).get_current_revision()
+
+
 def init_db(eng=None):
     eng = eng or engine
     if eng.url.get_backend_name() == "sqlite" and eng.url.database and os.path.exists(eng.url.database) \
             and _needs_v1_upgrade(eng):
         upgrade_v1_sqlite(eng)
-    M.Base.metadata.create_all(eng)
-    insp = inspect(eng)
-    with eng.begin() as conn:
-        for table in M.Base.metadata.sorted_tables:
-            existing = {c["name"] for c in insp.get_columns(table.name)}
-            for c in table.columns:
-                if c.name not in existing and not c.primary_key:
-                    ddl = c.type.compile(dialect=eng.dialect)
-                    conn.execute(text(f'ALTER TABLE {eng.dialect.identifier_preparer.quote(table.name)} '
-                                      f'ADD COLUMN {eng.dialect.identifier_preparer.quote(c.name)} {ddl}'))
+        return init_db(eng)
+    run_migrations(eng)
     S = sessionmaker(bind=eng, expire_on_commit=False)
     with S() as s:
         set_meta(s, "schema_version", SCHEMA_VERSION)
@@ -284,13 +307,19 @@ def employee_full(s, emp_id):
 
 
 def rename_employee(s, old_id, new_id_):
-    """تغيير الرقم المدني (المفتاح الأساسي) مع كل ما يرتبط به."""
+    """تغيير الرقم المدني (المفتاح الأساسي) بطريقة تشتغل على كل الأنواع مع المفاتيح الأجنبية:
+    صف جديد بالرقم الجديد ← تحويل كل المراجع ← حذف الصف القديم."""
     s.flush()
-    s.query(M.Employee).filter(M.Employee.id == old_id).update({"id": new_id_}, synchronize_session=False)
-    s.expire_all()
+    old = s.get(M.Employee, old_id)
+    data = to_dict(old)
+    data["id"] = new_id_
+    s.add(build(M.Employee, data))
+    s.flush()
     for model, attr in ((M.EmployeeAffiliation, "employeeId"), (M.EmployeeTimeline, "employeeId"),
                         (M.EmployeeFile, "employeeId"), (M.Vehicle, "driverId")):
         s.query(model).filter(getattr(model, attr) == old_id).update({attr: new_id_}, synchronize_session=False)
+    s.flush()
+    s.delete(old)
     s.flush()
 
 
@@ -365,23 +394,56 @@ def export_tables(s, include_users=False):
 
 
 def import_tables(s, tables, replace=True, skip=("users", "meta")):
-    """يستورد صفوف (أسماء أعمدة snake_case) مع تحويل الأنواع. يقبل نسخ الإصدار الأول (SQLite)."""
-    counts = {}
-    models = [m for m in M.ALL_MODELS if m.__tablename__ in tables and m.__tablename__ not in skip]
+    """يستورد صفوف (أسماء أعمدة snake_case) مع تحويل الأنواع.
+    - يقبل نسخ الإصدار الأول والتاني (SQLite) والنسخ من أي نوع قاعدة.
+    - بيرتّب الإدخال حسب المفاتيح الأجنبية، والمراجع اليتيمة بتتفضّى (أو الصف يتشال لو العمود إجباري)."""
+    counts, fixed = {}, 0
+    order = [t for t in M.Base.metadata.sorted_tables if t.name in tables and t.name not in skip]
     if replace:
-        for model in reversed(models):
-            s.execute(model.__table__.delete())
-    for model in models:
-        table = model.__table__
+        for t in reversed(M.Base.metadata.sorted_tables):
+            if t.name in tables and t.name not in skip:
+                s.execute(t.delete())
+    known = {}                      # اسم الجدول ← المفاتيح الموجودة (للتحقق من المراجع)
+    for t in M.Base.metadata.sorted_tables:
+        if t.name not in [x.name for x in order] and t.name in ("companies", "projects", "employees"):
+            known[t.name] = {r[0] for r in s.execute(select(t.c.id))}
+    for table in order:
         colmap = {c.name: c for c in table.columns}
         rows = []
-        for row in tables[model.__tablename__]:
+        for row in tables[table.name]:
             r = {k: coerce(colmap[k].type, v) for k, v in row.items() if k in colmap}
-            if r:
+            drop = False
+            for fkc in table.foreign_keys:
+                val = r.get(fkc.parent.name)
+                ref = fkc.column.table.name
+                if val is not None and ref in known and val not in known[ref]:
+                    fixed += 1
+                    if fkc.parent.nullable and not fkc.parent.primary_key:
+                        r[fkc.parent.name] = None
+                    else:
+                        drop = True
+            if table.name == "employee_affiliations" and not r.get("company_id") and not r.get("project_id"):
+                drop = True
+            if r and not drop:
                 rows.append(r)
         if rows:
+            # كل الصفوف لازم يكون ليها نفس الأعمدة (executemany) — الناقص ياخد القيمة الافتراضية
+            for r in rows:
+                for c in table.columns:
+                    if r.get(c.name) is None and not c.nullable and c.default is not None and c.default.is_scalar:
+                        r[c.name] = c.default.arg
+            keys = set().union(*rows)
+            for r in rows:
+                for k in keys - r.keys():
+                    c = colmap[k]
+                    r[k] = c.default.arg if c.default is not None and c.default.is_scalar else None
             s.execute(table.insert(), rows)
-        counts[model.__tablename__] = len(rows)
+        if "id" in table.c:
+            known[table.name] = {r.get("id") for r in rows}
+        counts[table.name] = len(rows)
+    if fixed:
+        counts["_fixedReferences"] = fixed
+    s.flush()
     reset_sequences(s)
     return counts
 
@@ -396,3 +458,64 @@ def reset_sequences(s):
                 t = model.__tablename__
                 s.execute(text(f"SELECT setval(pg_get_serial_sequence('{t}', '{c.name}'), "
                                f"COALESCE((SELECT MAX({c.name}) FROM {t}), 0) + 1, false)"))
+
+
+# ---------------------------------------------------------------------------
+# نسخ احتياطي تلقائي يومي (JSON مستقل عن نوع القاعدة) في مجلد backups/
+# ---------------------------------------------------------------------------
+BACKUP_DIR = os.environ.get("LUNX_BACKUP_DIR", os.path.join(BASE_DIR, "backups"))
+BACKUP_KEEP = int(os.environ.get("LUNX_BACKUP_KEEP", "30"))
+
+
+def write_backup(path=None, include_users=True):
+    import json
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    path = path or os.path.join(BACKUP_DIR, f"lunx-auto-{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.json")
+    with session_scope() as s:
+        data = {"app": "Lunx", "createdAt": now_iso(), "database": engine.dialect.name,
+                "schemaRevision": current_revision(), "tables": export_tables(s, include_users=include_users)}
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False)
+    os.replace(tmp, path)
+    return path
+
+
+def auto_backup_if_due():
+    """مرة واحدة في اليوم: نسخة JSON كاملة (بالمستخدمين) + الاحتفاظ بآخر BACKUP_KEEP نسخة."""
+    today = date.today().isoformat()
+    with session_scope() as s:
+        if get_meta(s, "last_auto_backup") == today:
+            return None
+        set_meta(s, "last_auto_backup", today)
+    path = write_backup()
+    files = sorted(f for f in os.listdir(BACKUP_DIR) if f.startswith("lunx-auto-") and f.endswith(".json"))
+    for old in files[:-BACKUP_KEEP]:
+        try:
+            os.remove(os.path.join(BACKUP_DIR, old))
+        except OSError:
+            pass
+    return path
+
+
+def integrity_report(s):
+    """فحص سلامة البيانات: مراجع يتيمة، تكرار جوازات، موظفين بدون شركة."""
+    from sqlalchemy import func
+    rep = {"counts": {m.__tablename__: s.scalar(select(func.count()).select_from(m)) for m in M.ALL_MODELS}}
+    orphans = {}
+    for t in M.Base.metadata.sorted_tables:
+        for fkc in t.foreign_keys:
+            ref = fkc.column.table
+            q = select(func.count()).select_from(t).where(
+                fkc.parent.isnot(None), fkc.parent.notin_(select(ref.c.id)))
+            n = s.scalar(q)
+            if n:
+                orphans[f"{t.name}.{fkc.parent.name}"] = n
+    rep["orphanReferences"] = orphans
+    dups = s.execute(select(M.Employee.passportNo, func.count()).where(M.Employee.passportNo.isnot(None))
+                     .group_by(M.Employee.passportNo).having(func.count() > 1)).all()
+    rep["duplicatePassports"] = [{"passportNo": p, "count": c} for p, c in dups]
+    rep["employeesWithoutCompany"] = s.scalar(
+        select(func.count()).select_from(M.Employee).where(
+            M.Employee.id.notin_(select(M.EmployeeAffiliation.employeeId))))
+    return rep
