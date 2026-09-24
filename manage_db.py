@@ -76,7 +76,7 @@ def main(argv):
             if lunx_restore.is_lunx_state(data):
                 print(lunx_restore.import_lunx_state(s, data, "سطر الأوامر"))
             else:
-                skip = ("meta",) if data.get("tables", {}).get("users") else ("users", "meta")
+                skip = ("meta",) if data.get("tables", {}).get("users") else db.AUTH_TABLES + ("meta",)
                 print(db.import_tables(s, data["tables"], replace=True, skip=skip))
                 db.log_audit(s, "backup_restore", f"استعادة من سطر الأوامر: {args[0]}", "سطر الأوامر")
     elif cmd == "transfer":

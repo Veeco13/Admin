@@ -190,13 +190,39 @@ class Meta(Base):
     value: Mapped[Optional[str]] = col("value", TEXT)
 
 
+class Role(Base):
+    """دور وظيفي بصلاحيات قابلة للتعديل (مدير النظام، موارد بشرية، مندوب حكومي …).
+    permissions = JSON: قائمة مفاتيح زي ["employees.view", "employees.edit", "sensitive.salary"] — الكتالوج في perms.py"""
+    __tablename__ = "roles"
+    id: Mapped[str] = col("id", ID, primary_key=True)
+    name: Mapped[str] = col("name", NAME, nullable=False, unique=True)
+    description: Mapped[Optional[str]] = col("description", TEXT)
+    permissions: Mapped[Optional[str]] = col("permissions", TEXT)
+    isAdmin: Mapped[bool] = col("is_admin", Boolean, nullable=False, default=False)   # كل الصلاحيات وكل الشركات
+    isSystem: Mapped[bool] = col("is_system", Boolean, nullable=False, default=False)  # مايتحذفش
+
+
 class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = col("id", Integer, primary_key=True, autoincrement=True)
     username: Mapped[str] = col("username", SHORT, nullable=False, unique=True)
     displayName: Mapped[Optional[str]] = col("display_name", NAME)
     passwordHash: Mapped[str] = col("password_hash", String(300), nullable=False)
-    role: Mapped[str] = col("role", String(20), nullable=False, default="editor")   # admin | editor | viewer
+    roleId: Mapped[Optional[str]] = col("role_id", ID, fk("roles.id"), index=True)
+    allCompanies: Mapped[bool] = col("all_companies", Boolean, nullable=False, default=True)  # لأ ← user_companies بس
+    active: Mapped[bool] = col("active", Boolean, nullable=False, default=True)
+    jobTitle: Mapped[Optional[str]] = col("job_title", NAME)
+    email: Mapped[Optional[str]] = col("email", SHORT)
+    phone: Mapped[Optional[str]] = col("phone", SHORT)
+    lastLogin: Mapped[Optional[datetime]] = col("last_login", DateTime)
+    createdAt: Mapped[Optional[datetime]] = col("created_at", DateTime)
+
+
+class UserCompany(Base):
+    """نطاق الشركات للمستخدم (لو all_companies = False)."""
+    __tablename__ = "user_companies"
+    userId: Mapped[int] = col("user_id", Integer, fk("users.id"), primary_key=True)
+    companyId: Mapped[str] = col("company_id", ID, fk("companies.id"), primary_key=True)
 
 
 class EmployeeAffiliation(Base):
@@ -268,6 +294,8 @@ class EmployeeTimeline(Base):
 
 
 # ترتيب الجداول للنسخ/النقل (الأب قبل الابن)
-ALL_MODELS = [Meta, User, Company, Project, CostCenter, Signatory, Employee, EmployeeAffiliation, Vehicle,
-              Candidate, CompanyDoc, SignatoryDoc, EmployeeFile, Template, CompanyHistory, AuditLog,
+ALL_MODELS = [Meta, Role, User, Company, UserCompany, Project, CostCenter, Signatory, Employee, EmployeeAffiliation,
+              Vehicle, Candidate, CompanyDoc, SignatoryDoc, EmployeeFile, Template, CompanyHistory, AuditLog,
               EmployeeTimeline]
+# جداول الحسابات والصلاحيات ← بتتعامل مع بعض في النسخ الاحتياطي (include_users)
+AUTH_MODELS = (Role, User, UserCompany)

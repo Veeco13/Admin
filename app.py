@@ -15,7 +15,7 @@ from datetime import datetime
 from functools import wraps
 
 from flask import (Flask, jsonify, request, session, send_file, render_template,
-                   redirect, url_for, abort)
+                   redirect, url_for, abort, g)
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -26,8 +26,9 @@ import docx_engine
 import importer
 import lunx_restore
 import models as M
+import perms
 
-APP_VERSION = "v353-flask.3"
+APP_VERSION = "v353-flask.4"
 
 BASE_DIR = db.BASE_DIR
 BUILTIN_TEMPLATES = os.path.join(BASE_DIR, "templates_docs")     # القوالب اللي جاية مع الكود
@@ -74,7 +75,7 @@ def bootstrap():
         if not s.scalar(select(func.count()).select_from(M.User)):
             s.add(M.User(username="admin", displayName="مدير النظام",
                          passwordHash=generate_password_hash(os.environ.get("LUNX_ADMIN_PASSWORD") or "admin123"),
-                         role="admin"))
+                         roleId="admin", allCompanies=True, active=True, createdAt=db.now()))
         defaults = [
             ("contract_template_v2.docx", "عقد حكومي — بدل سكن (الشركة والمفوّض تلقائي)", True),
             ("contract_template.docx", "القالب الافتراضي (عقد حكومي) — النسخة القديمة", False),
@@ -99,24 +100,28 @@ def err(msg, code=400, **extra):
 # ---------------------------------------------------------------------------
 # المصادقة والصلاحيات (بديل CAP.user + وضع القراءة فقط)
 # ---------------------------------------------------------------------------
-def current_user():
-    uid = session.get("uid")
-    if not uid:
-        return None
-    with db.session_scope(commit=False) as s:
-        u = s.get(M.User, uid)
-        return {"id": u.id, "username": u.username, "display_name": u.displayName, "role": u.role} if u else None
+def me():
+    """المستخدم الحالي بصلاحياته (perms.UserCtx) — بيتحسب مرة واحدة في كل طلب."""
+    if "ctx" not in g:
+        with db.session_scope(commit=False) as s:
+            g.ctx = perms.load_ctx(s, session.get("uid"))
+    return g.ctx
 
 
 def uname():
-    u = current_user()
-    return (u["display_name"] or u["username"]) if u else None
+    u = me()
+    return u.display if u else None
+
+
+def forbidden(msg="ليس لديك صلاحية لهذه العملية"):
+    return jsonify({"error": msg}), 403
 
 
 def login_required(f):
     @wraps(f)
     def w(*a, **kw):
-        if not current_user():
+        if not me():                       # مش داخل، أو الحساب اتوقف
+            session.clear()
             if request.path.startswith("/api/"):
                 return jsonify({"error": "unauthorized"}), 401
             return redirect(url_for("login"))
@@ -124,40 +129,79 @@ def login_required(f):
     return w
 
 
-def write_required(f):
-    @wraps(f)
-    def w(*a, **kw):
-        u = current_user()
-        if not u:
-            return jsonify({"error": "unauthorized"}), 401
-        if u["role"] == "viewer":
-            return jsonify({"error": "وضع القراءة فقط: لا تملك صلاحية التعديل"}), 403
-        return f(*a, **kw)
-    return w
+def require(*keys, all_companies=False):
+    """صلاحية (أو أكتر) لازمة للعملية. all_companies=True ← لازم نطاق كل الشركات كمان."""
+    def deco(f):
+        @wraps(f)
+        def w(*a, **kw):
+            u = me()
+            if not u:
+                return jsonify({"error": "unauthorized"}), 401
+            if not all(u.can(k) for k in keys):
+                return forbidden()
+            if all_companies and not u.allCompanies:
+                return forbidden("العملية دي محتاجة صلاحية على كل الشركات")
+            return f(*a, **kw)
+        return w
+    return deco
 
 
 def admin_required(f):
     @wraps(f)
     def w(*a, **kw):
-        u = current_user()
-        if not u or u["role"] != "admin":
-            return jsonify({"error": "هذه العملية لمدير النظام فقط"}), 403
+        u = me()
+        if not u or not u.isAdmin:
+            return forbidden("هذه العملية لمدير النظام فقط")
         return f(*a, **kw)
     return w
+
+
+# --- نطاق الشركات (القيود على السيرفر) ---
+OUT_OF_SCOPE = "السجل ده خارج نطاق الشركات المسموح لك بيها"
+
+
+def emp_ok(s, emp_id):
+    return me().affs_ok(db.get_affiliations(s, emp_id))
+
+
+def affs_allowed(affs, existing=()):
+    """الانتماءات الجاية في طلب حفظ موظف: المستخدم المحدود لازم يسيب الموظف في شركة من نطاقه،
+    ومايضيفش شركة برّه نطاقه (الشركات اللي الموظف كان تابع لها أصلًا بتفضل زي ما هي)."""
+    u = me()
+    if u.allCompanies:
+        return True
+    cids = [a.get("companyId") for a in (affs or []) if a.get("companyId")]
+    return any(u.company_ok(c) for c in cids) and all(u.company_ok(c) or c in existing for c in cids)
+
+
+def opt_company_ok(cid):
+    """شركة اختيارية (سيارة/مترشّح): من غير شركة = للنطاق الكامل بس."""
+    u = me()
+    return u.company_ok(cid) if cid else u.allCompanies
+
+
+def dup_name(d):
+    """رسائل التكرار: المستخدم المحدود مايشوفش اسم شخص من شركة تانية."""
+    return d["name"] if me().allCompanies else "سجل آخر"
 
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
     error = None
     if request.method == "POST":
-        with db.session_scope(commit=False) as s:
+        with db.session_scope() as s:
             u = s.scalar(select(M.User).where(M.User.username == request.form.get("username", "").strip()))
-        if u and check_password_hash(u.passwordHash, request.form.get("password", "")):
-            session.clear()
-            session["uid"] = u.id
-            session.permanent = True
-            return redirect(url_for("index"))
-        error = "اسم المستخدم أو كلمة المرور غير صحيحة"
+            if u and check_password_hash(u.passwordHash, request.form.get("password", "")):
+                if not u.active:
+                    error = "الحساب ده موقوف، كلّم مدير النظام"
+                else:
+                    u.lastLogin = db.now()
+                    session.clear()
+                    session["uid"] = u.id
+                    session.permanent = True
+                    return redirect(url_for("index"))
+            else:
+                error = "اسم المستخدم أو كلمة المرور غير صحيحة"
     return render_template("login.html", error=error)
 
 
@@ -183,11 +227,10 @@ def api_state():
         db.auto_backup_if_due()          # نسخة JSON يومية في backups/
     except Exception as e:               # النسخ الاحتياطي ما يوقفش النظام
         app.logger.warning("auto backup failed: %s", e)
+    u = me()
     with db.session_scope(commit=False) as s:
-        state = db.dump_state(s)
-    u = current_user()
-    state["me"] = {"username": u["username"], "displayName": u["display_name"], "role": u["role"],
-                   "readOnly": u["role"] == "viewer"}
+        state = db.dump_state(s, u)
+    state["me"] = u.to_api()
     state["version"] = APP_VERSION
     state["pdfAvailable"] = bool(docx_engine.soffice_path())
     state["database"] = db.engine.dialect.name
@@ -256,19 +299,20 @@ DIFF_LABELS = {"name": "الاسم", "salary": "الراتب", "profession": "ا
 
 
 @app.post("/api/employees")
-@write_required
+@require("employees.edit")
 def create_employee():
     return save_employee(None)
 
 
 @app.put("/api/employees/<emp_id>")
-@write_required
+@require("employees.edit")
 def update_employee(emp_id):
     return save_employee(emp_id)
 
 
 def save_employee(orig_id):
-    data = body()
+    u = me()
+    data = u.strip("employee", body())          # الحقول الحساسة الممنوعة مابتتعدّلش (ولا بتتمسح)
     force = bool(data.pop("force", False))
     new_id = str(data.get("id") or "").strip()
     data["id"] = new_id
@@ -277,18 +321,26 @@ def save_employee(orig_id):
     if not (data.get("name") or "").strip():
         return err("الاسم مطلوب")
     user = uname()
+    dup_extra = (lambda d: {"dup": d}) if u.allCompanies else (lambda d: {})
     try:
         with db.session_scope() as s:
+            existing = [a["companyId"] for a in db.get_affiliations(s, orig_id)] if orig_id else []
+            if orig_id and not u.affs_ok([{"companyId": c} for c in existing]):
+                return forbidden(OUT_OF_SCOPE)
+            if ("affiliations" in data or not orig_id) and not affs_allowed(data.get("affiliations"), existing):
+                return forbidden("لازم الموظف يكون تابع لشركة من الشركات المسموح لك بيها")
             d = find_duplicate_civil_id(s, new_id, exclude_emp=orig_id)
             if d:
-                return err(f"الرقم المدني مسجّل بالفعل لـ {d['name']}", 409, block=True, dup=d)
-            d = find_duplicate_passport(s, data.get("passportNo"), exclude_emp=orig_id)
-            if d:
-                return err(f"رقم الجواز مسجّل بالفعل لـ {d['name']}", 409, block=True, dup=d)
+                return err(f"الرقم المدني مسجّل بالفعل لـ {dup_name(d)}", 409, block=True, **dup_extra(d))
+            if "passportNo" in data:
+                d = find_duplicate_passport(s, data.get("passportNo"), exclude_emp=orig_id)
+                if d:
+                    return err(f"رقم الجواز مسجّل بالفعل لـ {dup_name(d)}", 409, block=True, **dup_extra(d))
             if not force and not orig_id:
                 d = find_duplicate_name_nat(s, data.get("name"), data.get("nationality"), include_candidates=False)
                 if d:
-                    return err(f"يوجد موظف بنفس الاسم والجنسية: {d['name']} ({d['id']})", 409, warn=True, dup=d)
+                    return err(f"يوجد موظف بنفس الاسم والجنسية: {dup_name(d)}"
+                               + (f" ({d['id']})" if u.allCompanies else ""), 409, warn=True, **dup_extra(d))
             affs = data.pop("affiliations", None)
             data["lastUpdated"] = db.now()
             data["lastUpdatedBy"] = user
@@ -323,18 +375,20 @@ def save_employee(orig_id):
             if affs is not None:
                 db.set_affiliations(s, new_id, affs)
             s.flush()
-            return jsonify({"ok": True, "employee": db.employee_full(s, new_id)})
+            return jsonify({"ok": True, "employee": u.strip("employee", db.employee_full(s, new_id))})
     except IntegrityError as e:
         return err(f"تعارض في البيانات: {e.orig}", 409)
 
 
 @app.delete("/api/employees/<emp_id>")
-@write_required
+@require("employees.delete")
 def delete_employee(emp_id):
     with db.session_scope() as s:
         e = s.get(M.Employee, emp_id)
         if not e:
             return err("غير موجود", 404)
+        if not emp_ok(s, emp_id):
+            return forbidden(OUT_OF_SCOPE)
         s.query(M.EmployeeAffiliation).filter(M.EmployeeAffiliation.employeeId == emp_id).delete()
         s.query(M.Vehicle).filter(M.Vehicle.driverId == emp_id).update({"driverId": None})
         s.flush()
@@ -344,13 +398,21 @@ def delete_employee(emp_id):
 
 
 @app.post("/api/employees/bulk-assign")
-@write_required
+@require("employees.edit")
 def bulk_assign():
     d = body()
     ids = d.get("ids") or []
     comp, proj, cc = d.get("companyId") or None, d.get("projectId") or None, d.get("costCenter")
     user = uname()
     with db.session_scope() as s:
+        if proj and not comp:
+            p = s.get(M.Project, proj)
+            comp_chk = p.companyId if p else None
+        else:
+            comp_chk = comp
+        if (comp or proj) and not me().company_ok(comp_chk):
+            return forbidden("الشركة المختارة خارج نطاقك")
+        ids = [i for i in ids if emp_ok(s, i)]              # الموظفين خارج النطاق بيتجاهلوا
         for eid in ids:
             e = s.get(M.Employee, eid)
             if not e:
@@ -369,7 +431,7 @@ def bulk_assign():
 
 
 @app.post("/api/employees/renew")
-@write_required
+@require("employees.edit")
 def renew_employees():
     """تجديد سريع أو جماعي: {ids:[], field:'residencyExp', date:'YYYY-MM-DD', setRenewedStage:bool}"""
     d = body()
@@ -380,7 +442,7 @@ def renew_employees():
     with db.session_scope() as s:
         for eid in d.get("ids") or []:
             e = s.get(M.Employee, eid)
-            if not e:
+            if not e or not emp_ok(s, eid):
                 continue
             old = db.ser(getattr(e, field))
             setattr(e, field, new_date)
@@ -398,13 +460,15 @@ def renew_employees():
 
 
 @app.post("/api/employees/<emp_id>/gov-stage")
-@write_required
+@require("employees.edit")
 def set_gov_stage(emp_id):
-    d = body()
+    d = me().strip("employee", body())         # تكلفة المعاملة من البيانات الحساسة
     with db.session_scope() as s:
         e = s.get(M.Employee, emp_id)
         if not e:
             return err("غير موجود", 404)
+        if not emp_ok(s, emp_id):
+            return forbidden(OUT_OF_SCOPE)
         db.apply(e, {k: d.get(k) for k in ("govStage", "govStageNote", "govStageResponsible", "govStageStartDate",
                                            "govTransactionCost") if k in d})
         e.lastUpdated, e.lastUpdatedBy = db.now(), uname()
@@ -415,7 +479,8 @@ def set_gov_stage(emp_id):
 
 
 @app.post("/api/employees/import")
-@write_required
+@require("employees.edit", "system.import", "sensitive.salary", "sensitive.bank", "sensitive.documents",
+         all_companies=True)   # الملف بيكتب كل الحقول ولأي شركة
 def import_employees():
     f = request.files.get("file")
     if not f or not f.filename:
@@ -437,9 +502,11 @@ def import_employees():
 
 # مرفقات الموظف (بديل Google Drive)
 @app.get("/api/employees/<emp_id>/files")
-@login_required
+@require("employees.view", "sensitive.documents")
 def list_emp_files(emp_id):
     with db.session_scope(commit=False) as s:
+        if not emp_ok(s, emp_id):
+            return forbidden(OUT_OF_SCOPE)
         rows = s.scalars(select(M.EmployeeFile).where(M.EmployeeFile.employeeId == emp_id)
                          .order_by(M.EmployeeFile.uploadedAt.desc())).all()
         return jsonify([{"id": r.id, "name": r.name, "size": r.size, "uploaded_at": db.ser(r.uploadedAt),
@@ -447,11 +514,16 @@ def list_emp_files(emp_id):
 
 
 @app.post("/api/employees/<emp_id>/files")
-@write_required
+@require("employees.edit", "sensitive.documents")
 def upload_emp_file(emp_id):
     f = request.files.get("file")
     if not f:
         return err("لا يوجد ملف")
+    with db.session_scope(commit=False) as s:
+        if not s.get(M.Employee, emp_id):
+            return err("الموظف غير موجود", 404)
+        if not emp_ok(s, emp_id):
+            return forbidden(OUT_OF_SCOPE)
     folder = os.path.join(UPLOADS, "employees", emp_id)
     os.makedirs(folder, exist_ok=True)
     fid = db.new_id("f")
@@ -465,10 +537,12 @@ def upload_emp_file(emp_id):
 
 
 @app.delete("/api/files/<fid>")
-@write_required
+@require("employees.edit", "sensitive.documents")
 def delete_emp_file(fid):
     with db.session_scope() as s:
         r = s.get(M.EmployeeFile, fid)
+        if r and not emp_ok(s, r.employeeId):
+            return forbidden(OUT_OF_SCOPE)
         if r:
             try:
                 os.remove(db.resolve_file(r.path))
@@ -480,10 +554,12 @@ def delete_emp_file(fid):
 
 
 @app.get("/files/emp/<fid>")
-@login_required
+@require("employees.view", "sensitive.documents")
 def get_emp_file(fid):
     with db.session_scope(commit=False) as s:
         r = s.get(M.EmployeeFile, fid)
+        if r and not emp_ok(s, r.employeeId):
+            abort(403)
     if not r:
         abort(404)
     return send_file(db.resolve_file(r.path), download_name=r.name,
@@ -494,7 +570,7 @@ def get_emp_file(fid):
 # الشركات والمشاريع والمفوّضين
 # ---------------------------------------------------------------------------
 @app.post("/api/companies")
-@write_required
+@require("companies.edit", all_companies=True)     # المستخدم المحدود مش هيشوف الشركة الجديدة أصلًا
 def create_company():
     d = body()
     if not (d.get("nameAr") or "").strip():
@@ -508,8 +584,10 @@ def create_company():
 
 
 @app.put("/api/companies/<cid>")
-@write_required
+@require("companies.edit")
 def update_company(cid):
+    if not me().company_ok(cid):
+        return forbidden(OUT_OF_SCOPE)
     d, u = body(), uname()
     with db.session_scope() as s:
         c = s.get(M.Company, cid)
@@ -528,7 +606,7 @@ def update_company(cid):
 
 
 @app.delete("/api/companies/<cid>")
-@write_required
+@require("companies.delete", all_companies=True)
 def delete_company(cid):
     with db.session_scope() as s:
         c = s.get(M.Company, cid)
@@ -544,7 +622,7 @@ def delete_company(cid):
         if pids:
             s.query(M.EmployeeAffiliation).filter(M.EmployeeAffiliation.projectId.in_(pids)) \
                 .update({"projectId": None}, synchronize_session=False)
-        for model in (M.Project, M.Signatory, M.CompanyDoc):
+        for model in (M.Project, M.Signatory, M.CompanyDoc, M.UserCompany):
             s.query(model).filter(model.companyId == cid).delete()
         s.flush()
         db.log_audit(s, "company_delete", f"حذف شركة: {c.nameAr}", uname())
@@ -556,10 +634,15 @@ DOC_KINDS = ("trafficAuth", "civilAffairs", "commercialLicense")
 
 
 @app.post("/api/companies/<cid>/docs/<kind>")
-@write_required
+@require("companies.edit")
 def upload_company_doc(cid, kind):
     if kind not in DOC_KINDS and kind != "logo":
         return err("نوع مستند غير معروف")
+    if not me().company_ok(cid):
+        return forbidden(OUT_OF_SCOPE)
+    with db.session_scope(commit=False) as s:
+        if not s.get(M.Company, cid):
+            return err("غير موجود", 404)
     f = request.files.get("file")
     if not f:
         return err("لا يوجد ملف")
@@ -578,8 +661,10 @@ def upload_company_doc(cid, kind):
 
 
 @app.delete("/api/companies/<cid>/docs/<kind>")
-@write_required
+@require("companies.edit")
 def delete_company_doc(cid, kind):
+    if not me().company_ok(cid):
+        return forbidden(OUT_OF_SCOPE)
     with db.session_scope() as s:
         d = s.get(M.CompanyDoc, (cid, kind))
         if d:
@@ -588,8 +673,10 @@ def delete_company_doc(cid, kind):
 
 
 @app.get("/files/company/<cid>/<kind>")
-@login_required
+@require("companies.view")
 def get_company_doc(cid, kind):
+    if not me().company_ok(cid):
+        abort(403)
     with db.session_scope(commit=False) as s:
         r = s.get(M.CompanyDoc, (cid, kind))
     if not r or not r.path:
@@ -607,12 +694,19 @@ def get_logo(cid):
     return send_file(db.resolve_file(c.logoPath))
 
 
+def _sig_ok(s, sid, new_company=None):
+    x = s.get(M.Signatory, sid) if sid else None
+    return (not x or me().company_ok(x.companyId)) and (not new_company or me().company_ok(new_company))
+
+
 @app.post("/api/signatories")
-@write_required
+@require("companies.edit")
 def create_signatory():
     d = body()
     if not d.get("companyId") or not (d.get("nameAr") or "").strip():
         return err("الشركة والاسم مطلوبين")
+    if not me().company_ok(d["companyId"]):
+        return forbidden(OUT_OF_SCOPE)
     d["id"] = db.new_id("sig")
     with db.session_scope() as s:
         s.add(db.build(M.Signatory, d))
@@ -621,32 +715,45 @@ def create_signatory():
 
 
 @app.put("/api/signatories/<sid>")
-@write_required
+@require("companies.edit")
 def update_signatory(sid):
+    d = body()
     with db.session_scope() as s:
         x = s.get(M.Signatory, sid)
         if not x:
             return err("غير موجود", 404)
-        db.apply(x, body())
+        if not _sig_ok(s, sid, d.get("companyId")):
+            return forbidden(OUT_OF_SCOPE)
+        db.apply(x, d)
     return jsonify({"ok": True})
 
 
 @app.delete("/api/signatories/<sid>")
-@write_required
+@require("companies.delete")
 def delete_signatory(sid):
     with db.session_scope() as s:
         x = s.get(M.Signatory, sid)
+        if x and not _sig_ok(s, sid):
+            return forbidden(OUT_OF_SCOPE)
         if x:
             s.delete(x)
     return jsonify({"ok": True})
 
 
+def _signatory_visible(s, civil_id):
+    """البطاقة مشتركة لكل شركات المفوّض ← كفاية يكون مفوّض في شركة واحدة من النطاق."""
+    return me().allCompanies or any(me().company_ok(c) for c in s.scalars(
+        select(M.Signatory.companyId).where(M.Signatory.civilId == civil_id)))
+
+
 @app.post("/api/signatory-docs/<civil_id>")
-@write_required
+@require("companies.edit")
 def upload_signatory_doc(civil_id):
     """صورة البطاقة المدنية للمفوّض: تُحفظ مرة واحدة لكل شخص (مفتاحها الرقم المدني)."""
     f = request.files.get("file")
     with db.session_scope() as s:
+        if not _signatory_visible(s, civil_id):
+            return forbidden(OUT_OF_SCOPE)
         doc = s.get(M.SignatoryDoc, civil_id) or M.SignatoryDoc(civilId=civil_id)
         if f and f.filename:
             path = os.path.join(UPLOADS, "signatories", f"{civil_id}{os.path.splitext(f.filename)[1].lower()}")
@@ -659,9 +766,11 @@ def upload_signatory_doc(civil_id):
 
 
 @app.get("/files/signatory/<civil_id>")
-@login_required
+@require("companies.view")
 def get_signatory_doc(civil_id):
     with db.session_scope(commit=False) as s:
+        if not _signatory_visible(s, civil_id):
+            abort(403)
         r = s.get(M.SignatoryDoc, civil_id)
     if not r or not r.path:
         abort(404)
@@ -669,11 +778,13 @@ def get_signatory_doc(civil_id):
 
 
 @app.post("/api/projects")
-@write_required
+@require("companies.edit")
 def create_project():
     d = body()
     if not d.get("companyId") or not (d.get("nameAr") or "").strip():
         return err("الشركة واسم المشروع مطلوبين")
+    if not me().company_ok(d["companyId"]):
+        return forbidden(OUT_OF_SCOPE)
     d["id"] = db.new_id("pr")
     with db.session_scope() as s:
         s.add(db.build(M.Project, d))
@@ -682,13 +793,15 @@ def create_project():
 
 
 @app.put("/api/projects/<pid>")
-@write_required
+@require("companies.edit")
 def update_project(pid):
     d = body()
     with db.session_scope() as s:
         p = s.get(M.Project, pid)
         if not p:
             return err("غير موجود", 404)
+        if not me().company_ok(p.companyId) or ("companyId" in d and not me().company_ok(d["companyId"])):
+            return forbidden(OUT_OF_SCOPE)
         old_exp = db.ser(p.expiryDate)
         db.apply(p, d)
         if p.expiryDate and db.ser(p.expiryDate) != old_exp:
@@ -698,9 +811,12 @@ def update_project(pid):
 
 
 @app.delete("/api/projects/<pid>")
-@write_required
+@require("companies.delete")
 def delete_project(pid):
     with db.session_scope() as s:
+        p = s.get(M.Project, pid)
+        if p and not me().company_ok(p.companyId):
+            return forbidden(OUT_OF_SCOPE)
         s.query(M.EmployeeAffiliation).filter(M.EmployeeAffiliation.projectId == pid).update({"projectId": None})
         s.flush()
         p = s.get(M.Project, pid)
@@ -714,13 +830,16 @@ def delete_project(pid):
 # ---------------------------------------------------------------------------
 @app.post("/api/vehicles")
 @app.put("/api/vehicles/<vid>")
-@write_required
+@require("vehicles.edit")
 def save_vehicle(vid=None):
     d = body()
     plate = (d.get("plate") or "").strip()
     if not plate:
         return err("رقم اللوحة مطلوب")
     with db.session_scope() as s:
+        old = s.get(M.Vehicle, vid) if vid else None
+        if (old and not opt_company_ok(old.companyId)) or not opt_company_ok(d.get("companyId") or None):
+            return forbidden("السيارة لازم تكون تابعة لشركة من نطاقك")
         if s.scalar(select(M.Vehicle).where(M.Vehicle.plate == plate, M.Vehicle.id != (vid or ""))):
             return err(f"رقم اللوحة {plate} مسجّل بالفعل", 409, block=True)
         if vid:
@@ -737,10 +856,12 @@ def save_vehicle(vid=None):
 
 
 @app.delete("/api/vehicles/<vid>")
-@write_required
+@require("vehicles.delete")
 def delete_vehicle(vid):
     with db.session_scope() as s:
         v = s.get(M.Vehicle, vid)
+        if v and not opt_company_ok(v.companyId):
+            return forbidden(OUT_OF_SCOPE)
         if v:
             db.log_audit(s, "vehicle_delete", f"حذف سيارة: {v.plate}", uname())
             s.delete(v)
@@ -749,7 +870,7 @@ def delete_vehicle(vid):
 
 @app.post("/api/cost-centers")
 @app.put("/api/cost-centers/<ccid>")
-@write_required
+@require("costcenters.edit")
 def save_cost_center(ccid=None):
     d = body()
     name = (d.get("name") or "").strip()
@@ -774,7 +895,7 @@ def save_cost_center(ccid=None):
 
 
 @app.delete("/api/cost-centers/<ccid>")
-@write_required
+@require("costcenters.delete")
 def delete_cost_center(ccid):
     with db.session_scope() as s:
         c = s.get(M.CostCenter, ccid)
@@ -791,22 +912,27 @@ def delete_cost_center(ccid):
 # ---------------------------------------------------------------------------
 @app.post("/api/candidates")
 @app.put("/api/candidates/<cand_id>")
-@write_required
+@require("recruitment.edit")
 def save_candidate(cand_id=None):
-    d = body()
+    d = me().strip("candidate", body())
     if not (d.get("name") or "").strip():
         return err("الاسم مطلوب")
     with db.session_scope() as s:
+        old = s.get(M.Candidate, cand_id) if cand_id else None
+        if (old and not opt_company_ok(old.targetCompanyId)) or \
+                ("targetCompanyId" in d or not old) and not opt_company_ok(d.get("targetCompanyId") or None):
+            return forbidden("لازم تحدد شركة مستهدفة من نطاقك")
         x = find_duplicate_civil_id(s, (d.get("civilId") or "").strip(), exclude_cand=cand_id)
         if x:
-            return err(f"الرقم المدني مسجّل بالفعل لـ {x['name']}", 409, block=True)
-        x = find_duplicate_passport(s, d.get("passportNo"), exclude_cand=cand_id)
-        if x:
-            return err(f"رقم الجواز مسجّل بالفعل لـ {x['name']}", 409, block=True)
+            return err(f"الرقم المدني مسجّل بالفعل لـ {dup_name(x)}", 409, block=True)
+        if "passportNo" in d:
+            x = find_duplicate_passport(s, d.get("passportNo"), exclude_cand=cand_id)
+            if x:
+                return err(f"رقم الجواز مسجّل بالفعل لـ {dup_name(x)}", 409, block=True)
         if not cand_id:
             x = find_duplicate_name_nat(s, d.get("name"), d.get("nationality"))
             if x:
-                return err(f"يوجد {'موظف' if x['where'] == 'employee' else 'مترشّح'} بنفس الاسم والجنسية: {x['name']}",
+                return err(f"يوجد {'موظف' if x['where'] == 'employee' else 'مترشّح'} بنفس الاسم والجنسية: {dup_name(x)}",
                            409, block=True)
         if d.get("stage") == "all_completed" and not (d.get("civilId") or "").strip():
             return err("لا يمكن اختيار «تم إنجاز جميع الإجراءات» قبل تسجيل الرقم المدني")
@@ -825,32 +951,36 @@ def save_candidate(cand_id=None):
 
 
 @app.delete("/api/candidates/<cand_id>")
-@write_required
+@require("recruitment.delete")
 def delete_candidate(cand_id):
     with db.session_scope() as s:
         c = s.get(M.Candidate, cand_id)
+        if c and not opt_company_ok(c.targetCompanyId):
+            return forbidden(OUT_OF_SCOPE)
         if c:
             s.delete(c)
     return jsonify({"ok": True})
 
 
 @app.post("/api/candidates/<cand_id>/convert")
-@write_required
+@require("recruitment.edit", "employees.edit")
 def convert_candidate(cand_id):
     """القسم 8.1: تحويل المترشّح إلى موظف بحالة «قيد الاستكمال»."""
     with db.session_scope() as s:
         c = s.get(M.Candidate, cand_id)
         if not c:
             return err("غير موجود", 404)
+        if not opt_company_ok(c.targetCompanyId) or not affs_allowed([{"companyId": c.targetCompanyId}]):
+            return forbidden(OUT_OF_SCOPE)
         civil = (c.civilId or "").strip()
         if not civil:
             return err("لازم الرقم المدني يكون متسجّل قبل التحويل")
         x = find_duplicate_civil_id(s, civil, exclude_cand=cand_id)
         if x:
-            return err(f"الرقم المدني مسجّل بالفعل لـ {x['name']}", 409)
+            return err(f"الرقم المدني مسجّل بالفعل لـ {dup_name(x)}", 409)
         x = find_duplicate_passport(s, c.passportNo, exclude_cand=cand_id)
         if x:
-            return err(f"رقم الجواز مسجّل بالفعل لـ {x['name']}", 409)
+            return err(f"رقم الجواز مسجّل بالفعل لـ {dup_name(x)}", 409)
         s.add(M.Employee(
             id=civil, name=c.name, nameEn=c.nameEn, nationality=c.nationality,
             nationalityEn=docx_engine.NATIONALITY_EN.get(c.nationality or ""), dateOfBirth=c.dateOfBirth,
@@ -875,6 +1005,8 @@ def _contract_bundle(args):
         emp = db.employee_full(s, args.get("emp", ""))
         if not emp:
             abort(404, "الموظف غير موجود")
+        if not me().affs_ok(emp["affiliations"]) or (args.get("company") and not me().company_ok(args["company"])):
+            abort(403, OUT_OF_SCOPE)
         tpl = s.get(M.Template, args.get("tpl", "")) or \
             s.scalar(select(M.Template).order_by(M.Template.isDefault.desc(), M.Template.createdAt))
         if not tpl:
@@ -896,14 +1028,14 @@ def _contract_bundle(args):
 
 
 @app.get("/api/contract/preview")
-@login_required
+@require("contract.view", "employees.view", "sensitive.salary")
 def contract_preview():
     emp, data, ctx = _contract_bundle(request.args)
     return jsonify({"html": docx_engine.docx_to_html(data), "fields": ctx})
 
 
 @app.get("/api/contract/docx")
-@login_required
+@require("contract.view", "employees.view", "sensitive.salary")
 def contract_docx():
     emp, data, _ = _contract_bundle(request.args)
     return send_file(io.BytesIO(data), as_attachment=True, download_name=f"عقد عمل - {emp['name']}.docx",
@@ -911,7 +1043,7 @@ def contract_docx():
 
 
 @app.get("/api/contract/pdf")
-@login_required
+@require("contract.view", "employees.view", "sensitive.salary")
 def contract_pdf():
     emp, data, _ = _contract_bundle(request.args)
     pdf = docx_engine.docx_to_pdf(data)
@@ -922,7 +1054,7 @@ def contract_pdf():
 
 
 @app.post("/api/templates")
-@write_required
+@require("contract.edit")
 def upload_template():
     f = request.files.get("file")
     name = (request.form.get("name") or "").strip()
@@ -945,7 +1077,7 @@ def upload_template():
 
 
 @app.post("/api/templates/<tid>/default")
-@write_required
+@require("contract.edit")
 def set_default_template(tid):
     with db.session_scope() as s:
         s.query(M.Template).update({"isDefault": False})
@@ -954,7 +1086,7 @@ def set_default_template(tid):
 
 
 @app.delete("/api/templates/<tid>")
-@write_required
+@require("contract.edit")
 def delete_template(tid):
     with db.session_scope() as s:
         if s.scalar(select(func.count()).select_from(M.Template)) <= 1:
@@ -966,7 +1098,7 @@ def delete_template(tid):
 
 
 @app.get("/api/templates/<tid>/file")
-@login_required
+@require("contract.view")
 def download_template(tid):
     with db.session_scope(commit=False) as s:
         t = s.get(M.Template, tid)
@@ -979,7 +1111,7 @@ def download_template(tid):
 # النسخ الاحتياطي والاستعادة
 # ---------------------------------------------------------------------------
 @app.get("/api/backup")
-@login_required
+@require("system.backup", "sensitive.salary", "sensitive.bank", "sensitive.documents", all_companies=True)
 def backup():
     with db.session_scope() as s:
         out = {"app": "Lunx", "version": APP_VERSION, "createdAt": db.now_iso(), "database": db.engine.dialect.name,
@@ -1018,30 +1150,82 @@ def restore():
 # ---------------------------------------------------------------------------
 # المستخدمين (للمدير)
 # ---------------------------------------------------------------------------
-ROLES = ("admin", "editor", "viewer")
+def _user_api(u, scopes):
+    return {"id": u.id, "username": u.username, "displayName": u.displayName, "roleId": u.roleId,
+            "allCompanies": bool(u.allCompanies), "companies": scopes.get(u.id, []), "active": bool(u.active),
+            "jobTitle": u.jobTitle, "email": u.email, "phone": u.phone,
+            "lastLogin": db.ser(u.lastLogin), "createdAt": db.ser(u.createdAt)}
+
+
+def _active_admins(s, exclude=None):
+    q = select(func.count()).select_from(M.User).join(M.Role, M.User.roleId == M.Role.id) \
+        .where(M.Role.isAdmin.is_(True), M.User.active.is_(True))
+    if exclude:
+        q = q.where(M.User.id != exclude)
+    return s.scalar(q)
+
+
+def _set_user_fields(s, u, d):
+    """الحقول المشتركة بين الإضافة والتعديل. بيرجّع رسالة خطأ أو None."""
+    if "roleId" in d:
+        if not s.get(M.Role, d["roleId"] or ""):
+            return "الدور غير موجود"
+        u.roleId = d["roleId"]
+    for k in ("displayName", "jobTitle", "email", "phone"):
+        if k in d:
+            setattr(u, k, (d[k] or "").strip() or None)
+    if "active" in d:
+        u.active = bool(d["active"])
+    if "allCompanies" in d:
+        u.allCompanies = bool(d["allCompanies"])
+    if "companies" in d:
+        cids = [c for c in dict.fromkeys(d["companies"] or []) if s.get(M.Company, c)]
+        if not u.allCompanies and not cids:
+            return "اختار شركة واحدة على الأقل، أو فعّل «كل الشركات»"
+        s.flush()
+        s.query(M.UserCompany).filter(M.UserCompany.userId == u.id).delete()
+        s.add_all([M.UserCompany(userId=u.id, companyId=c) for c in cids])
+    elif "allCompanies" in d and not u.allCompanies and not s.scalar(
+            select(func.count()).select_from(M.UserCompany).where(M.UserCompany.userId == u.id)):
+        return "اختار شركة واحدة على الأقل، أو فعّل «كل الشركات»"
+    if d.get("password"):
+        if len(d["password"]) < 6:
+            return "كلمة المرور لازم 6 أحرف على الأقل"
+        u.passwordHash = generate_password_hash(d["password"])
+    return None
 
 
 @app.get("/api/users")
 @admin_required
 def list_users():
     with db.session_scope(commit=False) as s:
-        return jsonify([{"id": u.id, "username": u.username, "display_name": u.displayName, "role": u.role}
-                        for u in s.scalars(select(M.User).order_by(M.User.id))])
+        scopes = {}
+        for r in s.scalars(select(M.UserCompany)):
+            scopes.setdefault(r.userId, []).append(r.companyId)
+        return jsonify([_user_api(u, scopes) for u in s.scalars(select(M.User).order_by(M.User.id))])
 
 
 @app.post("/api/users")
 @admin_required
 def create_user():
     d = body()
-    if not d.get("username") or not d.get("password") or d.get("role") not in ROLES:
-        return err("بيانات ناقصة")
+    username = (d.get("username") or "").strip()
+    if not username or not d.get("password") or not d.get("roleId"):
+        return err("اسم المستخدم وكلمة المرور والدور مطلوبين")
     try:
         with db.session_scope() as s:
-            s.add(M.User(username=d["username"].strip(), displayName=d.get("displayName") or d["username"],
-                         passwordHash=generate_password_hash(d["password"]), role=d["role"]))
+            u = M.User(username=username, displayName=(d.get("displayName") or "").strip() or username,
+                       passwordHash="", allCompanies=True, active=True, createdAt=db.now())
+            s.add(u)
+            s.flush()
+            msg = _set_user_fields(s, u, {**d, "allCompanies": d.get("allCompanies", True)})
+            if msg:
+                s.rollback()
+                return err(msg)
+            db.log_audit(s, "user_add", f"إضافة مستخدم: {username} ({s.get(M.Role, u.roleId).name})", uname())
+            return jsonify({"ok": True, "id": u.id})
     except IntegrityError:
         return err("اسم المستخدم موجود بالفعل", 409)
-    return jsonify({"ok": True})
 
 
 @app.put("/api/users/<int:uid>")
@@ -1052,12 +1236,20 @@ def update_user(uid):
         u = s.get(M.User, uid)
         if not u:
             return err("غير موجود", 404)
-        if d.get("role") in ROLES:
-            u.role = d["role"]
-        if d.get("password"):
-            u.passwordHash = generate_password_hash(d["password"])
-        if d.get("displayName"):
-            u.displayName = d["displayName"]
+        was_admin = bool(u.roleId and s.get(M.Role, u.roleId).isAdmin and u.active)
+        msg = _set_user_fields(s, u, d)
+        if msg:
+            s.rollback()
+            return err(msg)
+        is_admin = bool(s.get(M.Role, u.roleId).isAdmin and u.active)
+        if was_admin and not is_admin and not _active_admins(s, exclude=uid):
+            s.rollback()
+            return err("لازم يفضل مدير نظام واحد نشط على الأقل")
+        if uid == me().id and not is_admin:
+            s.rollback()
+            return err("مش هينفع تشيل صلاحية المدير أو توقف حسابك انت")
+        db.log_audit(s, "user_edit", f"تعديل المستخدم: {u.username}"
+                     + (" — كلمة مرور جديدة" if d.get("password") else ""), uname())
     return jsonify({"ok": True})
 
 
@@ -1069,8 +1261,73 @@ def delete_user(uid):
     with db.session_scope() as s:
         u = s.get(M.User, uid)
         if u:
+            if u.roleId and s.get(M.Role, u.roleId).isAdmin and u.active and not _active_admins(s, exclude=uid):
+                return err("لازم يفضل مدير نظام واحد نشط على الأقل")
+            s.query(M.UserCompany).filter(M.UserCompany.userId == uid).delete()
+            s.flush()
+            db.log_audit(s, "user_delete", f"حذف المستخدم: {u.username}", uname())
             s.delete(u)
     return jsonify({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# الأدوار (للمدير)
+# ---------------------------------------------------------------------------
+def _role_api(r, counts):
+    return {"id": r.id, "name": r.name, "description": r.description, "permissions": perms.load_keys(r),
+            "isAdmin": bool(r.isAdmin), "isSystem": bool(r.isSystem), "userCount": counts.get(r.id, 0)}
+
+
+@app.get("/api/roles")
+@admin_required
+def list_roles():
+    with db.session_scope(commit=False) as s:
+        counts = dict(s.execute(select(M.User.roleId, func.count()).group_by(M.User.roleId)).all())
+        roles = s.scalars(select(M.Role).order_by(M.Role.isAdmin.desc(), M.Role.isSystem.desc(), M.Role.name))
+        return jsonify({"roles": [_role_api(r, counts) for r in roles], "catalog": perms.catalog()})
+
+
+@app.post("/api/roles")
+@app.put("/api/roles/<rid>")
+@admin_required
+def save_role(rid=None):
+    d = body()
+    name = (d.get("name") or "").strip()
+    if not name:
+        return err("اسم الدور مطلوب")
+    try:
+        with db.session_scope() as s:
+            r = s.get(M.Role, rid) if rid else M.Role(id=db.new_id("role"), isAdmin=False, isSystem=False)
+            if not r:
+                return err("غير موجود", 404)
+            r.name = name
+            r.description = (d.get("description") or "").strip() or None
+            if not r.isAdmin:                              # مدير النظام = كل الصلاحيات دايمًا
+                r.permissions = json.dumps(perms.clean_keys(d.get("permissions")))
+            if not rid:
+                s.add(r)
+            db.log_audit(s, "role_edit" if rid else "role_add", f"{'تعديل' if rid else 'إضافة'} دور: {name}", uname())
+            return jsonify({"ok": True, "id": r.id})
+    except IntegrityError:
+        return err("يوجد دور بنفس الاسم", 409)
+
+
+@app.delete("/api/roles/<rid>")
+@admin_required
+def delete_role(rid):
+    with db.session_scope() as s:
+        r = s.get(M.Role, rid)
+        if not r:
+            return jsonify({"ok": True})
+        if r.isSystem:
+            return err("الدور ده أساسي في النظام ومش بيتحذف (تقدر تعدّل صلاحياته)")
+        n = s.scalar(select(func.count()).select_from(M.User).where(M.User.roleId == rid))
+        if n:
+            return err(f"الدور ده مستخدم عند {n} مستخدم، غيّر دورهم الأول")
+        db.log_audit(s, "role_delete", f"حذف دور: {r.name}", uname())
+        s.delete(r)
+    return jsonify({"ok": True})
+
 
 
 @app.post("/api/me/password")

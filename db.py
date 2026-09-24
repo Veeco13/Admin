@@ -349,53 +349,105 @@ def rename_employee(s, old_id, new_id_):
 # ---------------------------------------------------------------------------
 # الحالة الكاملة (STATE) للواجهة
 # ---------------------------------------------------------------------------
-def dump_state(s):
-    affs = {}
-    for a in s.scalars(select(M.EmployeeAffiliation).order_by(M.EmployeeAffiliation.employeeId,
-                                                              M.EmployeeAffiliation.position)):
-        affs.setdefault(a.employeeId, []).append({"companyId": a.companyId, "projectId": a.projectId})
-    employees = []
-    for e in s.scalars(select(M.Employee).order_by(M.Employee.name)):
-        d = to_dict(e)
-        d["affiliations"] = affs.get(e.id, [])
-        employees.append(d)
+SALARY_IN_LOG = re.compile(r"الراتب: [^،\n]*")
 
-    sigs = [to_dict(x) for x in s.scalars(select(M.Signatory))]
+
+def redact_salary(label):
+    """سجل التدقيق والخط الزمني بيحفظوا فرق الراتب نصًا ← يتخفي عن اللي ملوش sensitive.salary."""
+    return SALARY_IN_LOG.sub("الراتب: •••", label or "")
+
+
+def dump_state(s, ctx=None):
+    """الحالة للواجهة. ctx = صلاحيات المستخدم (perms.UserCtx): بيتفلتر حسب الأقسام ونطاق الشركات
+    وبتتشال الحقول الحساسة — اللي مش مسموح بيه مابيوصلش للمتصفح أصلًا. ctx=None ← كل حاجة."""
+    can = ctx.can if ctx else (lambda k: True)
+    company_ok = ctx.company_ok if ctx else (lambda c: True)
+    all_companies = ctx.allCompanies if ctx else True
+    strip = ctx.strip if ctx else (lambda kind, d: d)
+    see_salary = can("sensitive.salary")
+
+    companies_full = can("companies.view") or can("contract.view")   # العقد محتاج المفوّضين
+    sigs = [to_dict(x) for x in s.scalars(select(M.Signatory))] if companies_full else []
     docs = {}
-    for r in s.scalars(select(M.CompanyDoc)):
-        docs.setdefault(r.companyId, {})[r.kind] = {
-            "name": r.name, "url": f"/files/company/{r.companyId}/{r.kind}", "uploadedAt": ser(r.uploadedAt)}
+    if can("companies.view"):
+        for r in s.scalars(select(M.CompanyDoc)):
+            docs.setdefault(r.companyId, {})[r.kind] = {
+                "name": r.name, "url": f"/files/company/{r.companyId}/{r.kind}", "uploadedAt": ser(r.uploadedAt)}
     companies = []
     for c in s.scalars(select(M.Company).order_by(M.Company.nameAr)):
-        d = to_dict(c)
-        d["signatories"] = [x for x in sigs if x["companyId"] == c.id]
-        dd = docs.get(c.id, {})
-        d["docs"] = {k: dd.get(k) for k in ("trafficAuth", "civilAffairs", "commercialLicense")}
-        d["logoUrl"] = f"/files/logo/{c.id}" if c.logoPath else None
+        if not company_ok(c.id):
+            continue
+        logo = f"/files/logo/{c.id}" if c.logoPath else None
+        if companies_full:
+            d = to_dict(c)
+            d["signatories"] = [x for x in sigs if x["companyId"] == c.id]
+            dd = docs.get(c.id, {})
+            d["docs"] = {k: dd.get(k) for k in ("trafficAuth", "civilAffairs", "commercialLicense")}
+        else:   # الاسم بس (عشان باقي الشاشات تعرض اسم شركة الموظف)
+            d = {"id": c.id, "nameAr": c.nameAr, "nameEn": c.nameEn, "signatories": [], "docs": {}}
+        d["logoUrl"] = logo
         companies.append(d)
+    visible_sigs = {x["civilId"] for c in companies for x in c["signatories"] if x.get("civilId")}
 
-    signatory_docs = {
-        r.civilId: {"name": r.name, "url": f"/files/signatory/{r.civilId}",
-                    "expiryDate": ser(r.expiryDate), "uploadedAt": ser(r.uploadedAt)}
-        for r in s.scalars(select(M.SignatoryDoc))
-    }
+    employees = []
+    if can("employees.view") or can("contract.view"):
+        affs = {}
+        for a in s.scalars(select(M.EmployeeAffiliation).order_by(M.EmployeeAffiliation.employeeId,
+                                                                  M.EmployeeAffiliation.position)):
+            affs.setdefault(a.employeeId, []).append({"companyId": a.companyId, "projectId": a.projectId})
+        for e in s.scalars(select(M.Employee).order_by(M.Employee.name)):
+            a = affs.get(e.id, [])
+            if ctx and not ctx.affs_ok(a):
+                continue
+            d = strip("employee", to_dict(e))
+            d["affiliations"] = a
+            employees.append(d)
+    emp_ids = {e["id"] for e in employees}
+
     timeline = {}
-    for r in s.scalars(select(M.EmployeeTimeline).order_by(M.EmployeeTimeline.date)):
-        timeline.setdefault(r.employeeId, []).append(to_dict(r))
+    if can("employees.view"):
+        for r in s.scalars(select(M.EmployeeTimeline).order_by(M.EmployeeTimeline.date)):
+            if r.employeeId in emp_ids:
+                d = to_dict(r)
+                if not see_salary:
+                    d["label"] = redact_salary(d["label"])
+                timeline.setdefault(r.employeeId, []).append(d)
+
+    def in_scope(cid):
+        return company_ok(cid) if cid else all_companies
+
+    audit = []
+    if can("companylog.view") and all_companies:     # سجل التدقيق مش مربوط بشركة ← للنطاق الكامل بس
+        for x in s.scalars(select(M.AuditLog).order_by(M.AuditLog.date.desc()).limit(2000)):
+            d = to_dict(x)
+            if not see_salary:
+                d["label"] = redact_salary(d["label"])
+            audit.append(d)
 
     return {
         "companies": companies,
-        "projects": [to_dict(x) for x in s.scalars(select(M.Project).order_by(M.Project.nameAr))],
+        "projects": [to_dict(x) for x in s.scalars(select(M.Project).order_by(M.Project.nameAr))
+                     if company_ok(x.companyId)],
         "employees": employees,
-        "vehicles": [to_dict(x) for x in s.scalars(select(M.Vehicle).order_by(M.Vehicle.plate))],
+        "vehicles": [to_dict(x) for x in s.scalars(select(M.Vehicle).order_by(M.Vehicle.plate))
+                     if in_scope(x.companyId)] if can("vehicles.view") else [],
         "costCenters": [to_dict(x) for x in s.scalars(select(M.CostCenter).order_by(M.CostCenter.name))],
-        "companyHistory": [to_dict(x) for x in s.scalars(select(M.CompanyHistory).order_by(M.CompanyHistory.date.desc()))],
-        "candidates": [to_dict(x) for x in s.scalars(select(M.Candidate).order_by(M.Candidate.appliedDate.desc()))],
-        "signatoryDocs": signatory_docs,
-        "auditLog": [to_dict(x) for x in s.scalars(select(M.AuditLog).order_by(M.AuditLog.date.desc()).limit(2000))],
+        "companyHistory": [to_dict(x) for x in s.scalars(select(M.CompanyHistory)
+                                                         .order_by(M.CompanyHistory.date.desc()))
+                           if in_scope(x.companyId)] if can("companylog.view") else [],
+        "candidates": [strip("candidate", to_dict(x)) for x in s.scalars(select(M.Candidate)
+                                                                         .order_by(M.Candidate.appliedDate.desc()))
+                       if in_scope(x.targetCompanyId)] if can("recruitment.view") else [],
+        "signatoryDocs": {
+            r.civilId: {"name": r.name, "url": f"/files/signatory/{r.civilId}",
+                        "expiryDate": ser(r.expiryDate), "uploadedAt": ser(r.uploadedAt)}
+            for r in s.scalars(select(M.SignatoryDoc)) if not ctx or r.civilId in visible_sigs
+        } if can("companies.view") else {},
+        "auditLog": audit,
         "employeeTimeline": timeline,
         "templates": [to_dict(x) for x in s.scalars(select(M.Template).order_by(M.Template.isDefault.desc(),
-                                                                                  M.Template.createdAt))],
+                                                                                  M.Template.createdAt))]
+        if can("contract.view") else [],
     }
 
 
@@ -406,7 +458,7 @@ def dump_state(s):
 def export_tables(s, include_users=False):
     out = {}
     for model in M.ALL_MODELS:
-        if model is M.User and not include_users:
+        if model in M.AUTH_MODELS and not include_users:
             continue
         cols = [c for c in model.__table__.columns]
         rows = []
@@ -416,19 +468,33 @@ def export_tables(s, include_users=False):
     return out
 
 
-def import_tables(s, tables, replace=True, skip=("users", "meta")):
+AUTH_TABLES = ("roles", "users", "user_companies")
+LEGACY_ROLES = {"admin": "admin", "editor": "editor"}      # نسخ قبل 0003: users.role نص ← role_id
+
+
+def import_tables(s, tables, replace=True, skip=AUTH_TABLES + ("meta",)):
     """يستورد صفوف (أسماء أعمدة snake_case) مع تحويل الأنواع.
     - يقبل نسخ الإصدار الأول والتاني (SQLite) والنسخ من أي نوع قاعدة.
     - بيرتّب الإدخال حسب المفاتيح الأجنبية، والمراجع اليتيمة بتتفضّى (أو الصف يتشال لو العمود إجباري)."""
     counts, fixed = {}, 0
     order = [t for t in M.Base.metadata.sorted_tables if t.name in tables and t.name not in skip]
+    names = {t.name for t in order}
+    for row in (tables.get("users") or []) if "users" in names else []:
+        if "role_id" not in row and "role" in row:
+            row["role_id"] = LEGACY_ROLES.get(row["role"], "viewer")
+    # نطاق الشركات مربوط بالشركات والمستخدمين: لو هيتمسحوا والنطاق مش في النسخة ← نشيله ونرجّعه بعد الاستيراد
+    uc = M.UserCompany.__table__
+    kept_scope = []
+    if replace and "user_companies" not in names and names & {"companies", "users"}:
+        kept_scope = [dict(r) for r in s.execute(select(uc)).mappings()]
+        s.execute(uc.delete())
     if replace:
         for t in reversed(M.Base.metadata.sorted_tables):
             if t.name in tables and t.name not in skip:
                 s.execute(t.delete())
     known = {}                      # اسم الجدول ← المفاتيح الموجودة (للتحقق من المراجع)
     for t in M.Base.metadata.sorted_tables:
-        if t.name not in [x.name for x in order] and t.name in ("companies", "projects", "employees"):
+        if t.name not in names and t.name in ("companies", "projects", "employees", "roles", "users"):
             known[t.name] = {r[0] for r in s.execute(select(t.c.id))}
     for table in order:
         colmap = {c.name: c for c in table.columns}
@@ -464,6 +530,10 @@ def import_tables(s, tables, replace=True, skip=("users", "meta")):
         if "id" in table.c:
             known[table.name] = {r.get("id") for r in rows}
         counts[table.name] = len(rows)
+    kept_scope = [r for r in kept_scope if r["company_id"] in known.get("companies", ())
+                  and r["user_id"] in known.get("users", ())]
+    if kept_scope:
+        s.execute(uc.insert(), kept_scope)
     if fixed:
         counts["_fixedReferences"] = fixed
     s.flush()
