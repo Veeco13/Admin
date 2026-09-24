@@ -38,6 +38,7 @@ def run_migrations_online():
         _configure(connection)
         with context.begin_transaction():
             context.run_migrations()
+        connection.commit()                    # SQLAlchemy 2: الـ PRAGMA فتح transaction ضمنية، من غيرها كله بيترجع
 
 
 if context.is_offline_mode():
