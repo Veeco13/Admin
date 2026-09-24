@@ -69,7 +69,7 @@ function renderDashboard() {
       <div class="card"><h3>الموظفين حسب الشركة</h3><div class="bars">
         ${byCompany.map(x => `<div class="bar-row" data-co="${x.c.id}"><span title="${esc(companyName(x.c.id))}" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(companyName(x.c.id))}</span><div class="track"><i style="width:${100 * x.n / maxCo}%;background:var(--primary)"></i></div><span class="num">${x.n}</span></div>`).join('') || '<div class="empty">—</div>'}
         </div>
-        <hr class="sep"><div class="row"><span class="muted">${t('إجمالي الرواتب الشهرية')}</span><span class="spacer"></span><b class="num">${fmtMoney(payroll)}</b></div>
+        <hr class="sep" data-p="sensitive.salary"><div class="row" data-p="sensitive.salary"><span class="muted">${t('إجمالي الرواتب الشهرية')}</span><span class="spacer"></span><b class="num">${fmtMoney(payroll)}</b></div>
       </div>
       <div class="card"><h3>أكثر الجنسيات</h3><div class="bars">
         ${nats.map(([n, c]) => `<div class="bar-row" data-nat="${esc(n)}"><span>${esc(n)}</span><div class="track"><i style="width:${100 * c / maxNat}%;background:var(--blue)"></i></div><span class="num">${c}</span></div>`).join('')}

@@ -151,20 +151,44 @@ function primaryAff(e) { return (e.affiliations && e.affiliations[0]) || {}; }
 function empCompanyId(e) { return primaryAff(e).companyId || null; }
 function isReadOnly() { return !!(STATE && STATE.me && STATE.me.readOnly); }
 
-/* ---------- الصلاحيات حسب المتصفح (VIEW PERMISSIONS) ---------- */
-function loadViewPerms() { return lsJson('mv_viewPerms', { hidden: [], companies: [] }); }
-function saveViewPerms(p) { lsSet('mv_viewPerms', JSON.stringify(p)); }
-function companyInScope(cid) { const p = loadViewPerms(); return !p.companies.length || p.companies.includes(cid); }
-function scopedEmployees() {
-  const p = loadViewPerms();
-  if (!p.companies.length) return STATE.employees;
-  return STATE.employees.filter(e => (e.affiliations || []).some(a => p.companies.includes(a.companyId)));
+/* ---------- الصلاحيات (من السيرفر — هو اللي بيفرضها، والواجهة بتخفي بس) ----------
+   can('employees.edit') · أي عنصر عليه data-p="مفتاح [مفتاح…]" بيختفي لو أي مفتاح منهم مش مسموح.
+   scope.all = نطاق كل الشركات. */
+const PERM_KEYS = [
+  ...['employees', 'companies', 'vehicles', 'costcenters', 'recruitment'].flatMap(m => ['view', 'edit', 'delete'].map(a => `${m}.${a}`)),
+  'contract.view', 'contract.edit', 'companylog.view',
+  'sensitive.salary', 'sensitive.bank', 'sensitive.documents', 'system.import', 'system.backup', 'scope.all', 'admin',
+];
+const VIEW_PERM = { employees: 'employees.view', companies: 'companies.view', vehicles: 'vehicles.view', costcenters: 'costcenters.view',
+  contract: 'contract.view', recruitment: 'recruitment.view', companylog: 'companylog.view' };
+function can(key) {
+  const m = STATE && STATE.me;
+  if (!m) return false;
+  if (key === 'scope.all') return !!m.allCompanies;
+  if (key === 'admin') return !!m.isAdmin;
+  return !!(m.isAdmin || (m.perms || []).includes(key));
 }
-function scopedCompanies() { return STATE.companies.filter(c => companyInScope(c.id)); }
+function canAll(keys) { return keys.split(/\s+/).every(can); }
+/** حقل حساس مخفي عن المستخدم الحالي؟ kind = employee | candidate */
+function hiddenField(kind, f) { return !!(STATE && STATE.me && ((STATE.me.hiddenFields || {})[kind] || []).includes(f)); }
+function viewAllowed(id) { return !VIEW_PERM[id] || can(VIEW_PERM[id]); }
+function applyPermStyles() {
+  let st = document.getElementById('perm-style');
+  if (!st) { st = document.createElement('style'); st.id = 'perm-style'; document.head.appendChild(st); }
+  st.textContent = PERM_KEYS.filter(k => !can(k)).map(k => `[data-p~="${k}"]`).join(',') + (PERM_KEYS.some(k => !can(k)) ? '{display:none !important}' : '');
+}
+
+/* ---------- إعدادات العرض (لهذا المتصفح بس — تفضيل شخصي، مش صلاحية) ---------- */
+function loadViewPerms() { return lsJson('mv_viewPerms', { hidden: [] }); }
+function saveViewPerms(p) { lsSet('mv_viewPerms', JSON.stringify({ hidden: p.hidden || [] })); }
+// نطاق الشركات بقى على السيرفر: STATE فيه بس الشركات والموظفين المسموحين
+function companyInScope(cid) { return true; }
+function scopedEmployees() { return STATE.employees; }
+function scopedCompanies() { return STATE.companies; }
 function applyNavVisibility() {
   const hidden = loadViewPerms().hidden || [];
-  $$('#navrail button[data-view]').forEach(b => { b.hidden = hidden.includes(b.dataset.view); });
-  if (hidden.includes(VIEW)) setView('dashboard');
+  $$('#navrail button[data-view]').forEach(b => { b.hidden = hidden.includes(b.dataset.view) || !viewAllowed(b.dataset.view); });
+  if (hidden.includes(VIEW) || !viewAllowed(VIEW)) setView('dashboard');
 }
 
 /* ---------- API ---------- */
@@ -194,6 +218,7 @@ async function persist(method, url, body, okMsg) {
 async function reload(noRender) {
   STATE = await api('GET', '/api/state');
   buildIndex();
+  applyPermStyles();
   document.body.classList.toggle('readonly', isReadOnly());
   $('#ro-badge').hidden = !isReadOnly();
   $('#user-name').textContent = STATE.me.displayName || STATE.me.username;
@@ -361,8 +386,9 @@ function takeBackup() {
   const a = document.createElement('a'); a.href = '/api/backup'; document.body.appendChild(a); a.click(); a.remove();
   setTimeout(render, 500);
 }
+const BACKUP_PERMS = 'system.backup sensitive.salary sensitive.bank sensitive.documents scope.all';
 async function restoreBackup() {
-  if (STATE.me.role !== 'admin') return openBlockAlert(t('الاستعادة لمدير النظام فقط'));
+  if (!can('admin')) return openBlockAlert(t('الاستعادة لمدير النظام فقط'));
   const f = await pickFile('.json,application/json');
   if (!f) return;
   if (!await openConfirm(t('سيتم استبدال كل البيانات الحالية بمحتوى النسخة الاحتياطية. متابعة؟'), { danger: true, okLabel: t('استعادة') })) return;
@@ -401,7 +427,7 @@ function empDocCompleteness(e) {
     ['nameEn', 'الاسم بالإنجليزي'], ['nationality', 'الجنسية'], ['profession', 'المهنة'], ['dateOfBirth', 'تاريخ الميلاد'],
     ['dateOfHire', 'تاريخ التعيين'], ['salary', 'الراتب'], ['residencyExp', 'انتهاء الإقامة'], ['workPermitExp', 'انتهاء إذن العمل'],
     ['passportNo', 'رقم الجواز'], ['passportExp', 'انتهاء الجواز'], ['healthCardExp', 'انتهاء البطاقة الصحية'], ['costCenter', 'مركز التكلفة'],
-  ];
+  ].filter(([k]) => !hiddenField('employee', k));          // اللي مش مسموح يشوفه مايتحسبش ناقص
   if (e.isDriver) checks.push(['drivingLicenseExp', 'انتهاء رخصة القيادة']);
   const missing = checks.filter(([k]) => e[k] === null || e[k] === undefined || e[k] === '').map(([, l]) => l);
   if (!empCompanyId(e)) missing.push('الشركة');
@@ -565,7 +591,7 @@ function renderAlertBar() {
   }
   const days = daysSinceLastBackup();
   const dismissed = lsGet('mv_backup_reminder_dismiss') === todayISO();
-  if (days > 7 && !dismissed && !isReadOnly()) {
+  if (days > 7 && !dismissed && canAll(BACKUP_PERMS)) {
     html += `<div class="alertbar backup no-print">💾 ${days === Infinity ? t('لم يتم أخذ نسخة احتياطية من هذا المتصفح بعد') : t('آخر نسخة احتياطية منذ') + ' ' + days + ' ' + t('يوم')}
       <span class="spacer"></span><button class="btn sm" id="bk-now">${t('نسخ احتياطي الآن')}</button><button class="btn sm ghost" id="bk-dismiss">${t('إخفاء اليوم')}</button></div>`;
   }
@@ -595,35 +621,31 @@ function viewRoot() { return $('#view-root'); }
 function renderUserMenu() {
   const m = $('#user-menu');
   const me = STATE.me;
-  const role = { admin: 'مدير النظام', editor: 'محرر', viewer: 'مشاهد (قراءة فقط)' }[me.role];
-  m.innerHTML = `<div class="info">${esc(me.displayName || me.username)}<br>${esc(t(role))}</div>
-    <button data-a="backup">💾 ${t('تنزيل نسخة احتياطية')}</button>
-    ${me.role === 'admin' ? `<button data-a="restore">♻️ ${t('استعادة نسخة احتياطية')}</button><button data-a="users">🔑 ${t('إدارة المستخدمين')}</button>` : ''}
+  const scope = me.allCompanies ? t('كل الشركات') : me.companies.map(companyName).join('، ');
+  m.innerHTML = `<div class="info">${esc(me.displayName || me.username)}<br>${esc(me.roleName || '—')}<div class="small muted">${esc(scope)}</div></div>
+    ${canAll(BACKUP_PERMS) ? `<button data-a="backup">💾 ${t('تنزيل نسخة احتياطية')}</button>` : ''}
+    ${me.isAdmin ? `<button data-a="restore">♻️ ${t('استعادة نسخة احتياطية')}</button><button data-a="users">🔑 ${t('المستخدمين والصلاحيات')}</button>` : ''}
+    <button data-a="myperms">🛡️ ${t('صلاحياتي')}</button>
     <button data-a="viewperms">👁️ ${t('إعدادات العرض')}</button>
     <button data-a="password">🔒 ${t('تغيير كلمة المرور')}</button>
     <button data-a="logout">🚪 ${t('تسجيل الخروج')}</button>`;
   $$('button', m).forEach(b => b.onclick = () => {
     m.hidden = true;
-    ({ backup: takeBackup, restore: restoreBackup, users: openUsersModal, viewperms: renderViewSettingsModal,
-       password: openPasswordModal, logout: () => location.href = '/logout' })[b.dataset.a]();
+    ({ backup: takeBackup, restore: restoreBackup, users: () => openUsersModal(), viewperms: renderViewSettingsModal,
+       myperms: openMyPermsModal, password: openPasswordModal, logout: () => location.href = '/logout' })[b.dataset.a]();
   });
 }
 function renderViewSettingsModal() {
   const p = loadViewPerms();
   const m = openModal({
     title: t('إعدادات العرض (لهذا المتصفح)'),
-    body: `<div class="notice">${t('الإعدادات دي بتتحفظ على الجهاز ده بس، وبتخفي أقسام أو تحدد الشركات اللي تظهر بياناتها.')}</div>
+    body: `<div class="notice">${t('الإعدادات دي بتتحفظ على الجهاز ده بس، وبتخفي أقسام من القائمة. الصلاحيات الفعلية بيحددها مدير النظام.')}</div>
       <h4>${t('الأقسام الظاهرة')}</h4>
-      <div class="form">${VIEWS.filter(v => v.id !== 'dashboard').map(v => `<label class="check"><input type="checkbox" data-view="${v.id}" ${p.hidden.includes(v.id) ? '' : 'checked'}> ${esc(t(v.label))}</label>`).join('')}</div>
-      <h4>${t('نطاق الشركات')} <span class="muted small">(${t('لو ما اخترتش حاجة = كل الشركات')})</span></h4>
-      <div class="form">${STATE.companies.map(c => `<label class="check"><input type="checkbox" data-co="${c.id}" ${p.companies.includes(c.id) ? 'checked' : ''}> ${esc(companyName(c.id))}</label>`).join('')}</div>`,
+      <div class="form">${VIEWS.filter(v => v.id !== 'dashboard' && viewAllowed(v.id)).map(v => `<label class="check"><input type="checkbox" data-view="${v.id}" ${p.hidden.includes(v.id) ? '' : 'checked'}> ${esc(t(v.label))}</label>`).join('')}</div>`,
     foot: `<button class="btn primary" data-save>حفظ</button><button class="btn" data-close>إلغاء</button>`,
   });
   m.el.querySelector('[data-save]').onclick = () => {
-    saveViewPerms({
-      hidden: $$('[data-view]', m.el).filter(x => !x.checked).map(x => x.dataset.view),
-      companies: $$('[data-co]', m.el).filter(x => x.checked).map(x => x.dataset.co),
-    });
+    saveViewPerms({ hidden: $$('[data-view]', m.el).filter(x => !x.checked).map(x => x.dataset.view) });
     m.close(); render();
   };
 }
@@ -637,29 +659,192 @@ function openPasswordModal() {
     try { await api('POST', '/api/me/password', formValues(m.el)); m.close(); toast('تم تغيير كلمة المرور', 'ok'); } catch (e) { toast(e.message, 'err'); }
   };
 }
-async function openUsersModal() {
-  const users = await api('GET', '/api/users');
-  const roleSel = (r) => ['admin', 'editor', 'viewer'].map(x => opt(x, t({ admin: 'مدير النظام', editor: 'محرر', viewer: 'مشاهد (قراءة فقط)' }[x]), x === r)).join('');
+
+/* =====================================================================
+   المستخدمين والأدوار والصلاحيات (لمدير النظام)
+   ===================================================================== */
+const PERM_ACTIONS = ['view', 'edit', 'delete'];
+const PERM_LABELS = {
+  modules: {
+    employees: 'الإقامات والموظفين', companies: 'الشركات والمشاريع والمفوّضين', vehicles: 'السيارات', costcenters: 'مراكز التكلفة',
+    recruitment: 'الاستقدام والتوظيف', contract: 'عقود العمل والقوالب', companylog: 'السجل التاريخي والتدقيق',
+  },
+  actions: { view: 'عرض', edit: 'إضافة وتعديل', delete: 'حذف' },
+  other: {
+    'sensitive.salary': 'المرتب وبدل السكن وتكلفة المعاملات', 'sensitive.bank': 'البنك والـ IBAN',
+    'sensitive.documents': 'رقم الجواز والمرفقات', 'system.import': 'استيراد الموظفين من Excel/CSV', 'system.backup': 'تنزيل نسخة احتياطية كاملة',
+  },
+};
+/** ملخص صلاحيات دور بشكل مقروء: [{label, acts:[…]}] */
+function permSummary(keys, isAdmin) {
+  if (isAdmin) return `<span class="chip on">${t('كل الصلاحيات + إدارة المستخدمين')}</span>`;
+  const set = new Set(keys);
+  const mods = Object.keys(PERM_LABELS.modules).filter(m => set.has(m + '.view')).map(m => {
+    const acts = PERM_ACTIONS.filter(a => set.has(`${m}.${a}`)).map(a => t(PERM_LABELS.actions[a]));
+    return `<span class="chip" title="${esc(acts.join('، '))}">${esc(t(PERM_LABELS.modules[m]))}${acts.length > 1 ? ' ✏️' : ''}${set.has(m + '.delete') ? ' 🗑️' : ''}</span>`;
+  });
+  const other = Object.keys(PERM_LABELS.other).filter(k => set.has(k)).map(k => `<span class="chip on">🔓 ${esc(t(PERM_LABELS.other[k]))}</span>`);
+  return [...mods, ...other].join(' ') || `<span class="muted">${t('بدون صلاحيات')}</span>`;
+}
+function openMyPermsModal() {
+  const me = STATE.me;
+  const field = (l, v) => `<div><span>${esc(t(l))}</span>${v || '<span class="muted">—</span>'}</div>`;
+  openModal({
+    title: '🛡️ ' + t('صلاحياتي'), size: 'narrow',
+    body: `<div class="kv">${field('الدور', esc(me.roleName || '—'))}${field('نطاق الشركات', me.allCompanies ? t('كل الشركات') : esc(me.companies.map(companyName).join('، ')))}</div>
+      <h4>${t('المسموح')}</h4><div class="row" style="flex-wrap:wrap;gap:6px">${permSummary(me.perms, me.isAdmin)}</div>
+      <p class="small muted">${t('لو محتاج صلاحية زيادة كلّم مدير النظام.')}</p>`,
+    foot: '<button class="btn" data-close>إغلاق</button>',
+  });
+}
+
+let USERS_TAB = 'users';
+async function openUsersModal(tab) {
+  if (tab) USERS_TAB = tab;
+  let users, roleData;
+  try { [users, roleData] = await Promise.all([api('GET', '/api/users'), api('GET', '/api/roles')]); }
+  catch (e) { return toast(e.message, 'err'); }
+  const roles = roleData.roles;
+  const roleOf = id => roles.find(r => r.id === id);
+  const scopeText = u => u.allCompanies ? `<span class="chip on">${t('كل الشركات')}</span>`
+    : u.companies.map(c => `<span class="chip">${esc(companyName(c) || c)}</span>`).join(' ');
+  const usersPane = `<div class="row" style="margin-bottom:10px"><span class="muted">${users.length} ${t('مستخدم')} · ${users.filter(u => u.active).length} ${t('نشط')}</span><span class="spacer"></span>
+      <button class="btn primary" data-user-add>➕ ${t('إضافة مستخدم')}</button></div>
+    <div class="table-wrap"><table class="data"><thead><tr><th>${t('المستخدم')}</th><th>${t('الوظيفة')}</th><th>${t('الدور')}</th><th>${t('نطاق الشركات')}</th><th>${t('الحالة')}</th><th>${t('آخر دخول')}</th><th></th></tr></thead><tbody>
+    ${users.map(u => `<tr class="clickable" data-uid="${u.id}" style="${u.active ? '' : 'opacity:.55'}">
+      <td><b>${esc(u.displayName || u.username)}</b><div class="small muted" dir="ltr">${esc(u.username)}</div></td>
+      <td>${esc(u.jobTitle || '')}</td>
+      <td>${roleOf(u.roleId) ? `<span class="chip ${roleOf(u.roleId).isAdmin ? 'on' : ''}">${esc(roleOf(u.roleId).name)}</span>` : '—'}</td>
+      <td>${scopeText(u)}</td>
+      <td>${u.active ? `<span class="chip on">${t('نشط')}</span>` : `<span class="chip" style="background:var(--red-soft);color:var(--red)">${t('موقوف')}</span>`}</td>
+      <td class="small num">${u.lastLogin ? fmtDateTime(u.lastLogin) : '—'}</td>
+      <td><button class="btn sm">✏️</button></td></tr>`).join('')}
+    </tbody></table></div>`;
+  const rolesPane = `<div class="row" style="margin-bottom:10px"><span class="muted">${t('كل مستخدم ليه دور واحد. عدّل الدور ← يتطبق على كل اللي واخدينه.')}</span><span class="spacer"></span>
+      <button class="btn primary" data-role-add>➕ ${t('إضافة دور')}</button></div>
+    <div class="table-wrap"><table class="data"><thead><tr><th>${t('الدور')}</th><th>${t('الصلاحيات')}</th><th>${t('المستخدمين')}</th><th></th></tr></thead><tbody>
+    ${roles.map(r => `<tr class="clickable" data-rid="${esc(r.id)}"><td><b>${esc(r.name)}</b>${r.isSystem ? ` <span class="small muted">🔒</span>` : ''}<div class="small muted">${esc(r.description || '')}</div></td>
+      <td><div class="row" style="flex-wrap:wrap;gap:4px">${permSummary(r.permissions, r.isAdmin)}</div></td>
+      <td class="num">${r.userCount}</td><td><button class="btn sm">✏️</button></td></tr>`).join('')}
+    </tbody></table></div>`;
   const m = openModal({
-    title: t('إدارة المستخدمين'), size: 'wide',
-    body: `<div class="table-wrap"><table class="data"><thead><tr><th>اسم المستخدم</th><th>الاسم الظاهر</th><th>الصلاحية</th><th></th></tr></thead><tbody>
-      ${users.map(u => `<tr data-id="${u.id}"><td>${esc(u.username)}</td><td>${esc(u.display_name || '')}</td>
-        <td><select data-role>${roleSel(u.role)}</select></td>
-        <td class="row"><button class="btn sm" data-pw>كلمة مرور جديدة</button><button class="btn sm danger" data-del>حذف</button></td></tr>`).join('')}
+    title: '🔑 ' + t('المستخدمين والصلاحيات'), size: 'wide',
+    body: `<div class="tabs"><button data-tab="users" class="${USERS_TAB === 'users' ? 'active' : ''}">👥 ${t('المستخدمين')}</button>
+      <button data-tab="roles" class="${USERS_TAB === 'roles' ? 'active' : ''}">🛡️ ${t('الأدوار والصلاحيات')}</button></div>
+      <div data-pane="users" ${USERS_TAB !== 'users' ? 'hidden' : ''}>${usersPane}</div>
+      <div data-pane="roles" ${USERS_TAB !== 'roles' ? 'hidden' : ''}>${rolesPane}</div>`,
+    foot: `<button class="btn" data-close>إغلاق</button>`,
+  });
+  $$('[data-tab]', m.el).forEach(b => b.onclick = () => {
+    USERS_TAB = b.dataset.tab;
+    $$('[data-tab]', m.el).forEach(x => x.classList.toggle('active', x === b));
+    $$('[data-pane]', m.el).forEach(p => p.hidden = p.dataset.pane !== USERS_TAB);
+  });
+  const again = () => { m.close(); openUsersModal(); };
+  $('[data-user-add]', m.el).onclick = () => openUserEditModal(null, roles, again);
+  $$('tr[data-uid]', m.el).forEach(tr => tr.onclick = () => openUserEditModal(users.find(u => u.id === +tr.dataset.uid), roles, again));
+  $('[data-role-add]', m.el).onclick = () => openRoleEditModal(null, roleData.catalog, again);
+  $$('tr[data-rid]', m.el).forEach(tr => tr.onclick = () => openRoleEditModal(roleOf(tr.dataset.rid), roleData.catalog, again));
+}
+
+function openUserEditModal(u, roles, done) {
+  const isNew = !u;
+  u = u || { active: true, allCompanies: true, companies: [], roleId: (roles.find(r => r.id === 'viewer') || roles[0]).id };
+  const v = k => esc(u[k] ?? '');
+  const isSelf = !isNew && u.id === STATE.me.id;
+  const roleHelp = id => { const r = roles.find(x => x.id === id); return r ? `<div class="small muted">${esc(r.description || '')}</div><div class="row" style="flex-wrap:wrap;gap:4px;margin-top:4px">${permSummary(r.permissions, r.isAdmin)}</div>` : ''; };
+  const m = openModal({
+    title: isNew ? t('إضافة مستخدم') : t('تعديل مستخدم') + ': ' + esc(u.username), size: 'wide',
+    body: `<form class="form" id="user-form" autocomplete="off">
+      <h4>${t('بيانات الحساب')}</h4>
+      <label><span class="req">${t('اسم المستخدم (للدخول)')}</span><input name="username" value="${v('username')}" dir="ltr" ${isNew ? '' : 'disabled'}></label>
+      <label>${t('الاسم الظاهر')}<input name="displayName" value="${v('displayName')}"></label>
+      <label>${t('الوظيفة')}<input name="jobTitle" value="${v('jobTitle')}" placeholder="${t('مثلًا: مندوب حكومي')}"></label>
+      <label>${t('البريد')}<input name="email" value="${v('email')}" dir="ltr"></label>
+      <label>${t('الهاتف')}<input name="phone" value="${v('phone')}" dir="ltr"></label>
+      <label>${isNew ? `<span class="req">${t('كلمة المرور')}</span>` : t('كلمة مرور جديدة (سيبها فاضية لو مش هتغيّرها)')}<input name="password" type="password" autocomplete="new-password" minlength="6"></label>
+      <label class="check"><input type="checkbox" name="active" ${u.active ? 'checked' : ''} ${isSelf ? 'disabled' : ''}> ${t('الحساب نشط (يقدر يدخل)')}</label>
+      <h4>${t('الدور والصلاحيات')}</h4>
+      <label class="full"><span class="req">${t('الدور')}</span><select name="roleId" ${isSelf ? 'disabled' : ''}>${roles.map(r => opt(r.id, r.name, r.id === u.roleId)).join('')}</select><div id="role-help">${roleHelp(u.roleId)}</div></label>
+      <h4>${t('نطاق الشركات')}</h4>
+      <label class="check full"><input type="radio" name="scope" value="all" ${u.allCompanies ? 'checked' : ''}> ${t('كل الشركات')}</label>
+      <label class="check full"><input type="radio" name="scope" value="some" ${u.allCompanies ? '' : 'checked'}> ${t('شركات محددة بس — مايشوفش ولا يعدّل أي حاجة برّاها')}</label>
+      <div class="full" id="scope-box" style="grid-column:1/-1;${u.allCompanies ? 'display:none' : ''}"><div class="form">
+        ${STATE.companies.map(c => `<label class="check"><input type="checkbox" data-co="${c.id}" ${u.companies.includes(c.id) ? 'checked' : ''}> ${esc(companyName(c.id))}</label>`).join('')}</div></div>
+      </form>
+      ${isSelf ? `<div class="notice">${t('ده حسابك: مش هينفع تغيّر دورك أو توقفه من هنا.')}</div>` : ''}`,
+    foot: `${!isNew && !isSelf ? `<button class="btn danger" data-del>🗑️ ${t('حذف')}</button><span class="spacer"></span>` : ''}
+      <button class="btn primary" data-save>💾 ${t('حفظ')}</button><button class="btn" data-close>إلغاء</button>`,
+  });
+  const f = $('#user-form', m.el);
+  $('[name=roleId]', f).onchange = e => { $('#role-help', f).innerHTML = roleHelp(e.target.value); translateDomText($('#role-help', f)); };
+  $$('[name=scope]', f).forEach(r => r.onchange = () => { $('#scope-box', f).style.display = $('[name=scope]:checked', f).value === 'all' ? 'none' : ''; });
+  $('[data-save]', m.el).onclick = async () => {
+    const d = formValues(f);
+    delete d.scope;
+    d.allCompanies = $('[name=scope]:checked', f).value === 'all';
+    d.companies = $$('[data-co]', f).filter(x => x.checked).map(x => x.dataset.co);
+    if (!d.password) delete d.password;
+    if (isSelf) { delete d.active; delete d.roleId; }
+    if (!isNew) delete d.username;
+    try {
+      await api(isNew ? 'POST' : 'PUT', isNew ? '/api/users' : '/api/users/' + u.id, d);
+      toast('تم الحفظ', 'ok'); m.close(); done();
+      if (isSelf) reload();
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  const del = $('[data-del]', m.el);
+  if (del) del.onclick = async () => {
+    if (!await openConfirm(`${t('حذف المستخدم')} «${esc(u.username)}»؟ ${t('لو عايز تمنعه بس من الدخول، الأفضل توقف الحساب.')}`, { danger: true, okLabel: t('حذف') })) return;
+    try { await api('DELETE', '/api/users/' + u.id); m.close(); done(); } catch (e) { toast(e.message, 'err'); }
+  };
+}
+
+function openRoleEditModal(r, catalog, done) {
+  const isNew = !r;
+  r = r || { name: '', description: '', permissions: [], isAdmin: false, isSystem: false, userCount: 0 };
+  const has = new Set(r.permissions);
+  const box = (key, extra = '') => `<input type="checkbox" data-perm="${key}" ${r.isAdmin || has.has(key) ? 'checked' : ''} ${r.isAdmin ? 'disabled' : ''} ${extra}>`;
+  const m = openModal({
+    title: isNew ? t('إضافة دور') : t('تعديل دور') + ': ' + esc(r.name), size: 'wide',
+    body: `<form class="form" id="role-form">
+      <label><span class="req">${t('اسم الدور')}</span><input name="name" value="${esc(r.name)}" placeholder="${t('مثلًا: مسؤول شؤون الموظفين')}"></label>
+      <label class="full">${t('الوصف')}<input name="description" value="${esc(r.description || '')}"></label></form>
+      ${r.isAdmin ? `<div class="notice">${t('مدير النظام عنده كل الصلاحيات دايمًا على كل الشركات، ومعاها إدارة المستخدمين والاستعادة.')}</div>` : ''}
+      <h4>${t('الأقسام')}</h4>
+      <div class="table-wrap"><table class="data" id="perm-matrix"><thead><tr><th>${t('القسم')}</th>${PERM_ACTIONS.map(a => `<th style="text-align:center">${t(PERM_LABELS.actions[a])}</th>`).join('')}</tr></thead><tbody>
+      ${catalog.modules.map(mod => `<tr><td>${esc(t(mod.label))}</td>${PERM_ACTIONS.map(a => `<td style="text-align:center">${mod.actions.includes(a) ? box(`${mod.key}.${a}`) : '<span class="muted">—</span>'}</td>`).join('')}</tr>`).join('')}
       </tbody></table></div>
-      <h4>${t('إضافة مستخدم')}</h4>
-      <div class="form" id="new-user"><label>اسم المستخدم<input name="username"></label><label>الاسم الظاهر<input name="displayName"></label>
-      <label>كلمة المرور<input name="password" type="password"></label><label>الصلاحية<select name="role">${roleSel('editor')}</select></label></div>`,
-    foot: `<button class="btn primary" data-add>إضافة</button><button class="btn" data-close>إغلاق</button>`,
+      <h4>🔒 ${t('البيانات الحساسة')} <span class="small muted">${t('(من غيرها البيانات دي مابتوصلش لجهاز المستخدم أصلًا)')}</span></h4>
+      <div class="form">${catalog.sensitive.map(s => `<label class="check">${box(s.key)} ${esc(t(s.label))}</label>`).join('')}</div>
+      <p class="small muted">${t('إنشاء عقد العمل محتاج «المرتب» كمان، لأن العقد فيه الراتب.')}</p>
+      <h4>⚙️ ${t('النظام')}</h4>
+      <div class="form">${catalog.system.map(s => `<label class="check">${box(s.key)} ${esc(t(s.label))}</label>`).join('')}</div>
+      <p class="small muted">${t('الاستيراد والنسخة الاحتياطية محتاجين كمان كل البيانات الحساسة ونطاق كل الشركات.')}</p>
+      ${!isNew && r.userCount ? `<div class="notice warn">${t('التعديل هيتطبق فورًا على')} ${r.userCount} ${t('مستخدم')}.</div>` : ''}`,
+    foot: `${!isNew && !r.isSystem ? `<button class="btn danger" data-del>🗑️ ${t('حذف')}</button><span class="spacer"></span>` : ''}
+      <button class="btn primary" data-save>💾 ${t('حفظ')}</button><button class="btn" data-close>إلغاء</button>`,
   });
-  $$('tr[data-id]', m.el).forEach(tr => {
-    const id = tr.dataset.id;
-    $('[data-role]', tr).onchange = async (e) => { try { await api('PUT', '/api/users/' + id, { role: e.target.value }); toast('تم الحفظ', 'ok'); } catch (er) { toast(er.message, 'err'); } };
-    $('[data-pw]', tr).onclick = async () => { const p = prompt(t('كلمة المرور الجديدة')); if (p) { await api('PUT', '/api/users/' + id, { password: p }); toast('تم الحفظ', 'ok'); } };
-    $('[data-del]', tr).onclick = async () => { if (await openConfirm(t('حذف المستخدم؟'), { danger: true })) { try { await api('DELETE', '/api/users/' + id); m.close(); openUsersModal(); } catch (er) { toast(er.message, 'err'); } } };
+  // تعديل/حذف ← لازم «عرض»، وشيل «عرض» ← يشيل الباقي
+  $$('[data-perm]', m.el).forEach(cb => cb.onchange = () => {
+    const [mod, act] = cb.dataset.perm.split('.');
+    const peer = a => $(`[data-perm="${mod}.${a}"]`, m.el);
+    if (cb.checked && (act === 'edit' || act === 'delete') && peer('view')) peer('view').checked = true;
+    if (!cb.checked && act === 'view') ['edit', 'delete'].forEach(a => { if (peer(a)) peer(a).checked = false; });
   });
-  m.el.querySelector('[data-add]').onclick = async () => {
-    try { await api('POST', '/api/users', formValues($('#new-user', m.el))); m.close(); openUsersModal(); toast('تمت الإضافة', 'ok'); } catch (e) { toast(e.message, 'err'); }
+  $('[data-save]', m.el).onclick = async () => {
+    const d = formValues($('#role-form', m.el));
+    d.permissions = $$('[data-perm]', m.el).filter(x => x.checked).map(x => x.dataset.perm);
+    try {
+      await api(isNew ? 'POST' : 'PUT', isNew ? '/api/roles' : '/api/roles/' + encodeURIComponent(r.id), d);
+      toast('تم الحفظ', 'ok'); m.close(); USERS_TAB = 'roles'; done();
+      if (!isNew && r.id === STATE.me.roleId) reload();
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  const del = $('[data-del]', m.el);
+  if (del) del.onclick = async () => {
+    if (!await openConfirm(`${t('حذف الدور')} «${esc(r.name)}»؟`, { danger: true, okLabel: t('حذف') })) return;
+    try { await api('DELETE', '/api/roles/' + encodeURIComponent(r.id)); m.close(); USERS_TAB = 'roles'; done(); } catch (e) { toast(e.message, 'err'); }
   };
 }
 

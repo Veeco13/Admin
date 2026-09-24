@@ -67,8 +67,8 @@ function renderEmployees() {
   viewRoot().innerHTML = `
     <div class="page-head"><div><h1>مركز إدارة الإقامات والموظفين</h1><div class="sub">${list.length} ${t('من')} ${scopedEmployees().length} ${t('موظف')}</div></div>
       <div class="actions">
-        <button class="btn primary write-only" id="e-add">➕ إضافة موظف</button>
-        <button class="btn write-only" id="e-import">📥 استيراد Excel/CSV</button>
+        <button class="btn primary write-only" data-p="employees.edit" id="e-add">➕ إضافة موظف</button>
+        <button class="btn write-only" data-p="employees.edit system.import sensitive.salary sensitive.bank sensitive.documents scope.all" id="e-import">📥 استيراد Excel/CSV</button>
         <button class="btn" id="e-export">📤 تصدير CSV</button>
         <button class="btn" id="e-print">🖨️ تقرير</button>
         <button class="btn" id="e-cal">📅 تقويم التجديدات</button>
@@ -87,8 +87,8 @@ function renderEmployees() {
       <button class="btn sm ghost" id="f-clear">✕ ${t('مسح الفلاتر')}</button>
     </div>
     ${sel ? `<div class="bulkbar no-print"><b>${sel} ${t('محدد')}</b>
-      <button class="btn sm write-only" id="b-assign">🏢 تعيين جماعي</button>
-      <button class="btn sm write-only" id="b-renew">🔄 تجديد جماعي</button>
+      <button class="btn sm write-only" data-p="employees.edit" id="b-assign">🏢 تعيين جماعي</button>
+      <button class="btn sm write-only" data-p="employees.edit" id="b-renew">🔄 تجديد جماعي</button>
       <button class="btn sm" id="b-export">📤 تصدير المحدد</button>
       <button class="btn sm" id="b-print">🖨️ طباعة المحدد</button>
       <span class="spacer"></span><button class="btn sm ghost" id="b-clear">${t('إلغاء التحديد')}</button></div>` : ''}
@@ -169,7 +169,9 @@ function exportEmployeesCsv(list) {
     e.salary, e.housingIncluded ? (e.housingAmount || 'نعم') : '', (EMP_STATUS_LABELS[e.employmentStatus] || {}).ar, e.dateOfHire, e.residencyExp, e.workPermitExp,
     e.passportNo, e.passportExp, e.healthCardExp, e.isDriver ? 'نعم' : '', e.drivingLicenseExp, (govStageInfo(e.govStage) || {}).label, e.govStageNote,
     e.fileNo, e.contractType, e.lastUpdated, e.lastUpdatedBy]);
-  downloadBlob(toCsv([head.map(t), ...rows]), `employees-${todayISO()}.csv`, 'text/csv;charset=utf-8');
+  const drop = [[8, 'salary'], [14, 'passportNo']].filter(([, f]) => hiddenField('employee', f)).map(([i]) => i);
+  const keep = r => r.filter((_, i) => !drop.includes(i));
+  downloadBlob(toCsv([keep(head).map(t), ...rows.map(keep)]), `employees-${todayISO()}.csv`, 'text/csv;charset=utf-8');
 }
 function printEmployeeReport(list) {
   const f = UI.emp;
@@ -225,15 +227,15 @@ async function openProfileCard(id, tab = 'info') {
       <div class="tabs" style="margin-top:12px">
         <button data-tab="info" class="${tab === 'info' ? 'active' : ''}">البيانات</button>
         <button data-tab="docs" class="${tab === 'docs' ? 'active' : ''}">المستندات والتواريخ</button>
-        <button data-tab="files" class="${tab === 'files' ? 'active' : ''}">المرفقات</button>
+        <button data-tab="files" data-p="sensitive.documents" class="${tab === 'files' ? 'active' : ''}">المرفقات</button>
         <button data-tab="timeline" class="${tab === 'timeline' ? 'active' : ''}">السجل (${tl.length})</button>
       </div>
       <div data-pane="info" ${tab !== 'info' ? 'hidden' : ''}><div class="kv">
         ${field('الرقم المدني', `<b class="num">${esc(e.id)}</b>`)}${field('الجنسية', esc(e.nationality))}${field('المهنة', esc(e.profession) + (e.professionEn ? `<div class="small muted">${esc(e.professionEn)}</div>` : ''))}
-        ${field('تاريخ الميلاد', fmtDate(e.dateOfBirth))}${field('تاريخ التعيين', fmtDate(e.dateOfHire))}${field('الراتب', fmtMoney(e.salary))}
+        ${field('تاريخ الميلاد', fmtDate(e.dateOfBirth))}${field('تاريخ التعيين', fmtDate(e.dateOfHire))}${can('sensitive.salary') ? field('الراتب', fmtMoney(e.salary)) : ''}
         ${field('بدل السكن', e.housingIncluded ? (e.housingAmount ? fmtMoney(e.housingAmount) : t('مشمول')) : t('غير مشمول'))}
         ${field('نوع العقد', esc(e.contractType))}${field('رقم الملف', esc(e.fileNo))}${field('مركز التكلفة', esc(e.costCenter))}
-        ${field('مكان العمل الفعلي', esc(e.actualWorkplace))}${field('الهاتف', esc(e.phone))}${field('البنك', esc(e.bank) + (e.iban ? `<div class="small muted">${esc(e.iban)}</div>` : ''))}
+        ${field('مكان العمل الفعلي', esc(e.actualWorkplace))}${field('الهاتف', esc(e.phone))}${can('sensitive.bank') ? field('البنك', esc(e.bank) + (e.iban ? `<div class="small muted">${esc(e.iban)}</div>` : '')) : ''}
         ${field('مرجع إضافي', esc(e.dpId))}
       </div>
       <h4>${t('الشركات والمشاريع')}</h4>
@@ -242,30 +244,30 @@ async function openProfileCard(id, tab = 'info') {
       ${e.notes ? `<h4>${t('ملاحظات')}</h4><div style="white-space:pre-line">${esc(e.notes)}</div>` : ''}
       </div>
       <div data-pane="docs" ${tab !== 'docs' ? 'hidden' : ''}>
-        <table class="data"><thead><tr><th>المستند</th><th>الرقم</th><th>تاريخ الانتهاء</th><th>المتبقي</th><th class="write-only"></th></tr></thead><tbody>
+        <table class="data"><thead><tr><th>المستند</th><th>الرقم</th><th>تاريخ الانتهاء</th><th>المتبقي</th><th class="write-only" data-p="employees.edit"></th></tr></thead><tbody>
         ${EMP_DATE_FIELDS.filter(f => !f.driverOnly || e.isDriver).map(f => `<tr><td>${esc(t(f.label))}</td><td>${f.key === 'passportExp' ? esc(e.passportNo || '') : ''}</td><td>${datePill(e[f.key])}</td><td class="small">${esc(daysText(daysUntil(e[f.key])))}</td>
-          <td class="write-only"><button class="btn sm" data-renew="${f.key}">🔄 ${t('تجديد سريع')}</button></td></tr>`).join('')}
+          <td class="write-only" data-p="employees.edit"><button class="btn sm" data-renew="${f.key}">🔄 ${t('تجديد سريع')}</button></td></tr>`).join('')}
         </tbody></table>
         <h4>${t('المعاملة الحكومية')}</h4>
-        <div class="kv">${field('المرحلة', govStagePill(e.govStage))}${field('المسؤول', esc(e.govStageResponsible))}${field('تاريخ البدء', fmtDate(e.govStageStartDate))}${field('التكلفة', fmtMoney(e.govTransactionCost))}</div>
+        <div class="kv">${field('المرحلة', govStagePill(e.govStage))}${field('المسؤول', esc(e.govStageResponsible))}${field('تاريخ البدء', fmtDate(e.govStageStartDate))}${can('sensitive.salary') ? field('التكلفة', fmtMoney(e.govTransactionCost)) : ''}</div>
         ${comp.missing.length ? `<div class="notice warn" style="margin-top:10px">${t('بيانات ناقصة')}: ${comp.missing.map(x => esc(t(x))).join('، ')}</div>` : ''}
       </div>
       <div data-pane="files" ${tab !== 'files' ? 'hidden' : ''}><div id="emp-files"><div class="muted">${t('جاري التحميل…')}</div></div>
-        <button class="btn write-only" id="emp-upload" style="margin-top:10px">📎 ${t('رفع مرفق')}</button></div>
+        <button class="btn write-only" data-p="employees.edit sensitive.documents" id="emp-upload" style="margin-top:10px">📎 ${t('رفع مرفق')}</button></div>
       <div data-pane="timeline" ${tab !== 'timeline' ? 'hidden' : ''}><ul class="timeline">${tl.map(x => `<li><span class="muted small">${fmtDateTime(x.date)} · ${esc(x.user || '')}</span><br>${esc(x.label)}</li>`).join('') || '<li class="muted">—</li>'}</ul></div>`,
-    foot: `<button class="btn primary write-only" data-a="edit">✏️ تعديل</button>
-      <button class="btn write-only" data-a="stage">🏛️ مرحلة المعاملة</button>
-      <button class="btn" data-a="contract">📄 عقد العمل</button>
+    foot: `<button class="btn primary write-only" data-p="employees.edit" data-a="edit">✏️ تعديل</button>
+      <button class="btn write-only" data-p="employees.edit" data-a="stage">🏛️ مرحلة المعاملة</button>
+      <button class="btn" data-p="contract.view sensitive.salary" data-a="contract">📄 عقد العمل</button>
       <button class="btn" data-a="print">🖨️ طباعة</button>
       <span class="spacer"></span>
-      <button class="btn danger write-only" data-a="delete">🗑️ حذف</button>`,
+      <button class="btn danger write-only" data-p="employees.delete" data-a="delete">🗑️ حذف</button>`,
   });
   $$('[data-tab]', m.el).forEach(b => b.onclick = () => {
     $$('[data-tab]', m.el).forEach(x => x.classList.toggle('active', x === b));
     $$('[data-pane]', m.el).forEach(p => p.hidden = p.dataset.pane !== b.dataset.tab);
     if (b.dataset.tab === 'files') loadDriveFiles(e.id, m.el);
   });
-  if (tab === 'files') loadDriveFiles(e.id, m.el);
+  if (tab === 'files' && can('sensitive.documents')) loadDriveFiles(e.id, m.el);
   $$('[data-renew]', m.el).forEach(b => b.onclick = () => { m.close(); openQuickRenewModal(e.id, b.dataset.renew); });
   const up = $('#emp-upload', m.el); if (up) up.onclick = () => uploadFileForEmployee(e.id, m.el);
   $$('[data-a]', m.el).forEach(b => b.onclick = async () => {
@@ -289,7 +291,7 @@ async function loadDriveFiles(empId, root) {
     const files = await api('GET', `/api/employees/${encodeURIComponent(empId)}/files`);
     box.innerHTML = files.length ? `<table class="data"><tbody>${files.map(f => `<tr><td>📄 <a href="/files/emp/${f.id}" target="_blank">${esc(f.name)}</a></td>
       <td class="small muted">${(f.size / 1024).toFixed(0)} KB</td><td class="small muted">${fmtDateTime(f.uploaded_at)} ${esc(f.uploaded_by || '')}</td>
-      <td><a class="btn sm" href="/files/emp/${f.id}?dl=1">⬇️</a> <button class="btn sm danger write-only" data-del="${f.id}">🗑️</button></td></tr>`).join('')}</tbody></table>`
+      <td><a class="btn sm" href="/files/emp/${f.id}?dl=1">⬇️</a> <button class="btn sm danger write-only" data-p="employees.edit" data-del="${f.id}">🗑️</button></td></tr>`).join('')}</tbody></table>`
       : `<div class="empty">${t('لا توجد مرفقات')}</div>`;
     $$('[data-del]', box).forEach(b => b.onclick = async () => {
       if (!await openConfirm(t('حذف المرفق؟'), { danger: true })) return;
@@ -336,7 +338,8 @@ function openEmployeeModal(id) {
     if (d && d.data) { e = Object.assign(e, d.data); draftNote = `<div class="notice">📝 ${t('تم استرجاع مسودة محفوظة من')} ${fmtDateTime(d.at.slice(0, 19))} <button type="button" class="btn sm" id="drop-draft">${t('تجاهل المسودة')}</button></div>`; }
   }
   const v = k => esc(e[k] ?? '');
-  const inp = (k, l, type = 'text', extra = '') => `<label>${esc(t(l))}<input name="${k}" type="${type}" value="${v(k)}" ${extra}></label>`;
+  const inp = (k, l, type = 'text', extra = '') => hiddenField('employee', k) ? ''
+    : `<label>${esc(t(l))}<input name="${k}" type="${type}" value="${v(k)}" ${extra}></label>`;
   const dt = (k, l) => inp(k, l, 'date');
   const m = openModal({
     title: isNew ? t('إضافة موظف') : t('تعديل موظف') + ': ' + esc(e.name), size: 'wide',

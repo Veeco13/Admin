@@ -21,6 +21,11 @@ function contractQuery(extra = {}) {
 }
 
 function renderContractView() {
+  if (!canAll('employees.view sensitive.salary')) {
+    viewRoot().innerHTML = `<div class="page-head"><div><h1>عقد العمل</h1></div></div>
+      <div class="notice warn">${t('إنشاء العقود محتاج صلاحية عرض الموظفين وصلاحية «المرتب» لأن العقد فيه الراتب. كلّم مدير النظام.')}</div>`;
+    return;
+  }
   if (VIEW_ARGS.emp) { CONTRACT = { emp: VIEW_ARGS.emp, tpl: CONTRACT.tpl, company: '', sig: '', date: '', salary: '' }; VIEW_ARGS = {}; }
   const e = IDX.employee[CONTRACT.emp];
   const defTpl = STATE.templates.find(x => x.isDefault) || STATE.templates[0];
@@ -54,8 +59,8 @@ function renderContractView() {
         ${STATE.templates.map(x => `<div class="row small" style="padding:4px 0;border-bottom:1px dashed var(--border)">
           <span style="flex:1">${x.isDefault ? '★ ' : ''}${esc(x.name)}</span>
           <a class="btn sm" href="/api/templates/${x.id}/file" title="تنزيل القالب">⬇️</a>
-          ${!x.isDefault ? `<button class="btn sm write-only" data-tdef="${x.id}" title="جعله الافتراضي">★</button><button class="btn sm danger write-only" data-tdel="${x.id}">✕</button>` : ''}</div>`).join('')}
-        <button class="btn write-only" id="t-upload" style="margin-top:8px">➕ ${t('رفع قالب جديد')}</button>
+          ${!x.isDefault ? `<button class="btn sm write-only" data-p="contract.edit" data-tdef="${x.id}" title="جعله الافتراضي">★</button><button class="btn sm danger write-only" data-p="contract.edit" data-tdel="${x.id}">✕</button>` : ''}</div>`).join('')}
+        <button class="btn write-only" data-p="contract.edit" id="t-upload" style="margin-top:8px">➕ ${t('رفع قالب جديد')}</button>
         <details style="margin-top:10px"><summary class="small">${t('الحقول المتاحة في القوالب')}</summary>
           <div class="small" data-no-i18n style="direction:ltr;text-align:left">${CONTRACT_FIELDS_HELP.map(([k, l]) => `<div><code>{{ ${k} }}</code> <span class="muted">${esc(t(l))}</span></div>`).join('')}</div></details>
       </div>

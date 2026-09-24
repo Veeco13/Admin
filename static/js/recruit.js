@@ -57,14 +57,14 @@ function renderRecruitment() {
   const list = filteredCandidates().sort((a, b) => (b.appliedDate || '').localeCompare(a.appliedDate || ''));
   const stageOpts = f.source ? recruitStagesForSource(f.source) : uniq([...RECRUIT_STAGES_OUTSIDE, ...RECRUIT_STAGES_INTERNAL, REJECTED_STAGE].map(s => s.id)).map(id => [...RECRUIT_STAGES_OUTSIDE, ...RECRUIT_STAGES_INTERNAL, REJECTED_STAGE].find(s => s.id === id));
   viewRoot().innerHTML = `<div class="page-head"><div><h1>الاستقدام والتوظيف</h1><div class="sub">${STATE.candidates.length} ${t('مترشّح')}</div></div>
-    <div class="actions"><button class="btn primary write-only" id="c-add">➕ إضافة مترشّح</button><button class="btn" id="c-report">📊 تقرير المترشّحين</button></div></div>
+    <div class="actions"><button class="btn primary write-only" data-p="recruitment.edit" id="c-add">➕ إضافة مترشّح</button><button class="btn" id="c-report">📊 تقرير المترشّحين</button></div></div>
     <div class="grid" style="margin-bottom:12px">${renderRecruitFunnelCard()}</div>
     <div class="filters"><input type="search" id="cf-q" placeholder="بحث بالاسم أو الجواز أو الهاتف…" value="${esc(f.q)}">
       <select id="cf-source">${opt('', t('— كل المصادر —'), !f.source)}${opt('outside', t('استقدام من الخارج'), f.source === 'outside')}${opt('internal', t('نقل داخلي'), f.source === 'internal')}</select>
       <select id="cf-stage">${opt('', t('— كل المراحل —'), !f.stage)}${stageOpts.map(s => opt(s.id, t(s.label), s.id === f.stage)).join('')}</select>
       <select id="cf-co">${companyOptions(f.company, '— كل الشركات —')}</select>
       <button class="btn sm ghost" id="cf-clear">✕ ${t('مسح الفلاتر')}</button></div>
-    <div class="table-wrap"><table class="data"><thead><tr><th>${t('الاسم')}</th><th>${t('الجنسية')}</th><th>${t('المهنة')}</th><th>${t('المصدر')}</th><th>${t('المرحلة')}</th><th>${t('الشركة المستهدفة')}</th><th>${t('الراتب')}</th><th>${t('تاريخ التقديم')}</th><th>${t('المهلة / التأشيرة')}</th></tr></thead><tbody>
+    <div class="table-wrap"><table class="data"><thead><tr><th>${t('الاسم')}</th><th>${t('الجنسية')}</th><th>${t('المهنة')}</th><th>${t('المصدر')}</th><th>${t('المرحلة')}</th><th>${t('الشركة المستهدفة')}</th><th data-p="sensitive.salary">${t('الراتب')}</th><th>${t('تاريخ التقديم')}</th><th>${t('المهلة / التأشيرة')}</th></tr></thead><tbody>
     ${list.map(c => {
       const st = recruitStageInfo(c.source || 'outside', c.stage);
       const steps = recruitStagesForSource(c.source).filter(s => !s.rejected).length;
@@ -73,7 +73,7 @@ function renderRecruitment() {
       return `<tr class="clickable" data-id="${c.id}"><td><b>${esc(c.name)}</b>${c.nameEn ? `<div class="small muted">${esc(c.nameEn)}</div>` : ''}</td><td>${esc(c.nationality || '')}</td><td>${esc(c.profession || '')}</td>
         <td><span class="chip">${c.source === 'internal' ? t('نقل داخلي') : t('من الخارج')}</span></td>
         <td>${st ? `<span class="chip ${st.final ? 'on' : ''}" style="${st.rejected ? 'background:var(--red-soft);color:var(--red)' : ''}">${esc(t(st.label))}</span>${!st.rejected ? `<div class="progress" style="width:90px;margin-top:3px"><i style="width:${100 * idx / steps}%"></i></div>` : ''}` : '—'}</td>
-        <td>${esc(companyName(c.targetCompanyId))}</td><td class="num">${c.salary ? fmtMoney(c.salary) : '—'}${c.housingAllowance ? ' 🏠' : ''}</td><td class="num small">${fmtDate(c.appliedDate)}</td>
+        <td>${esc(companyName(c.targetCompanyId))}</td><td class="num" data-p="sensitive.salary">${c.salary ? fmtMoney(c.salary) : '—'}${c.housingAllowance ? ' 🏠' : ''}</td><td class="num small">${fmtDate(c.appliedDate)}</td>
         <td>${c.source === 'internal' ? datePill(c.oldSponsorResidencyExp) : (dl ? datePill(dl) : datePill(c.visaExp))}</td></tr>`;
     }).join('') || `<tr><td colspan="9" class="empty">${t('لا يوجد مترشّحين')}</td></tr>`}</tbody></table></div>`;
   bindRecruitFunnel();
@@ -102,9 +102,9 @@ function renderCandidatesReportModal() {
   const m = openModal({
     title: '📊 ' + t('تقرير المترشّحين'), size: 'wide',
     body: `<div class="row" style="margin-bottom:10px"><span class="chip">${t('الإجمالي')}: ${list.length}</span><span class="chip">${t('من الخارج')}: ${bySource.outside}</span><span class="chip">${t('نقل داخلي')}: ${bySource.internal}</span>
-      <span class="chip">${t('إجمالي الرواتب المتفق عليها')}: ${fmtMoney(sum(list.filter(c => c.stage !== 'rejected').map(c => c.salary)))}</span></div>
-      <div class="table-wrap"><table class="data"><thead><tr><th>#</th><th>${t('الاسم')}</th><th>${t('الجنسية')}</th><th>${t('المهنة')}</th><th>${t('المصدر')}</th><th>${t('المرحلة')}</th><th>${t('الشركة المستهدفة')}</th><th>${t('الراتب')}</th><th>${t('بدل السكن')}</th><th>${t('المهلة')}</th></tr></thead><tbody>
-      ${rows.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.c.name)}</td><td>${esc(r.c.nationality || '')}</td><td>${esc(r.c.profession || '')}</td><td>${r.c.source === 'internal' ? t('نقل داخلي') : t('من الخارج')}</td><td>${esc(r.st)}</td><td>${esc(companyName(r.c.targetCompanyId))}</td><td class="num">${r.c.salary ? fmtMoney(r.c.salary) : '—'}</td><td>${r.c.housingAllowance ? '✓' : ''}</td><td>${datePill(r.deadline)}</td></tr>`).join('')}
+      <span class="chip" data-p="sensitive.salary">${t('إجمالي الرواتب المتفق عليها')}: ${fmtMoney(sum(list.filter(c => c.stage !== 'rejected').map(c => c.salary)))}</span></div>
+      <div class="table-wrap"><table class="data"><thead><tr><th>#</th><th>${t('الاسم')}</th><th>${t('الجنسية')}</th><th>${t('المهنة')}</th><th>${t('المصدر')}</th><th>${t('المرحلة')}</th><th>${t('الشركة المستهدفة')}</th><th data-p="sensitive.salary">${t('الراتب')}</th><th>${t('بدل السكن')}</th><th>${t('المهلة')}</th></tr></thead><tbody>
+      ${rows.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.c.name)}</td><td>${esc(r.c.nationality || '')}</td><td>${esc(r.c.profession || '')}</td><td>${r.c.source === 'internal' ? t('نقل داخلي') : t('من الخارج')}</td><td>${esc(r.st)}</td><td>${esc(companyName(r.c.targetCompanyId))}</td><td class="num" data-p="sensitive.salary">${r.c.salary ? fmtMoney(r.c.salary) : '—'}</td><td>${r.c.housingAllowance ? '✓' : ''}</td><td>${datePill(r.deadline)}</td></tr>`).join('')}
       </tbody></table></div>`,
     foot: `<button class="btn primary" data-print>🖨️ طباعة</button><button class="btn" data-csv>📤 CSV</button><button class="btn" data-close>إغلاق</button>`,
   });
@@ -142,10 +142,10 @@ function openCandidateModal(id) {
       <label>${t('تاريخ الميلاد')}<input type="date" name="dateOfBirth" value="${v('dateOfBirth')}"></label>
       <label>${t('المهنة')}<input name="profession" value="${v('profession')}" list="dl-prof2"></label>
       <label>${t('الهاتف')}<input name="phone" value="${v('phone')}" dir="ltr"></label>
-      <label>${t('الراتب المتفق عليه (د.ك)')}<input type="number" step="0.001" min="0" name="salary" value="${v('salary')}"></label>
+      ${hiddenField('candidate', 'salary') ? '' : `<label>${t('الراتب المتفق عليه (د.ك)')}<input type="number" step="0.001" min="0" name="salary" value="${v('salary')}"></label>`}
       <label class="check"><input type="checkbox" name="housingAllowance" ${c.housingAllowance ? 'checked' : ''}> 🏠 ${t('بدل السكن')}</label>
       <h4>الجواز</h4>
-      <label>${t('رقم الجواز')}<input name="passportNo" value="${v('passportNo')}" dir="ltr"></label>
+      ${hiddenField('candidate', 'passportNo') ? '' : `<label>${t('رقم الجواز')}<input name="passportNo" value="${v('passportNo')}" dir="ltr"></label>`}
       <label>${t('تاريخ إصدار الجواز')}<input type="date" name="passportIssueDate" value="${v('passportIssueDate')}"></label>
       <label>${t('انتهاء الجواز')}<input type="date" name="passportExp" value="${v('passportExp')}"></label>
       <h4 data-src="outside">${t('التأشيرة والدخول')}</h4>
@@ -161,7 +161,7 @@ function openCandidateModal(id) {
       </form>
       <datalist id="dl-nat2">${uniq(STATE.employees.map(x => x.nationality)).map(x => `<option value="${esc(x)}">`).join('')}</datalist>
       <datalist id="dl-prof2">${uniq(STATE.employees.map(x => x.profession)).slice(0, 400).map(x => `<option value="${esc(x)}">`).join('')}</datalist>`,
-    foot: `${!isNew ? '<button class="btn danger write-only" data-del>🗑️ حذف</button><span class="spacer"></span>' : ''}<button class="btn primary write-only" data-save>💾 حفظ</button><button class="btn" data-close>إلغاء</button>`,
+    foot: `${!isNew ? '<button class="btn danger write-only" data-p="recruitment.delete" data-del>🗑️ حذف</button><span class="spacer"></span>' : ''}<button class="btn primary write-only" data-p="recruitment.edit" data-save>💾 حفظ</button><button class="btn" data-close>إلغاء</button>`,
   });
   const form = $('#cand-form', m.el);
   const srcSel = $('[name="source"]', form), stSel = $('#cand-stage', form);
@@ -192,6 +192,7 @@ function openCandidateModal(id) {
     // التحويل لموظف (القسم 8.1)
     if (d.stage === 'all_completed') {
       if (!d.civilId) return openBlockAlert(t('لا يمكن اختيار «تم إنجاز جميع الإجراءات» قبل تسجيل الرقم المدني'));
+      if (!can('employees.edit')) return openBlockAlert(t('التحويل لموظف محتاج صلاحية إضافة الموظفين — كلّم مدير النظام'));
       if (!await openConfirm(`✅ ${t('تم إنجاز جميع الإجراءات')}\n\n${t('سيتم تحويل')} «${esc(d.name)}» ${t('إلى موظف بحالة «قيد الاستكمال» ونقل بياناته (الاسم، الجنسية، المهنة، الراتب، بدل السكن، الجواز، الشركة، مركز التكلفة)، وحذفه من قائمة المترشّحين.')}`, { okLabel: t('تحويل إلى موظف') })) return;
       try {
         const res = await api(id ? 'PUT' : 'POST', id ? '/api/candidates/' + id : '/api/candidates', d);
