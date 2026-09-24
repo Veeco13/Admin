@@ -1,0 +1,21 @@
+# بيانات حساسة (أرقام مدنية، جوازات، رواتب، صور بطاقات) — لا ترفع على GitHub
+lunx.db
+lunx.db-*
+*.db
+data/
+uploads/
+!uploads/.gitkeep
+.secret_key
+*.json.bak
+lunx-backup-*.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# النظام
+.DS_Store
+Thumbs.db
+generated_contracts/

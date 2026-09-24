@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lunx — أبراج انرجي</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;600&display=swap">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}?v={{ version }}">
+  <script>
+    // تطبيق الثيم واللغة قبل الرسم لتجنب الوميض
+    try {
+      var th = localStorage.getItem('mv_theme'); if (th) document.documentElement.dataset.theme = th;
+      var lg = localStorage.getItem('mv_lang'); if (lg === 'en') { document.documentElement.lang = 'en'; document.documentElement.dir = 'ltr'; }
+    } catch (e) {}
+  </script>
+</head>
+<body>
+  <header class="topbar no-print">
+    <div class="brand"><div class="logo">L</div><span>Lunx</span><small>أبراج انرجي</small></div>
+    <div class="search-wrap">
+      <input id="global-search" type="search" placeholder="بحث شامل: اسم، رقم مدني، جواز، لوحة، شركة…" autocomplete="off">
+      <div id="search-results" class="search-results" hidden></div>
+    </div>
+    <span id="ro-badge" class="ro-badge" hidden>وضع القراءة فقط</span>
+    <button class="tb-btn" id="btn-alerts" title="مركز التنبيهات">🔔<span class="count" id="alert-count" hidden>0</span></button>
+    <button class="tb-btn" id="btn-theme" title="الوضع الداكن/الفاتح">🌓</button>
+    <button class="tb-btn" id="btn-lang" title="English / عربي">EN</button>
+    <div style="position:relative">
+      <button class="tb-btn" id="btn-user">👤 <span class="tb-label" id="user-name"></span> ▾</button>
+      <div class="drop-menu" id="user-menu" hidden></div>
+    </div>
+  </header>
+  <div class="layout">
+    <nav class="navrail no-print" id="navrail"></nav>
+    <main id="content"><div class="empty">جاري التحميل…</div></main>
+  </div>
+  <div id="side-root"></div>
+  <div id="modal-root"></div>
+  <div id="toast"></div>
+  <input type="file" id="hidden-file" hidden>
+
+  <script src="{{ url_for('static', filename='i18n.js') }}?v={{ version }}"></script>
+  <script src="{{ url_for('static', filename='js/core.js') }}?v={{ version }}"></script>
+  <script src="{{ url_for('static', filename='js/dashboard.js') }}?v={{ version }}"></script>
+  <script src="{{ url_for('static', filename='js/employees.js') }}?v={{ version }}"></script>
+  <script src="{{ url_for('static', filename='js/org.js') }}?v={{ version }}"></script>
+  <script src="{{ url_for('static', filename='js/contract.js') }}?v={{ version }}"></script>
+  <script src="{{ url_for('static', filename='js/recruit.js') }}?v={{ version }}"></script>
+</body>
+</html>
