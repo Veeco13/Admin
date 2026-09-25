@@ -400,7 +400,7 @@ def dump_state(s, ctx=None):
                   if not ctx or ctx.record_ok(x.targetCompanyId, cc_co.get(x.costCenter))] \
         if can("recruitment.view") else []
 
-    # شركات/مشاريع برّه النطاق بس مذكورة عند موظف أو مترشّح ظاهر (شركة الورق) ← الاسم بس، للعرض
+    # شركات/مشاريع برّه النطاق بس مذكورة عند موظف أو مترشّح ظاهر (الشركة المسجّل عليها) ← الاسم بس، للعرض
     ref_companies = {a["companyId"] for e in employees for a in e["affiliations"] if a["companyId"]} \
         | {c["targetCompanyId"] for c in candidates if c.get("targetCompanyId")}
     ref_projects = {a["projectId"] for e in employees for a in e["affiliations"] if a["projectId"]}

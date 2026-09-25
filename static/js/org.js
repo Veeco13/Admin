@@ -258,7 +258,7 @@ function openCostCenterModal(c) {
     body: `<div class="form"><label class="full"><span class="req">${t('الاسم')}</span><input name="name" value="${esc(c.name || '')}"></label>
       <label class="full">${t('الاسم (إنجليزي)')}<input name="nameEn" value="${esc(c.nameEn || '')}" dir="ltr"></label>
       <label class="full">${t('الشركة الفعلية (اللي الموظفين شغالين فيها)')}<select name="companyId" ${can('scope.all') ? '' : 'disabled'}>${companyOptions(c.companyId, '— غير محددة —')}</select>
-        <span class="small muted">${t('المستخدم المحصور في الشركة دي هيشوف موظفين المركز ده حتى لو على ورق شركة تانية.')}</span></label></div>`,
+        <span class="small muted">${t('المستخدم المحصور في الشركة دي هيشوف موظفين المركز ده حتى لو مسجّلين على شركة تانية.')}</span></label></div>`,
     foot: `<button class="btn primary" data-save>حفظ</button><button class="btn" data-close>إلغاء</button>`,
   });
   $('[data-save]', m.el).onclick = async () => {

@@ -19,12 +19,12 @@ const EMP_COLUMNS = [
   { key: 'urgency', label: 'الأقرب انتهاءً', get: e => { const u = empUrgency(e); return u === null ? 99999 : u; } },
 ];
 
-function filteredEmployees() {
-  const f = UI.emp;
+function filteredEmployees(f = UI.emp) {
   const q = norm(f.q);
   return scopedEmployees().filter(e => {
     if (q && ![e.name, e.nameEn, e.id, e.passportNo, e.fileNo, e.profession, e.phone, e.nationality].some(v => norm(v).includes(q))) return false;
     if (f.company && !empInCompany(e, f.company)) return false;
+    if (f.link && empLink(e, f.company) !== f.link) return false;
     if (f.project === '__none') { if (primaryAff(e).projectId) return false; }
     else if (f.project && !(e.affiliations || []).some(a => a.projectId === f.project)) return false;
     if (f.status && (e.employmentStatus || 'active') !== f.status) return false;
@@ -60,6 +60,14 @@ function renderEmployees() {
   if (f.page > pages) f.page = pages;
   const pageList = list.slice((f.page - 1) * f.perPage, f.page * f.perPage);
   const nats = uniq(scopedEmployees().map(e => e.nationality || '—')).sort();
+  // عدادات «على الشركة / على مركز التكلفة» بكل الفلاتر ماعدا فلتر الارتباط نفسه
+  const linkBase = f.link ? filteredEmployees({ ...f, link: '' }) : all;
+  const linkCount = k => linkBase.filter(e => empLink(e, f.company) === k).length;
+  const linkBar = `<div class="row no-print" style="gap:6px;margin:0 0 8px;flex-wrap:wrap">
+      <span class="small muted">${f.company ? esc(companyName(f.company)) + ':' : t('الارتباط بالشركة') + ':'}</span>
+      ${['company', 'cc'].map(k => `<span class="chip clickable ${f.link === k ? 'on' : ''}" data-link="${k}">${EMP_LINKS[k].ico} ${esc(t(EMP_LINKS[k].label))} <b class="num">${linkCount(k)}</b></span>`).join('')}
+      ${f.link ? `<span class="chip clickable" data-link="">✕ ${t('الكل')}</span>` : ''}
+      ${!f.company ? `<span class="small muted">${t('(🏭 = شغال في شركة غير المسجّل عليها — اختار شركة من الفلتر للتفاصيل)')}</span>` : ''}</div>`;
   EMP_SELECTED = new Set([...EMP_SELECTED].filter(id => IDX.employee[id]));
   const sel = EMP_SELECTED.size;
   const sortIco = k => f.sort === k ? (f.dir > 0 ? ' ▲' : ' ▼') : '';
@@ -86,6 +94,7 @@ function renderEmployees() {
       <label class="chip clickable ${f.driver ? 'on' : ''}"><input type="checkbox" id="f-driver" ${f.driver ? 'checked' : ''} hidden>🚚 ${t('السائقين فقط')}</label>
       <button class="btn sm ghost" id="f-clear">✕ ${t('مسح الفلاتر')}</button>
     </div>
+    ${linkBar}
     ${sel ? `<div class="bulkbar no-print"><b>${sel} ${t('محدد')}</b>
       <button class="btn sm write-only" data-p="employees.edit" id="b-assign">🏢 تعيين جماعي</button>
       <button class="btn sm write-only" data-p="employees.edit" id="b-renew">🔄 تجديد جماعي</button>
@@ -99,13 +108,16 @@ function renderEmployees() {
       <tbody>${pageList.map(e => {
         const comp = empDocCompleteness(e);
         const a = primaryAff(e);
+        const link = empLink(e, f.company), ccCo = costCenterCompanyId(e.costCenter);
         return `<tr class="clickable ${EMP_SELECTED.has(e.id) ? 'sel' : ''}" data-id="${esc(e.id)}">
           <td data-nosel><input type="checkbox" data-sel="${esc(e.id)}" ${EMP_SELECTED.has(e.id) ? 'checked' : ''}></td>
           <td><b>${esc(empName(e))}</b>${e.isDriver ? ' 🚚' : ''}${e.govStageNote ? ` <span title="${esc(e.govStageNote)}">⚠️</span>` : ''}${LANG !== 'en' && e.nameEn ? `<div class="small muted" dir="ltr" style="text-align:start">${esc(e.nameEn)}</div>` : ''}</td>
           <td class="num">${esc(e.id)}</td>
           <td>${esc(e.nationality || '—')}</td>
           <td>${esc(e.profession || '—')}</td>
-          <td><div style="max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(companyName(a.companyId))}">${esc(companyName(a.companyId) || '—')}</div><div class="small muted">${esc(projectName(a.projectId))}</div></td>
+          <td><div style="max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(companyName(a.companyId))}">${esc(companyName(a.companyId) || '—')}</div><div class="small muted">${esc(projectName(a.projectId))}</div>
+            ${link === 'cc' ? `<div class="small" style="color:var(--orange)" title="${esc(t('مركز التكلفة') + ': ' + (e.costCenter || ''))}">🏭 ${esc(companyName(ccCo) || e.costCenter || '')}</div>` : ''}
+            ${f.company ? empLinkChip(link) : ''}</td>
           <td>${datePill(e.residencyExp)}</td><td>${datePill(e.workPermitExp)}</td><td>${datePill(e.passportExp)}</td>
           <td>${govStagePill(e.govStage)}</td>
           <td>${statusPill(e.employmentStatus)}</td>
@@ -122,6 +134,7 @@ function renderEmployees() {
   const upd = (patch) => { Object.assign(UI.emp, patch, { page: patch.page || 1 }); saveUiStateToLocalStorage(); render(); };
   $('#f-q').addEventListener('input', debounce(e => { UI.emp.q = e.target.value; UI.emp.page = 1; saveUiStateToLocalStorage(); render(); const i = $('#f-q'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 250));
   $('#f-company').onchange = e => upd({ company: e.target.value, project: '' });
+  $$('[data-link]', viewRoot()).forEach(c => c.onclick = () => upd({ link: UI.emp.link === c.dataset.link ? '' : c.dataset.link }));
   $('#f-project').onchange = e => upd({ project: e.target.value });
   $('#f-status').onchange = e => upd({ status: e.target.value });
   $('#f-stage').onchange = e => upd({ stage: e.target.value });
@@ -130,7 +143,7 @@ function renderEmployees() {
   $('#f-tierfield').onchange = e => upd({ tierField: e.target.value });
   $('#f-tier').onchange = e => upd({ tier: e.target.value });
   $('#f-driver').onchange = e => upd({ driver: e.target.checked });
-  $('#f-clear').onclick = () => upd({ q: '', company: '', project: '', status: '', stage: '', nationality: '', costCenter: '', tier: '', tierField: 'any', driver: false });
+  $('#f-clear').onclick = () => upd({ q: '', company: '', link: '', project: '', status: '', stage: '', nationality: '', costCenter: '', tier: '', tierField: 'any', driver: false });
   $$('#emp-table th[data-sort]').forEach(th => th.onclick = () => { const k = th.dataset.sort; UI.emp.dir = UI.emp.sort === k ? -UI.emp.dir : 1; UI.emp.sort = k; saveUiStateToLocalStorage(); render(); });
   $('#pg-prev').onclick = () => upd({ page: f.page - 1 });
   $('#pg-next').onclick = () => upd({ page: f.page + 1 });
@@ -164,11 +177,13 @@ function renderEmployees() {
 function exportEmployeesCsv(list) {
   const head = ['الرقم المدني', 'الاسم', 'English name', 'الجنسية', 'المهنة', 'الشركة', 'المشروع', 'مركز التكلفة', 'الراتب', 'بدل السكن',
     'الحالة الوظيفية', 'تاريخ التعيين', 'انتهاء الإقامة', 'انتهاء إذن العمل', 'رقم الجواز', 'انتهاء الجواز', 'انتهاء البطاقة الصحية',
-    'سائق', 'انتهاء رخصة القيادة', 'مرحلة المعاملة', 'ملاحظة المعاملة', 'رقم الملف', 'نوع العقد', 'آخر تعديل', 'بواسطة'];
+    'سائق', 'انتهاء رخصة القيادة', 'مرحلة المعاملة', 'ملاحظة المعاملة', 'رقم الملف', 'نوع العقد', 'آخر تعديل', 'بواسطة',
+    'شركة مركز التكلفة', 'الارتباط'];
   const rows = list.map(e => [e.id, e.name, e.nameEn, e.nationality, e.profession, companyName(empCompanyId(e)), projectName(primaryAff(e).projectId), e.costCenter,
     e.salary, e.housingIncluded ? (e.housingAmount || 'نعم') : '', (EMP_STATUS_LABELS[e.employmentStatus] || {}).ar, e.dateOfHire, e.residencyExp, e.workPermitExp,
     e.passportNo, e.passportExp, e.healthCardExp, e.isDriver ? 'نعم' : '', e.drivingLicenseExp, (govStageInfo(e.govStage) || {}).label, e.govStageNote,
-    e.fileNo, e.contractType, e.lastUpdated, e.lastUpdatedBy]);
+    e.fileNo, e.contractType, e.lastUpdated, e.lastUpdatedBy,
+    companyName(costCenterCompanyId(e.costCenter)), t(EMP_LINKS[empLink(e, UI.emp.company)]?.label || '')]);
   const drop = [[8, 'salary'], [14, 'passportNo']].filter(([, f]) => hiddenField('employee', f)).map(([i]) => i);
   const keep = r => r.filter((_, i) => !drop.includes(i));
   downloadBlob(toCsv([keep(head).map(t), ...rows.map(keep)]), `employees-${todayISO()}.csv`, 'text/csv;charset=utf-8');
@@ -322,7 +337,7 @@ function renderAffRows(affs) {
     : `<div class="row aff-row" data-locked="${esc(a.companyId)}|${esc(a.projectId || '')}" style="margin-bottom:6px">
     <span class="chip ${i === 0 ? 'on' : ''}">${i === 0 ? t('أساسي') : t('إضافي')}</span>
     📄 <b>${esc(companyName(a.companyId))}</b> <span class="muted">${esc(projectName(a.projectId))}</span>
-    <span class="small muted">(${t('شركة الورق — خارج نطاقك، للعرض بس')})</span></div>`).join('');
+    <span class="small muted">(${t('الشركة المسجّل عليها — خارج نطاقك، للعرض بس')})</span></div>`).join('');
 }
 function collectAffRows(root) {
   return $$('.aff-row', root).map(r => {

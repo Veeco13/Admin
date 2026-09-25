@@ -111,8 +111,8 @@ class UserCtx:
         return self.allCompanies or (company_id in self.companies)
 
     def affs_ok(self, affs, cc_company=None):
-        """الموظف في النطاق لو أي انتماء ليه (شركة الورق) في شركة مسموحة،
-        أو مركز التكلفة بتاعه تابع لشركة مسموحة (شغال فيها فعلًا وهو على ورق شركة تانية)."""
+        """الموظف في النطاق لو أي انتماء ليه (الشركة المسجّل عليها) في شركة مسموحة،
+        أو مركز التكلفة بتاعه تابع لشركة مسموحة (شغال فيها فعلًا وهو مسجّل على شركة تانية)."""
         if self.allCompanies:
             return True
         return cc_company in self.companies or any(a.get("companyId") in self.companies for a in (affs or []))
@@ -122,7 +122,7 @@ class UserCtx:
         return self.allCompanies or company_id in self.companies or cc_company in self.companies
 
     def merge_affs(self, sent, existing):
-        """الانتماءات لشركات برّه النطاق (زي شركة الورق لموظف شايفه عن طريق مركز التكلفة)
+        """الانتماءات لشركات برّه النطاق (زي الشركة المسجّل عليها موظف ظاهر عن طريق مركز التكلفة)
         مابتتشالش ولا بتتغيّر من المستخدم المحدود — بتفضل زي ما هي، والأساسي يفضل أساسي."""
         if self.allCompanies:
             return list(sent or [])

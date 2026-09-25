@@ -182,15 +182,29 @@ function applyPermStyles() {
 function loadViewPerms() { return lsJson('mv_viewPerms', { hidden: [] }); }
 function saveViewPerms(p) { lsSet('mv_viewPerms', JSON.stringify({ hidden: p.hidden || [] })); }
 // نطاق الشركات بقى على السيرفر: STATE فيه بس الموظفين المسموحين. الشركات/المشاريع اللي عليها outOfScope
-// جاية بالاسم بس (شركة الورق لموظف شايفه عن طريق مركز التكلفة) ← للعرض، مش للاختيار.
+// جاية بالاسم بس (الشركة المسجّل عليها موظف ظاهر عن طريق مركز التكلفة) ← للعرض، مش للاختيار.
 function companyInScope(cid) { const c = cid && IDX.company[cid]; return !c || !c.outOfScope; }
 function scopedEmployees() { return STATE.employees; }
 function scopedCompanies() { return STATE.companies.filter(c => !c.outOfScope); }
 function scopedProjects() { return STATE.projects.filter(p => !p.outOfScope); }
 /** الشركة الفعلية لمركز تكلفة (بالاسم) */
 function costCenterCompanyId(name) { const c = name && STATE.costCenters.find(x => x.name === name); return (c && c.companyId) || null; }
-/** الموظف تابع للشركة: على الورق أو شغال فيها فعلًا (مركز التكلفة) */
+/** الموظف تابع للشركة: مسجّل عليها أو على مركز تكلفة تابع لها */
 function empInCompany(e, cid) { return (e.affiliations || []).some(a => a.companyId === cid) || costCenterCompanyId(e.costCenter) === cid; }
+/** ارتباط الموظف بشركة: 'company' = مسجّل عليها، 'cc' = تابع لها بمركز التكلفة بس، null = مالوش علاقة.
+    من غير شركة: 'cc' لو شركة مركز التكلفة غير الشركة المسجّل عليها، وإلا 'company'. */
+function empLink(e, cid) {
+  const ccCo = costCenterCompanyId(e.costCenter);
+  const reg = (e.affiliations || []).some(a => a.companyId === (cid || ccCo));
+  if (cid) return reg ? 'company' : (ccCo === cid ? 'cc' : null);
+  return ccCo && !reg ? 'cc' : 'company';
+}
+const EMP_LINKS = { company: { ico: '🏢', label: 'على الشركة' }, cc: { ico: '🏭', label: 'على مركز التكلفة' } };
+function empLinkChip(link) {
+  if (!link) return '';
+  const x = EMP_LINKS[link];
+  return `<span class="chip" style="${link === 'cc' ? 'background:var(--orange-soft);color:var(--orange)' : 'background:var(--primary-soft);color:var(--primary)'}">${x.ico} ${esc(t(x.label))}</span>`;
+}
 function applyNavVisibility() {
   const hidden = loadViewPerms().hidden || [];
   $$('#navrail button[data-view]').forEach(b => { b.hidden = hidden.includes(b.dataset.view) || !viewAllowed(b.dataset.view); });
@@ -406,7 +420,7 @@ async function restoreBackup() {
    UI STATE — حفظ الفلاتر والصفحة
    ===================================================================== */
 let UI = Object.assign({
-  emp: { q: '', company: '', project: '', status: '', stage: '', nationality: '', costCenter: '', tier: '', tierField: 'any', driver: false, sort: 'name', dir: 1, page: 1, perPage: 50 },
+  emp: { q: '', company: '', link: '', project: '', status: '', stage: '', nationality: '', costCenter: '', tier: '', tierField: 'any', driver: false, sort: 'name', dir: 1, page: 1, perPage: 50 },
   cand: { q: '', source: '', stage: '', company: '' },
   log: { tab: 'history', company: '', category: '', q: '' },
   vehicles: { q: '' },
@@ -774,7 +788,7 @@ function openUserEditModal(u, roles, done) {
       <label class="full"><span class="req">${t('الدور')}</span><select name="roleId" ${isSelf ? 'disabled' : ''}>${roles.map(r => opt(r.id, r.name, r.id === u.roleId)).join('')}</select><div id="role-help">${roleHelp(u.roleId)}</div></label>
       <h4>${t('نطاق الشركات')}</h4>
       <label class="check full"><input type="radio" name="scope" value="all" ${u.allCompanies ? 'checked' : ''}> ${t('كل الشركات')}</label>
-      <label class="check full"><input type="radio" name="scope" value="some" ${u.allCompanies ? '' : 'checked'}> ${t('شركات محددة بس — يشوف موظفين الشركة على الورق + الموظفين اللي على مراكز تكلفة تابعة لها، ومايشوفش أي حاجة تانية')}</label>
+      <label class="check full"><input type="radio" name="scope" value="some" ${u.allCompanies ? '' : 'checked'}> ${t('شركات محددة بس — يشوف الموظفين المسجّلين على الشركة + الموظفين اللي على مراكز تكلفة تابعة لها، ومايشوفش أي حاجة تانية')}</label>
       <div class="full" id="scope-box" style="grid-column:1/-1;${u.allCompanies ? 'display:none' : ''}"><div class="form">
         ${scopedCompanies().map(c => `<label class="check"><input type="checkbox" data-co="${c.id}" ${u.companies.includes(c.id) ? 'checked' : ''}> ${esc(companyName(c.id))}</label>`).join('')}</div></div>
       </form>
