@@ -1594,18 +1594,25 @@ def save_role(rid=None):
 @app.delete("/api/roles/<rid>")
 @admin_required
 def delete_role(rid):
+    """أي دور بيتحذف ماعدا «مدير النظام». لو عليه مستخدمين لازم moveTo = الدور اللي هينتقلوا له."""
+    move_to = request.args.get("moveTo") or ""
     with db.session_scope() as s:
         r = s.get(M.Role, rid)
         if not r:
             return jsonify({"ok": True})
-        if r.isSystem:
-            return err("الدور ده أساسي في النظام ومش بيتحذف (تقدر تعدّل صلاحياته)")
+        if r.isAdmin:
+            return err("دور «مدير النظام» مابيتحذفش")
         n = s.scalar(select(func.count()).select_from(M.User).where(M.User.roleId == rid))
+        target = s.get(M.Role, move_to) if move_to and move_to != rid else None
+        if n and not target:
+            return err(f"الدور ده عليه {n} مستخدم: اختار دور ينتقلوا له", needsMove=True, userCount=n)
         if n:
-            return err(f"الدور ده مستخدم عند {n} مستخدم، غيّر دورهم الأول")
-        db.log_audit(s, "role_delete", f"حذف دور: {r.name}", uname())
+            s.query(M.User).filter(M.User.roleId == rid).update({"roleId": target.id})
+            s.flush()
+        db.log_audit(s, "role_delete", f"حذف دور: {r.name}" + (f" — {n} مستخدم اتنقلوا لدور «{target.name}»" if n else ""),
+                     uname())
         s.delete(r)
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "moved": n})
 
 
 

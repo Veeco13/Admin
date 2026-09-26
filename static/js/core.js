@@ -763,7 +763,7 @@ async function openUsersModal(tab) {
   const rolesPane = `<div class="row" style="margin-bottom:10px"><span class="muted">${t('كل مستخدم ليه دور واحد. عدّل الدور ← يتطبق على كل اللي واخدينه.')}</span><span class="spacer"></span>
       <button class="btn primary" data-role-add>➕ ${t('إضافة دور')}</button></div>
     <div class="table-wrap"><table class="data"><thead><tr><th>${t('الدور')}</th><th>${t('الصلاحيات')}</th><th>${t('المستخدمين')}</th><th></th></tr></thead><tbody>
-    ${roles.map(r => `<tr class="clickable" data-rid="${esc(r.id)}"><td><b>${esc(r.name)}</b>${r.isSystem ? ` <span class="small muted">🔒</span>` : ''}<div class="small muted">${esc(r.description || '')}</div></td>
+    ${roles.map(r => `<tr class="clickable" data-rid="${esc(r.id)}"><td><b>${esc(r.name)}</b>${r.isAdmin ? ` <span class="small muted">🔒</span>` : ''}<div class="small muted">${esc(r.description || '')}</div></td>
       <td><div class="row" style="flex-wrap:wrap;gap:4px">${permSummary(r.permissions, r.isAdmin)}</div></td>
       <td class="num">${r.userCount}</td><td><button class="btn sm">✏️</button></td></tr>`).join('')}
     </tbody></table></div>`;
@@ -783,8 +783,8 @@ async function openUsersModal(tab) {
   const again = () => { m.close(); openUsersModal(); };
   $('[data-user-add]', m.el).onclick = () => openUserEditModal(null, roles, again);
   $$('tr[data-uid]', m.el).forEach(tr => tr.onclick = () => openUserEditModal(users.find(u => u.id === +tr.dataset.uid), roles, again));
-  $('[data-role-add]', m.el).onclick = () => openRoleEditModal(null, roleData.catalog, again);
-  $$('tr[data-rid]', m.el).forEach(tr => tr.onclick = () => openRoleEditModal(roleOf(tr.dataset.rid), roleData.catalog, again));
+  $('[data-role-add]', m.el).onclick = () => openRoleEditModal(null, roleData.catalog, again, roles);
+  $$('tr[data-rid]', m.el).forEach(tr => tr.onclick = () => openRoleEditModal(roleOf(tr.dataset.rid), roleData.catalog, again, roles));
 }
 
 function openUserEditModal(u, roles, done) {
@@ -845,7 +845,7 @@ function openUserEditModal(u, roles, done) {
   };
 }
 
-function openRoleEditModal(r, catalog, done) {
+function openRoleEditModal(r, catalog, done, allRoles = []) {
   const isNew = !r;
   r = r || { name: '', description: '', permissions: [], isAdmin: false, isSystem: false, userCount: 0 };
   const has = new Set(r.permissions);
@@ -867,7 +867,7 @@ function openRoleEditModal(r, catalog, done) {
       <div class="form">${catalog.system.map(s => `<label class="check">${box(s.key)} ${esc(t(s.label))}</label>`).join('')}</div>
       <p class="small muted">${t('الاستيراد والنسخة الاحتياطية محتاجين كمان كل البيانات الحساسة ونطاق كل الشركات.')}</p>
       ${!isNew && r.userCount ? `<div class="notice warn">${t('التعديل هيتطبق فورًا على')} ${r.userCount} ${t('مستخدم')}.</div>` : ''}`,
-    foot: `${!isNew && !r.isSystem ? `<button class="btn danger" data-del>🗑️ ${t('حذف')}</button><span class="spacer"></span>` : ''}
+    foot: `${!isNew && !r.isAdmin ? `<button class="btn danger" data-del>🗑️ ${t('حذف')}</button><span class="spacer"></span>` : ''}
       <button class="btn primary" data-save>💾 ${t('حفظ')}</button><button class="btn" data-close>إلغاء</button>`,
   });
   // تعديل/حذف ← لازم «عرض»، وشيل «عرض» ← يشيل الباقي
@@ -887,9 +887,30 @@ function openRoleEditModal(r, catalog, done) {
     } catch (e) { toast(e.message, 'err'); }
   };
   const del = $('[data-del]', m.el);
-  if (del) del.onclick = async () => {
-    if (!await openConfirm(`${t('حذف الدور')} «${esc(r.name)}»؟`, { danger: true, okLabel: t('حذف') })) return;
-    try { await api('DELETE', '/api/roles/' + encodeURIComponent(r.id)); m.close(); USERS_TAB = 'roles'; done(); } catch (e) { toast(e.message, 'err'); }
+  if (del) del.onclick = () => openRoleDeleteModal(r, allRoles, () => { m.close(); USERS_TAB = 'roles'; done(); });
+}
+
+/** حذف دور: لو عليه مستخدمين لازم تختار دور ينتقلوا له */
+function openRoleDeleteModal(r, allRoles, done) {
+  const others = allRoles.filter(x => x.id !== r.id);
+  const def = others.find(x => x.id === 'viewer') || others.find(x => !x.isAdmin) || others[0];
+  const m = openModal({
+    title: '🗑️ ' + t('حذف الدور') + ': ' + esc(r.name), size: 'narrow',
+    body: r.userCount
+      ? `<div class="notice warn">${t('الدور ده عليه')} ${r.userCount} ${t('مستخدم')}. ${t('اختار الدور اللي هينتقلوا له:')}</div>
+        <div class="form"><label class="full">${t('ينتقلوا لدور')}<select id="role-move">${others.map(x => opt(x.id, x.name, def && x.id === def.id)).join('')}</select></label></div>`
+      : `<div>${t('حذف الدور ده نهائيًا؟')}</div>`,
+    foot: `<button class="btn danger solid" data-ok>🗑️ ${t('حذف')}</button><button class="btn" data-close>إلغاء</button>`,
+  });
+  $('[data-ok]', m.el).onclick = async () => {
+    const mv = $('#role-move', m.el);
+    const q = mv ? '?moveTo=' + encodeURIComponent(mv.value) : '';
+    try {
+      const res = await api('DELETE', '/api/roles/' + encodeURIComponent(r.id) + q);
+      toast(res.moved ? `${t('تم الحذف')} — ${res.moved} ${t('مستخدم اتنقلوا')}` : 'تم الحذف', 'ok');
+      m.close(); done();
+      if (res.moved) reload();
+    } catch (e) { toast(e.message, 'err'); }
   };
 }
 
