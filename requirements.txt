@@ -4,6 +4,8 @@ alembic>=1.13
 pandas>=2.1
 openpyxl>=3.1
 python-docx>=1.1
+pypdf>=4.0                         # دمج العقود في ملف PDF واحد
+pywin32>=306; sys_platform == "win32"   # تحويل العقود لـ PDF عن طريق Microsoft Word (ويندوز)
 
 # اختياري حسب نوع قاعدة البيانات (LUNX_DATABASE_URL):
 # psycopg[binary]>=3.1     ← PostgreSQL

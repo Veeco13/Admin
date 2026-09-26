@@ -22,6 +22,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 
 import db
+import contracts
 import docx_engine
 import importer
 import lunx_restore
@@ -77,12 +78,15 @@ def bootstrap():
                          passwordHash=generate_password_hash(os.environ.get("LUNX_ADMIN_PASSWORD") or "admin123"),
                          roleId="admin", allCompanies=True, active=True, createdAt=db.now()))
         defaults = [
-            ("contract_template_v2.docx", "عقد حكومي — بدل سكن (الشركة والمفوّض تلقائي)", True),
+            ("contract_reference.docx", "عقد عمل — القطاع الأهلي (العقد المرجعي)", True),
+            ("contract_template_v2.docx", "عقد حكومي — بدل سكن (الشركة والمفوّض تلقائي)", False),
             ("contract_template.docx", "القالب الافتراضي (عقد حكومي) — النسخة القديمة", False),
         ]
         for fn, name, is_def in defaults:
             if os.path.exists(os.path.join(TEMPLATE_DOCS, fn)) and \
                     not s.scalar(select(M.Template).where(M.Template.filename == fn)):
+                if is_def:
+                    s.query(M.Template).update({"isDefault": False})
                 s.add(M.Template(id=db.new_id("tpl"), name=name, filename=fn, isDefault=is_def, createdAt=db.now()))
 
 
@@ -243,7 +247,8 @@ def api_state():
         state = db.dump_state(s, u)
     state["me"] = u.to_api()
     state["version"] = APP_VERSION
-    state["pdfAvailable"] = bool(docx_engine.soffice_path())
+    state["pdfAvailable"] = bool(contracts.backend())
+    state["contractBatchMax"] = contracts.MAX_BATCH
     state["database"] = db.engine.dialect.name
     state["schemaRevision"] = db.current_revision()
     return jsonify(state)
@@ -1039,30 +1044,45 @@ def convert_candidate(cand_id):
 # ---------------------------------------------------------------------------
 # قوالب وعقود العمل (Word / PDF)
 # ---------------------------------------------------------------------------
-def _contract_bundle(args):
-    with db.session_scope(commit=False) as s:
-        emp = db.employee_full(s, args.get("emp", ""))
-        if not emp:
-            abort(404, "الموظف غير موجود")
-        if not emp_ok(s, emp["id"]) or (args.get("company") and not me().company_ok(args["company"])):
-            abort(403, OUT_OF_SCOPE)
-        tpl = s.get(M.Template, args.get("tpl", "")) or \
-            s.scalar(select(M.Template).order_by(M.Template.isDefault.desc(), M.Template.createdAt))
-        if not tpl:
-            abort(404, "لا يوجد قالب")
-        aff = (emp.get("affiliations") or [{}])[0]
-        company = db.to_dict(s.get(M.Company, args.get("company") or aff.get("companyId") or ""))
-        project = db.to_dict(s.get(M.Project, aff.get("projectId") or ""))
-        sig = s.get(M.Signatory, args.get("sig", ""))
-        if not sig and company:
-            sig = s.scalar(select(M.Signatory).where(M.Signatory.companyId == company["id"]))
-        sig = db.to_dict(sig)
-        tpl_file = tpl.filename
+def _contract_template(s, tpl_id):
+    tpl = s.get(M.Template, tpl_id or "") or \
+        s.scalar(select(M.Template).order_by(M.Template.isDefault.desc(), M.Template.createdAt))
+    if not tpl:
+        abort(404, "لا يوجد قالب")
+    return tpl
+
+
+def _contract_context(s, emp_id, args, fill=True, tpl=None):
+    """(الموظف، الحقول، ملف Word أو None) لعقد موظف. args: company, sig, date, salary, …
+    الشركة الافتراضية = الشركة المسجّل عليها، والمفوّض = أول مفوّض فيها (لو المختار مش تبعها بيتجاهل)."""
+    emp = db.employee_full(s, emp_id)
+    if not emp:
+        abort(404, "الموظف غير موجود")
+    if not emp_ok(s, emp["id"]) or (args.get("company") and not me().company_ok(args["company"])):
+        abort(403, OUT_OF_SCOPE)
+    aff = (emp.get("affiliations") or [{}])[0]
+    company = db.to_dict(s.get(M.Company, args.get("company") or aff.get("companyId") or ""))
+    project = db.to_dict(s.get(M.Project, aff.get("projectId") or ""))
+    sig = s.get(M.Signatory, args.get("sig") or "")
+    if sig and company and sig.companyId != company["id"]:
+        sig = None
+    if not sig and company:
+        sig = s.scalar(select(M.Signatory).where(M.Signatory.companyId == company["id"]))
     for k in ("salary", "profession", "professionEn", "nameEn", "nationalityEn"):
         if args.get(k):
             emp[k] = args.get(k)
-    ctx = docx_engine.resolve_contract_template(emp, company, sig, project, args.get("date") or None)
-    data = docx_engine.fill_docx_template(os.path.join(TEMPLATE_DOCS, tpl_file), ctx)
+    ctx = contracts.extra_context(docx_engine.resolve_contract_template(
+        emp, company, db.to_dict(sig), project, args.get("date") or None))
+    data = None
+    if fill:
+        tpl = tpl or _contract_template(s, args.get("tpl"))
+        data = docx_engine.fill_docx_template(os.path.join(TEMPLATE_DOCS, tpl.filename), ctx)
+    return emp, ctx, data
+
+
+def _contract_bundle(args):
+    with db.session_scope(commit=False) as s:
+        emp, ctx, data = _contract_context(s, args.get("emp", ""), args)
     return emp, data, ctx
 
 
@@ -1070,7 +1090,7 @@ def _contract_bundle(args):
 @require("contract.view", "employees.view", "sensitive.salary")
 def contract_preview():
     emp, data, ctx = _contract_bundle(request.args)
-    return jsonify({"html": docx_engine.docx_to_html(data), "fields": ctx})
+    return jsonify({"html": docx_engine.docx_to_html(data), "fields": ctx, "missing": contracts.missing_fields(ctx)})
 
 
 @app.get("/api/contract/docx")
@@ -1085,11 +1105,77 @@ def contract_docx():
 @require("contract.view", "employees.view", "sensitive.salary")
 def contract_pdf():
     emp, data, _ = _contract_bundle(request.args)
-    pdf = docx_engine.docx_to_pdf(data)
-    if not pdf:
-        return err("تحويل PDF يحتاج LibreOffice على السيرفر (أو MS Word على ويندوز)", 501)
+    try:
+        pdf = contracts.to_pdf(data)
+    except RuntimeError as e:
+        return err(str(e), 501)
     return send_file(io.BytesIO(pdf), as_attachment=request.args.get("dl") == "1",
                      download_name=f"عقد عمل - {emp['name']}.pdf", mimetype="application/pdf")
+
+
+# --- عقود كتير مرة واحدة ---
+def _batch_args():
+    d = body()
+    ids = list(dict.fromkeys(str(x) for x in (d.get("emps") or []) if x))
+    if not ids:
+        abort(400, "اختار موظف واحد على الأقل")
+    if len(ids) > contracts.MAX_BATCH:
+        abort(400, f"الحد الأقصى {contracts.MAX_BATCH} عقد في المرة")
+    return d, ids
+
+
+def _batch_emp_args(d, emp):
+    """تاريخ العقد: تاريخ واحد للكل، أو تاريخ تعيين كل موظف (ولو مالوش ← التاريخ الموحّد)."""
+    date = (emp.get("dateOfHire") if d.get("useHireDate") else None) or d.get("date") or None
+    return {"tpl": d.get("tpl"), "date": date}
+
+
+@app.post("/api/contract/batch/check")
+@require("contract.view", "employees.view", "sensitive.salary")
+def contract_batch_check():
+    """البيانات الناقصة لكل موظف قبل إنشاء العقود."""
+    d, ids = _batch_args()
+    out = []
+    with db.session_scope(commit=False) as s:
+        for i in ids:
+            base = db.employee_full(s, i)
+            if not base:
+                continue
+            emp, ctx, _ = _contract_context(s, i, _batch_emp_args(d, base), fill=False)
+            miss = contracts.missing_fields(ctx)
+            if miss:
+                out.append({"id": i, "name": emp["name"], "missing": miss})
+    return jsonify({"count": len(ids), "incomplete": out, "engine": contracts.backend()})
+
+
+@app.post("/api/contract/batch")
+@require("contract.view", "employees.view", "sensitive.salary")
+def contract_batch():
+    """كذا عقد: format=pdf ← ملف PDF واحد بكل العقود بالترتيب، format=zip ← ملفات Word في ZIP."""
+    d, ids = _batch_args()
+    fmt = d.get("format") or "pdf"
+    named = []
+    with db.session_scope(commit=False) as s:
+        tpl = _contract_template(s, d.get("tpl"))
+        for i in ids:
+            base = db.employee_full(s, i)
+            if not base:
+                continue
+            emp, _, data = _contract_context(s, i, _batch_emp_args(d, base), tpl=tpl)
+            named.append((f"عقد عمل - {emp['name']} - {emp['id']}.docx", data))
+    stamp = datetime.now().strftime("%Y-%m-%d")
+    if fmt == "zip":
+        out, name, mime = contracts.zip_docs(named), f"عقود عمل ({len(named)}) - {stamp}.zip", "application/zip"
+    else:
+        try:
+            out = contracts.merge_pdfs(contracts.to_pdfs([x for _, x in named]))
+        except RuntimeError as e:
+            return err(str(e), 501)
+        name, mime = f"عقود عمل ({len(named)}) - {stamp}.pdf", "application/pdf"
+    with db.session_scope() as s:
+        db.log_audit(s, "contract_batch", f"إنشاء {len(named)} عقد عمل ({'PDF' if fmt != 'zip' else 'Word'}) — قالب: {tpl.name}",
+                     uname())
+    return send_file(io.BytesIO(out), as_attachment=d.get("dl", True), download_name=name, mimetype=mime)
 
 
 @app.post("/api/templates")
@@ -1398,6 +1484,15 @@ def healthz():
 def not_found(e):
     if request.path.startswith("/api/"):
         return jsonify({"error": getattr(e, "description", "غير موجود")}), 404
+    return e
+
+
+@app.errorhandler(400)
+@app.errorhandler(403)
+def api_http_error(e):
+    """abort(400/403, "رسالة") ← JSON للواجهة بدل صفحة HTML."""
+    if request.path.startswith("/api/"):
+        return jsonify({"error": e.description}), e.code
     return e
 
 
