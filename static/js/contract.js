@@ -23,11 +23,7 @@ function contractQuery(extra = {}) {
 }
 
 function renderContractView() {
-  if (!canAll('employees.view sensitive.salary')) {
-    viewRoot().innerHTML = `<div class="page-head"><div><h1>عقد العمل</h1></div></div>
-      <div class="notice warn">${t('إنشاء العقود محتاج صلاحية عرض الموظفين وصلاحية «المرتب» لأن العقد فيه الراتب. كلّم مدير النظام.')}</div>`;
-    return;
-  }
+  if (!viewAllowed('contract')) return setView('dashboard');
   if (VIEW_ARGS.emp) { CONTRACT = { emp: VIEW_ARGS.emp, tpl: CONTRACT.tpl, company: '', sig: '', date: '', salary: '', housing: CONTRACT.housing, signFirst: CONTRACT.signFirst, signSecond: CONTRACT.signSecond }; VIEW_ARGS = {}; }
   const e = IDX.employee[CONTRACT.emp];
   const defTpl = STATE.templates.find(x => x.isDefault) || STATE.templates[0];

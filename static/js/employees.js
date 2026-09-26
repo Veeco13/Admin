@@ -279,7 +279,7 @@ async function openProfileCard(id, tab = 'info') {
       <div data-pane="timeline" ${tab !== 'timeline' ? 'hidden' : ''}><ul class="timeline">${tl.map(x => `<li><span class="muted small">${fmtDateTime(x.date)} · ${esc(x.user || '')}</span><br>${esc(x.label)}</li>`).join('') || '<li class="muted">—</li>'}</ul></div>`,
     foot: `<button class="btn primary write-only" data-p="employees.edit" data-a="edit">✏️ تعديل</button>
       <button class="btn write-only" data-p="employees.edit" data-a="stage">🏛️ مرحلة المعاملة</button>
-      <button class="btn" data-p="contract.view sensitive.salary" data-a="contract">📄 عقد العمل</button>
+      <button class="btn" data-p="contract.view employees.view sensitive.salary" data-a="contract">📄 عقد العمل</button>
       <button class="btn" data-a="print">🖨️ طباعة</button>
       <span class="spacer"></span>
       <button class="btn danger write-only" data-p="employees.delete" data-a="delete">🗑️ حذف</button>`,
@@ -343,7 +343,7 @@ function renderAffRows(affs) {
     : `<div class="row aff-row" data-locked="${esc(a.companyId)}|${esc(a.projectId || '')}" style="margin-bottom:6px">
     <span class="chip ${i === 0 ? 'on' : ''}">${i === 0 ? t('أساسي') : t('إضافي')}</span>
     📄 <b>${esc(companyName(a.companyId))}</b> <span class="muted">${esc(projectName(a.projectId))}</span>
-    <span class="small muted">(${t('الشركة المسجّل عليها — خارج نطاقك، للعرض بس')})</span></div>`).join('');
+    <span class="small muted">(${t('للعرض بس')})</span></div>`).join('');
 }
 function collectAffRows(root) {
   return $$('.aff-row', root).map(r => {

@@ -168,7 +168,7 @@ function openCandidateModal(id) {
   const syncSource = () => {
     const src = srcSel.value;
     const cur = stSel.value || c.stage;
-    stSel.innerHTML = recruitStagesForSource(src).map((s, i) => opt(s.id, `${s.rejected ? '' : (i + 1) + '. '}${t(s.label)}`, s.id === cur)).join('');
+    stSel.innerHTML = recruitStagesForSource(src).filter(s => s.id !== 'all_completed' || can('employees.edit') || s.id === cur).map((s, i) => opt(s.id, `${s.rejected ? '' : (i + 1) + '. '}${t(s.label)}`, s.id === cur)).join('');
     $$('[data-src]', form).forEach(el => el.hidden = el.dataset.src !== src);
     updDeadline();
   };
@@ -192,7 +192,6 @@ function openCandidateModal(id) {
     // التحويل لموظف (القسم 8.1)
     if (d.stage === 'all_completed') {
       if (!d.civilId) return openBlockAlert(t('لا يمكن اختيار «تم إنجاز جميع الإجراءات» قبل تسجيل الرقم المدني'));
-      if (!can('employees.edit')) return openBlockAlert(t('التحويل لموظف محتاج صلاحية إضافة الموظفين — كلّم مدير النظام'));
       if (!await openConfirm(`✅ ${t('تم إنجاز جميع الإجراءات')}\n\n${t('سيتم تحويل')} «${esc(d.name)}» ${t('إلى موظف بحالة «قيد الاستكمال» ونقل بياناته (الاسم، الجنسية، المهنة، الراتب، بدل السكن، الجواز، الشركة، مركز التكلفة)، وحذفه من قائمة المترشّحين.')}`, { okLabel: t('تحويل إلى موظف') })) return;
       try {
         const res = await api(id ? 'PUT' : 'POST', id ? '/api/candidates/' + id : '/api/candidates', d);

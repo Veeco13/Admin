@@ -160,7 +160,7 @@ const PERM_KEYS = [
   'sensitive.salary', 'sensitive.bank', 'sensitive.documents', 'system.import', 'system.backup', 'contract.sign', 'scope.all', 'admin',
 ];
 const VIEW_PERM = { employees: 'employees.view', companies: 'companies.view', vehicles: 'vehicles.view', costcenters: 'costcenters.view',
-  contract: 'contract.view', recruitment: 'recruitment.view', companylog: 'companylog.view' };
+  contract: 'contract.view employees.view sensitive.salary', recruitment: 'recruitment.view', companylog: 'companylog.view' };
 function can(key) {
   const m = STATE && STATE.me;
   if (!m) return false;
@@ -171,7 +171,7 @@ function can(key) {
 function canAll(keys) { return keys.split(/\s+/).every(can); }
 /** حقل حساس مخفي عن المستخدم الحالي؟ kind = employee | candidate */
 function hiddenField(kind, f) { return !!(STATE && STATE.me && ((STATE.me.hiddenFields || {})[kind] || []).includes(f)); }
-function viewAllowed(id) { return !VIEW_PERM[id] || can(VIEW_PERM[id]); }
+function viewAllowed(id) { return !VIEW_PERM[id] || canAll(VIEW_PERM[id]); }
 function applyPermStyles() {
   let st = document.getElementById('perm-style');
   if (!st) { st = document.createElement('style'); st.id = 'perm-style'; document.head.appendChild(st); }
@@ -271,7 +271,6 @@ async function reload(noRender) {
   buildIndex();
   applyPermStyles();
   document.body.classList.toggle('readonly', isReadOnly());
-  $('#ro-badge').hidden = !isReadOnly();
   $('#user-name').textContent = STATE.me.displayName || STATE.me.username;
   if (!noRender) render();
 }
@@ -672,25 +671,24 @@ function viewRoot() { return $('#view-root'); }
 function renderUserMenu() {
   const m = $('#user-menu');
   const me = STATE.me;
-  const scope = me.allCompanies ? t('كل الشركات') : me.companies.map(companyName).join('، ');
-  m.innerHTML = `<div class="info">${esc(me.displayName || me.username)}<br>${esc(me.roleName || '—')}<div class="small muted">${esc(scope)}</div></div>
+  const sub = me.isAdmin ? t('مدير النظام') : (me.jobTitle || '');
+  m.innerHTML = `<div class="info">${esc(me.displayName || me.username)}${sub ? `<br><span class="small muted">${esc(sub)}</span>` : ''}</div>
     ${canAll(BACKUP_PERMS) ? `<button data-a="backup">💾 ${t('تنزيل نسخة احتياطية')}</button>` : ''}
     ${me.isAdmin ? `<button data-a="restore">♻️ ${t('استعادة نسخة احتياطية')}</button><button data-a="users">🔑 ${t('المستخدمين والصلاحيات')}</button>` : ''}
-    <button data-a="myperms">🛡️ ${t('صلاحياتي')}</button>
     <button data-a="viewperms">👁️ ${t('إعدادات العرض')}</button>
     <button data-a="password">🔒 ${t('تغيير كلمة المرور')}</button>
     <button data-a="logout">🚪 ${t('تسجيل الخروج')}</button>`;
   $$('button', m).forEach(b => b.onclick = () => {
     m.hidden = true;
     ({ backup: takeBackup, restore: restoreBackup, users: () => openUsersModal(), viewperms: renderViewSettingsModal,
-       myperms: openMyPermsModal, password: openPasswordModal, logout: () => location.href = '/logout' })[b.dataset.a]();
+       password: openPasswordModal, logout: () => location.href = '/logout' })[b.dataset.a]();
   });
 }
 function renderViewSettingsModal() {
   const p = loadViewPerms();
   const m = openModal({
     title: t('إعدادات العرض (لهذا المتصفح)'),
-    body: `<div class="notice">${t('الإعدادات دي بتتحفظ على الجهاز ده بس، وبتخفي أقسام من القائمة. الصلاحيات الفعلية بيحددها مدير النظام.')}</div>
+    body: `<div class="notice">${t('الإعدادات دي بتتحفظ على الجهاز ده بس، وبتخفي أقسام من القائمة.')}</div>
       <h4>${t('الأقسام الظاهرة')}</h4>
       <div class="form">${VIEWS.filter(v => v.id !== 'dashboard' && viewAllowed(v.id)).map(v => `<label class="check"><input type="checkbox" data-view="${v.id}" ${p.hidden.includes(v.id) ? '' : 'checked'}> ${esc(t(v.label))}</label>`).join('')}</div>`,
     foot: `<button class="btn primary" data-save>حفظ</button><button class="btn" data-close>إلغاء</button>`,
@@ -738,18 +736,6 @@ function permSummary(keys, isAdmin) {
   const other = Object.keys(PERM_LABELS.other).filter(k => set.has(k)).map(k => `<span class="chip on">🔓 ${esc(t(PERM_LABELS.other[k]))}</span>`);
   return [...mods, ...other].join(' ') || `<span class="muted">${t('بدون صلاحيات')}</span>`;
 }
-function openMyPermsModal() {
-  const me = STATE.me;
-  const field = (l, v) => `<div><span>${esc(t(l))}</span>${v || '<span class="muted">—</span>'}</div>`;
-  openModal({
-    title: '🛡️ ' + t('صلاحياتي'), size: 'narrow',
-    body: `<div class="kv">${field('الدور', esc(me.roleName || '—'))}${field('نطاق الشركات', me.allCompanies ? t('كل الشركات') : esc(me.companies.map(companyName).join('، ')))}</div>
-      <h4>${t('المسموح')}</h4><div class="row" style="flex-wrap:wrap;gap:6px">${permSummary(me.perms, me.isAdmin)}</div>
-      <p class="small muted">${t('لو محتاج صلاحية زيادة كلّم مدير النظام.')}</p>`,
-    foot: '<button class="btn" data-close>إغلاق</button>',
-  });
-}
-
 let USERS_TAB = 'users';
 async function openUsersModal(tab) {
   if (tab) USERS_TAB = tab;

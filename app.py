@@ -117,7 +117,7 @@ def uname():
     return u.display if u else None
 
 
-def forbidden(msg="ليس لديك صلاحية لهذه العملية"):
+def forbidden(msg="العملية دي غير متاحة"):
     return jsonify({"error": msg}), 403
 
 
@@ -144,7 +144,7 @@ def require(*keys, all_companies=False):
             if not all(u.can(k) for k in keys):
                 return forbidden()
             if all_companies and not u.allCompanies:
-                return forbidden("العملية دي محتاجة صلاحية على كل الشركات")
+                return forbidden()
             return f(*a, **kw)
         return w
     return deco
@@ -155,13 +155,13 @@ def admin_required(f):
     def w(*a, **kw):
         u = me()
         if not u or not u.isAdmin:
-            return forbidden("هذه العملية لمدير النظام فقط")
+            return forbidden()
         return f(*a, **kw)
     return w
 
 
 # --- نطاق الشركات (القيود على السيرفر) ---
-OUT_OF_SCOPE = "السجل ده خارج نطاق الشركات المسموح لك بيها"
+OUT_OF_SCOPE = "السجل ده غير متاح"
 
 
 def emp_ok(s, emp_id):
@@ -170,8 +170,8 @@ def emp_ok(s, emp_id):
     return bool(e) and me().affs_ok(db.get_affiliations(s, emp_id), db.cost_center_company(s, e.costCenter))
 
 
-LEAVES_SCOPE = "بعد الحفظ السجل هيبقى برّه نطاقك: لازم يكون مسجّل على شركة من نطاقك أو على مركز تكلفة تابع لها"
-NEW_OUT_OF_SCOPE = "مش هينفع تضيف شركة برّه نطاقك"
+LEAVES_SCOPE = "مش هينفع الحفظ بالشكل ده: السجل هيختفي من عندك (لازم يفضل على شركة أو مركز تكلفة من اللي عندك)"
+NEW_OUT_OF_SCOPE = "الشركة دي غير متاحة"
 
 
 def scoped_affs(s, sent, existing, cost_center):
@@ -434,7 +434,7 @@ def bulk_assign():
         else:
             comp_chk = comp
         if (comp or proj) and not me().company_ok(comp_chk):
-            return forbidden("الشركة المختارة خارج نطاقك")
+            return forbidden(NEW_OUT_OF_SCOPE)
         ids = [i for i in ids if emp_ok(s, i)]              # الموظفين خارج النطاق بيتجاهلوا
         for eid in ids:
             e = s.get(M.Employee, eid)
@@ -952,7 +952,7 @@ def save_vehicle(vid=None):
     with db.session_scope() as s:
         old = s.get(M.Vehicle, vid) if vid else None
         if (old and not opt_company_ok(old.companyId)) or not opt_company_ok(d.get("companyId") or None):
-            return forbidden("السيارة لازم تكون تابعة لشركة من نطاقك")
+            return forbidden("اختار شركة السيارة من القائمة")
         if s.scalar(select(M.Vehicle).where(M.Vehicle.plate == plate, M.Vehicle.id != (vid or ""))):
             return err(f"رقم اللوحة {plate} مسجّل بالفعل", 409, block=True)
         if vid:
@@ -996,7 +996,7 @@ def save_cost_center(ccid=None):
             return err("مركز التكلفة موجود بالفعل", 409)
         old = s.get(M.CostCenter, ccid) if ccid else None
         if "companyId" in d and d["companyId"] != (old.companyId if old else None) and not me().allCompanies:
-            return forbidden("ربط مركز التكلفة بشركة محتاج صلاحية على كل الشركات")
+            return forbidden()
         if d.get("companyId") and not s.get(M.Company, d["companyId"]):
             return err("الشركة غير موجودة")
         if ccid:
@@ -1187,7 +1187,7 @@ def _signature_file(s, civil_id):
 def _check_sign_args(args):
     """التوقيعات على العقود محتاجة صلاحية contract.sign."""
     if (_truthy(args.get("signFirst")) or _truthy(args.get("signSecond"))) and not me().can("contract.sign"):
-        abort(403, "طباعة العقود بالتوقيعات محتاجة صلاحية «طباعة العقود بالتوقيعات المرفوعة»")
+        abort(403, "العملية دي غير متاحة")
 
 
 def _contract_bundle(args):

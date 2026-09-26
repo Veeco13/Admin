@@ -81,6 +81,7 @@ class UserCtx:
         self.id = user.id
         self.username = user.username
         self.display = user.displayName or user.username
+        self.jobTitle = user.jobTitle
         self.roleId = role.id if role else None
         self.roleName = role.name if role else None
         self.isAdmin = bool(role and role.isAdmin)
@@ -135,11 +136,13 @@ class UserCtx:
         return mine + locked
 
     def to_api(self):
+        """للواجهة. تفاصيل الدور والنطاق لمدير النظام بس — الباقي بياخد المفاتيح اللي بتخفي/بتظهر الأزرار."""
+        admin_only = {"roleId": self.roleId, "roleName": self.roleName, "companies": sorted(self.companies)} if self.isAdmin else {}
         return {
-            "id": self.id, "username": self.username, "displayName": self.display,
-            "roleId": self.roleId, "roleName": self.roleName, "isAdmin": self.isAdmin,
+            "id": self.id, "username": self.username, "displayName": self.display, "jobTitle": self.jobTitle,
+            "isAdmin": self.isAdmin, **admin_only,
             "perms": sorted(self.perms, key=ALL_KEYS.index),
-            "allCompanies": self.allCompanies, "companies": sorted(self.companies),
+            "allCompanies": self.allCompanies,
             "hiddenFields": {"employee": self.denied_fields("employee"),
                              "candidate": self.denied_fields("candidate")},
             # توافق مع الواجهة القديمة
