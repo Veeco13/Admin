@@ -231,6 +231,8 @@ async function openProfileCard(id, tab = 'info') {
   if (!e) return toast('الموظف غير موجود', 'err');
   const comp = empDocCompleteness(e);
   const tl = (STATE.employeeTimeline[e.id] || []).slice().reverse();
+  const moves = tl.filter(x => MOVE_ICONS[x.type]);
+  const ccCo = costCenterCompanyId(e.costCenter);
   const vehicles = STATE.vehicles.filter(v => v.driverId === e.id);
   const field = (l, v) => `<div><span>${esc(t(l))}</span>${v || '<span class="muted">—</span>'}</div>`;
   const m = openModal({
@@ -245,6 +247,7 @@ async function openProfileCard(id, tab = 'info') {
         <button data-tab="info" class="${tab === 'info' ? 'active' : ''}">البيانات</button>
         <button data-tab="docs" class="${tab === 'docs' ? 'active' : ''}">المستندات والتواريخ</button>
         <button data-tab="files" data-p="sensitive.documents" class="${tab === 'files' ? 'active' : ''}">المرفقات</button>
+        <button data-tab="moves" class="${tab === 'moves' ? 'active' : ''}">🏢 ${t('التحركات')} (${moves.length})</button>
         <button data-tab="timeline" class="${tab === 'timeline' ? 'active' : ''}">السجل (${tl.length})</button>
       </div>
       <div data-pane="info" ${tab !== 'info' ? 'hidden' : ''}><div class="kv">
@@ -276,6 +279,12 @@ async function openProfileCard(id, tab = 'info') {
       </div>
       <div data-pane="files" ${tab !== 'files' ? 'hidden' : ''}><div id="emp-files"><div class="muted">${t('جاري التحميل…')}</div></div>
         <button class="btn write-only" data-p="employees.edit sensitive.documents" id="emp-upload" style="margin-top:10px">📎 ${t('رفع مرفق')}</button></div>
+      <div data-pane="moves" ${tab !== 'moves' ? 'hidden' : ''}>
+        <div class="kv">${field('مسجّل على', (e.affiliations || []).map((a, i) => `${esc(companyName(a.companyId) || '—')}${a.projectId ? ` <span class="small muted">(${esc(projectName(a.projectId))})</span>` : ''}${i ? ` <span class="chip">${t('إضافي')}</span>` : ''}`).join('<br>'))}
+          ${field('مركز التكلفة', esc(e.costCenter))}${field('شغال فعليًا في', esc(companyName(ccCo) || (e.costCenter ? t('غير محددة') : '')))}</div>
+        <h4>${t('التحركات')}</h4>
+        <ul class="timeline">${moves.map(x => `<li><span class="muted small">${fmtDateTime(x.date)} · ${esc(x.user || '')}</span><br>${MOVE_ICONS[x.type]} ${esc(x.label)}</li>`).join('') || `<li class="muted">${t('مفيش تحركات مسجّلة')}</li>`}</ul>
+      </div>
       <div data-pane="timeline" ${tab !== 'timeline' ? 'hidden' : ''}><ul class="timeline">${tl.map(x => `<li><span class="muted small">${fmtDateTime(x.date)} · ${esc(x.user || '')}</span><br>${esc(x.label)}</li>`).join('') || '<li class="muted">—</li>'}</ul></div>`,
     foot: `<button class="btn primary write-only" data-p="employees.edit" data-a="edit">✏️ تعديل</button>
       <button class="btn write-only" data-p="employees.edit" data-a="stage">🏛️ مرحلة المعاملة</button>

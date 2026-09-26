@@ -29,6 +29,8 @@ const GOV_STAGES = [
   { id: 'renewed',               label: 'تم التجديد',                        dot: '🟢', color: 'var(--green)' },
   { id: 'awaiting_cancellation', label: 'بانتظار إلغاء الإقامة وإذن العمل',   dot: '🔴', color: 'var(--red)' },
 ];
+/** أنواع الخط الزمني اللي بتظهر في تبويب «التحركات» (history.MOVE_TYPES على السيرفر) */
+const MOVE_ICONS = { baseline: '🏁', create: '🆕', import_add: '📥', transfer: '🔀', project: '📁', cost_center: '💼' };
 const EMP_STATUS_LABELS = {
   active:             { ar: 'في الخدمة',       en: 'In Service' },
   warning:            { ar: 'في فترة الإنذار',  en: 'Warning Period' },

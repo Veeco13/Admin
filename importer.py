@@ -143,6 +143,8 @@ def upsert_employee(s, rec, user, stats, company_cache):
             M.Employee.passportNo == data["passportNo"], M.Employee.id != emp_id)):
         data.pop("passportNo")
     e = s.get(M.Employee, emp_id)
+    is_new = e is None
+    old_affs, old_cc = (db.get_affiliations(s, emp_id), e.costCenter) if e else ([], None)
     if e:
         db.apply(e, data)
         stats["updated"] += 1
@@ -151,7 +153,6 @@ def upsert_employee(s, rec, user, stats, company_cache):
         data.setdefault("employmentStatus", "active")
         s.add(db.build(M.Employee, data))
         stats["added"] += 1
-        db.push_timeline(s, emp_id, "import_add", "إضافة من ملف استيراد", user)
     s.flush()
     # الانتماء
     if not db.get_affiliations(s, emp_id):
@@ -161,6 +162,17 @@ def upsert_employee(s, rec, user, stats, company_cache):
             aff = {"companyId": cid, "projectId": None}
         if aff:
             db.set_affiliations(s, emp_id, [aff])
+    # التاريخ: الموظف الجديد بوضعه، والقديم بأي تغيير في الشركة أو مركز التكلفة
+    import history
+    new_affs, new_cc = db.get_affiliations(s, emp_id), s.get(M.Employee, emp_id).costCenter
+    if is_new:
+        db.push_timeline(s, emp_id, "import_add", "إضافة من ملف استيراد — " + history.current_state_text(s, new_affs, new_cc), user)
+        for a in new_affs:
+            if a.get("companyId"):
+                db.log_company_history(s, a["companyId"], "employee_joined",
+                                       f"انضمام الموظف {data.get('name')} ({emp_id}) — استيراد", user)
+    else:
+        history.record_moves(s, emp_id, data.get("name"), old_affs, new_affs, old_cc, new_cc, user, "استيراد")
 
 
 def import_dataframe_with_headers(s, df, user, stats, cache):

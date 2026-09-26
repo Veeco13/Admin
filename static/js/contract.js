@@ -317,6 +317,7 @@ const COMPANY_HISTORY_TYPES = {
   company_created: '🏢 إنشاء الشركة', license_renewed: '📜 تجديد الرخصة', traffic_auth: '🚦 تفويض المرور',
   civil_affairs_auth: '🪪 تفويض الشؤون المدنية', signatory_added: '✍️ إضافة مفوّض', project_added: '📁 إضافة مشروع',
   project_renewed: '🔄 تجديد مشروع', residency_renewed: '🛂 تجديد إقامة',
+  employee_joined: '👤➕ انضمام موظف', employee_left: '👤➖ خروج موظف',
 };
 const AUDIT_CATEGORIES = { employee: 'الموظفين', candidate: 'المترشّحين', company: 'الشركات', vehicle: 'السيارات', backup: 'النسخ الاحتياطي' };
 

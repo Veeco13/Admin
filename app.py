@@ -24,6 +24,7 @@ from werkzeug.utils import secure_filename
 import db
 import contracts
 import docx_engine
+import history
 import importer
 import lunx_restore
 import models as M
@@ -311,7 +312,7 @@ TRACKED_DATE_LABELS = {
     "healthCardExp": "البطاقة الصحية", "drivingLicenseExp": "رخصة القيادة",
 }
 DIFF_LABELS = {"name": "الاسم", "salary": "الراتب", "profession": "المهنة", "employmentStatus": "الحالة الوظيفية",
-               "govStage": "مرحلة المعاملة", "costCenter": "مركز التكلفة", **TRACKED_DATE_LABELS}
+               "govStage": "مرحلة المعاملة", **TRACKED_DATE_LABELS}     # الشركة ومركز التكلفة ← history.record_moves
 
 
 @app.post("/api/employees")
@@ -377,12 +378,16 @@ def save_employee(orig_id):
                 old = db.to_dict(e)
                 db.apply(e, data)
                 new = db.to_dict(e)
-                changes = [f"{lab}: {old.get(k) or '—'} ← {new.get(k) or '—'}"
+                changes = [f"{lab}: {history.value_label(k, old.get(k)) or '—'} ← {history.value_label(k, new.get(k)) or '—'}"
                            for k, lab in DIFF_LABELS.items() if k in data and old.get(k) != new.get(k)]
-                db.log_audit(s, "employee_edit", f"تعديل موظف: {e.name} ({new_id})"
-                             + (" — " + "، ".join(changes) if changes else ""), user)
                 for ch in changes:
                     db.push_timeline(s, new_id, "edit", ch, user)
+                if affs is not None:
+                    db.set_affiliations(s, new_id, affs)
+                moves = history.record_moves(s, new_id, e.name, existing, affs if affs is not None else existing,
+                                             old.get("costCenter"), new.get("costCenter"), user)
+                db.log_audit(s, "employee_edit", f"تعديل موظف: {e.name} ({new_id})"
+                             + (" — " + "، ".join(changes + moves) if changes or moves else ""), user)
                 for k, lab in TRACKED_DATE_LABELS.items():
                     if new.get(k) and old.get(k) and new[k] > old[k]:
                         db.push_timeline(s, new_id, "renew", f"تجديد {lab} حتى {new[k]}", user)
@@ -393,10 +398,15 @@ def save_employee(orig_id):
                 data.setdefault("employmentStatus", "active")
                 s.add(db.build(M.Employee, data))
                 s.flush()
-                db.log_audit(s, "employee_add", f"إضافة موظف: {data.get('name')} ({new_id})", user)
-                db.push_timeline(s, new_id, "create", "إنشاء سجل الموظف", user)
-            if affs is not None:
-                db.set_affiliations(s, new_id, affs)
+                if affs is not None:
+                    db.set_affiliations(s, new_id, affs)
+                state = history.current_state_text(s, db.get_affiliations(s, new_id), data.get("costCenter"))
+                db.log_audit(s, "employee_add", f"إضافة موظف: {data.get('name')} ({new_id}) — {state}", user)
+                db.push_timeline(s, new_id, "create", f"إنشاء سجل الموظف — {state}", user)
+                for a in db.get_affiliations(s, new_id):
+                    if a.get("companyId"):
+                        db.log_company_history(s, a["companyId"], "employee_joined",
+                                               f"انضمام الموظف {data.get('name')} ({new_id}) — موظف جديد", user)
             s.flush()
             return jsonify({"ok": True, "employee": u.strip("employee", db.employee_full(s, new_id))})
     except IntegrityError as e:
@@ -450,13 +460,17 @@ def bulk_assign():
             if msg:
                 s.rollback()
                 return forbidden(f"{e.name}: {msg}")
+            old_cc = e.costCenter
             if comp or proj:
                 db.set_affiliations(s, eid, affs)
             if cc is not None:
                 e.costCenter = cc or None
             e.lastUpdated, e.lastUpdatedBy = db.now(), user
-            db.push_timeline(s, eid, "assign", "تعيين جماعي لشركة/مشروع/مركز تكلفة", user)
-        db.log_audit(s, "employee_edit", f"تعيين جماعي لـ {len(ids)} موظف", user)
+            history.record_moves(s, eid, e.name, existing, affs if (comp or proj) else existing, old_cc, e.costCenter,
+                                 user, "تعيين جماعي")
+        what = "، ".join(x for x in (history.aff_text(s, {"companyId": comp or comp_chk, "projectId": proj}) if (comp or proj) else "",
+                                     f"مركز التكلفة «{cc or '—'}»" if cc is not None else "") if x)
+        db.log_audit(s, "employee_edit", f"تعيين جماعي لـ {len(ids)} موظف — {what}", user)
     return jsonify({"ok": True, "count": len(ids)})
 
 
@@ -502,7 +516,7 @@ def set_gov_stage(emp_id):
         db.apply(e, {k: d.get(k) for k in ("govStage", "govStageNote", "govStageResponsible", "govStageStartDate",
                                            "govTransactionCost") if k in d})
         e.lastUpdated, e.lastUpdatedBy = db.now(), uname()
-        db.push_timeline(s, emp_id, "gov_stage", f"مرحلة المعاملة: {d.get('govStage') or '—'}"
+        db.push_timeline(s, emp_id, "gov_stage", f"مرحلة المعاملة: {history.value_label('govStage', d.get('govStage')) or '—'}"
                          + (f" — {d.get('govStageNote')}" if d.get("govStageNote") else ""), uname())
         db.log_audit(s, "employee_edit", f"تحديث مرحلة معاملة {e.name} ({emp_id})", uname())
     return jsonify({"ok": True})
@@ -1119,7 +1133,11 @@ def convert_candidate(cand_id):
         s.flush()
         if c.targetCompanyId:
             db.set_affiliations(s, civil, [{"companyId": c.targetCompanyId, "projectId": None}])
-        db.push_timeline(s, civil, "create", "تحويل من مترشّح إلى موظف (قيد الاستكمال)", uname())
+        db.push_timeline(s, civil, "create", "تحويل من مترشّح إلى موظف (قيد الاستكمال) — "
+                         + history.current_state_text(s, db.get_affiliations(s, civil), c.costCenter), uname())
+        if c.targetCompanyId:
+            db.log_company_history(s, c.targetCompanyId, "employee_joined",
+                                   f"انضمام الموظف {c.name} ({civil}) — تحويل من مترشّح", uname())
         db.log_audit(s, "candidate_convert", f"تحويل المترشّح {c.name} إلى موظف ({civil})", uname())
         s.delete(c)
     return jsonify({"ok": True, "employeeId": civil})
