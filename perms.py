@@ -77,7 +77,7 @@ def load_keys(role):
 class UserCtx:
     """المستخدم الحالي بصلاحياته ونطاقه — بيتحسب مرة في كل طلب."""
 
-    def __init__(self, user, role, company_ids):
+    def __init__(self, user, role, company_ids, cost_center_names=()):
         self.id = user.id
         self.username = user.username
         self.display = user.displayName or user.username
@@ -88,6 +88,7 @@ class UserCtx:
         self.perms = set(ALL_KEYS) if self.isAdmin else set(load_keys(role) if role else [])
         self.allCompanies = self.isAdmin or bool(user.allCompanies)
         self.companies = set(company_ids)
+        self.costCenters = set(cost_center_names)    # أسماء (الموظفين مربوطين بالمركز بالاسم)
 
     # --- الصلاحيات ---
     def can(self, key):
@@ -112,16 +113,17 @@ class UserCtx:
     def company_ok(self, company_id):
         return self.allCompanies or (company_id in self.companies)
 
-    def affs_ok(self, affs, cc_company=None):
+    def affs_ok(self, affs, cc_company=None, cc_name=None):
         """الموظف في النطاق لو أي انتماء ليه (الشركة المسجّل عليها) في شركة مسموحة،
-        أو مركز التكلفة بتاعه تابع لشركة مسموحة (شغال فيها فعلًا وهو مسجّل على شركة تانية)."""
+        أو مركز التكلفة بتاعه تابع لشركة مسموحة (شغال فيها فعلًا وهو مسجّل على شركة تانية)،
+        أو مركز التكلفة نفسه في نطاق المستخدم (مركز من غير شركة مسجّلة)."""
         if self.allCompanies:
             return True
-        return cc_company in self.companies or any(a.get("companyId") in self.companies for a in (affs or []))
+        return cc_company in self.companies or (bool(cc_name) and cc_name in self.costCenters)             or any(a.get("companyId") in self.companies for a in (affs or []))
 
-    def record_ok(self, company_id, cc_company=None):
+    def record_ok(self, company_id, cc_company=None, cc_name=None):
         """مترشّح/سجل ليه شركة واحدة + مركز تكلفة. من غير الاتنين = للنطاق الكامل بس."""
-        return self.allCompanies or company_id in self.companies or cc_company in self.companies
+        return self.allCompanies or company_id in self.companies or cc_company in self.companies             or (bool(cc_name) and cc_name in self.costCenters)
 
     def merge_affs(self, sent, existing):
         """الانتماءات لشركات برّه النطاق (زي الشركة المسجّل عليها موظف ظاهر عن طريق مركز التكلفة)
@@ -157,4 +159,6 @@ def load_ctx(s, uid):
         return None
     role = s.get(M.Role, u.roleId) if u.roleId else None
     cids = s.scalars(select(M.UserCompany.companyId).where(M.UserCompany.userId == u.id)).all()
-    return UserCtx(u, role, cids)
+    ccs = s.scalars(select(M.CostCenter.name).join(M.UserCostCenter, M.UserCostCenter.costCenterId == M.CostCenter.id)
+                    .where(M.UserCostCenter.userId == u.id)).all()
+    return UserCtx(u, role, cids, ccs)

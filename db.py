@@ -385,7 +385,7 @@ def dump_state(s, ctx=None):
             affs.setdefault(a.employeeId, []).append({"companyId": a.companyId, "projectId": a.projectId})
         for e in s.scalars(select(M.Employee).order_by(M.Employee.name)):
             a = affs.get(e.id, [])
-            if ctx and not ctx.affs_ok(a, cc_co.get(e.costCenter)):
+            if ctx and not ctx.affs_ok(a, cc_co.get(e.costCenter), e.costCenter):
                 continue
             d = strip("employee", to_dict(e))
             d["affiliations"] = a
@@ -397,7 +397,7 @@ def dump_state(s, ctx=None):
 
     candidates = [strip("candidate", to_dict(x)) for x in s.scalars(select(M.Candidate)
                                                                     .order_by(M.Candidate.appliedDate.desc()))
-                  if not ctx or ctx.record_ok(x.targetCompanyId, cc_co.get(x.costCenter))] \
+                  if not ctx or ctx.record_ok(x.targetCompanyId, cc_co.get(x.costCenter), x.costCenter)] \
         if can("recruitment.view") else []
 
     # شركات/مشاريع برّه النطاق بس مذكورة عند موظف أو مترشّح ظاهر (الشركة المسجّل عليها) ← الاسم بس، للعرض
@@ -497,7 +497,7 @@ def export_tables(s, include_users=False):
     return out
 
 
-AUTH_TABLES = ("roles", "users", "user_companies")
+AUTH_TABLES = ("roles", "users", "user_companies", "user_cost_centers")
 LEGACY_ROLES = {"admin": "admin", "editor": "editor"}      # نسخ قبل 0003: users.role نص ← role_id
 
 
@@ -511,19 +511,22 @@ def import_tables(s, tables, replace=True, skip=AUTH_TABLES + ("meta",)):
     for row in (tables.get("users") or []) if "users" in names else []:
         if "role_id" not in row and "role" in row:
             row["role_id"] = LEGACY_ROLES.get(row["role"], "viewer")
-    # نطاق الشركات مربوط بالشركات والمستخدمين: لو هيتمسحوا والنطاق مش في النسخة ← نشيله ونرجّعه بعد الاستيراد
-    uc = M.UserCompany.__table__
+    # نطاق المستخدمين (شركات ومراكز تكلفة) مربوط بالمستخدمين وبالجدول المرجعي:
+    # لو هيتمسحوا والنطاق مش في النسخة ← نشيله ونرجّعه بعد الاستيراد للي لسه موجود
+    scope_tables = [(M.UserCompany.__table__, "company_id", "companies"),
+                    (M.UserCostCenter.__table__, "cost_center_id", "cost_centers")]
     kept_scope = []
-    if replace and "user_companies" not in names and names & {"companies", "users"}:
-        kept_scope = [dict(r) for r in s.execute(select(uc)).mappings()]
-        s.execute(uc.delete())
+    for tbl, col_, ref in scope_tables:
+        if replace and tbl.name not in names and names & {ref, "users"}:
+            kept_scope.append((tbl, col_, ref, [dict(r) for r in s.execute(select(tbl)).mappings()]))
+            s.execute(tbl.delete())
     if replace:
         for t in reversed(M.Base.metadata.sorted_tables):
             if t.name in tables and t.name not in skip:
                 s.execute(t.delete())
     known = {}                      # اسم الجدول ← المفاتيح الموجودة (للتحقق من المراجع)
     for t in M.Base.metadata.sorted_tables:
-        if t.name not in names and t.name in ("companies", "projects", "employees", "roles", "users"):
+        if t.name not in names and t.name in ("companies", "projects", "employees", "roles", "users", "cost_centers"):
             known[t.name] = {r[0] for r in s.execute(select(t.c.id))}
     for table in order:
         colmap = {c.name: c for c in table.columns}
@@ -559,10 +562,10 @@ def import_tables(s, tables, replace=True, skip=AUTH_TABLES + ("meta",)):
         if "id" in table.c:
             known[table.name] = {r.get("id") for r in rows}
         counts[table.name] = len(rows)
-    kept_scope = [r for r in kept_scope if r["company_id"] in known.get("companies", ())
-                  and r["user_id"] in known.get("users", ())]
-    if kept_scope:
-        s.execute(uc.insert(), kept_scope)
+    for tbl, col_, ref, rows in kept_scope:
+        rows = [r for r in rows if r[col_] in known.get(ref, ()) and r["user_id"] in known.get("users", ())]
+        if rows:
+            s.execute(tbl.insert(), rows)
     if fixed:
         counts["_fixedReferences"] = fixed
     s.flush()

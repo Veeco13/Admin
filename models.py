@@ -227,6 +227,13 @@ class UserCompany(Base):
     companyId: Mapped[str] = col("company_id", ID, fk("companies.id"), primary_key=True)
 
 
+class UserCostCenter(Base):
+    """مراكز تكلفة في نطاق المستخدم (زيادة على الشركات) — مفيدة لمركز مالوش شركة مسجّلة."""
+    __tablename__ = "user_cost_centers"
+    userId: Mapped[int] = col("user_id", Integer, fk("users.id"), primary_key=True)
+    costCenterId: Mapped[str] = col("cost_center_id", ID, fk("cost_centers.id"), primary_key=True)
+
+
 class EmployeeAffiliation(Base):
     __tablename__ = "employee_affiliations"
     id: Mapped[int] = col("id", Integer, primary_key=True, autoincrement=True)
@@ -306,8 +313,8 @@ class EmployeeTimeline(Base):
 
 
 # ترتيب الجداول للنسخ/النقل (الأب قبل الابن)
-ALL_MODELS = [Meta, Role, User, Company, UserCompany, Project, CostCenter, Signatory, Employee, EmployeeAffiliation,
+ALL_MODELS = [Meta, Role, User, Company, UserCompany, Project, CostCenter, UserCostCenter, Signatory, Employee, EmployeeAffiliation,
               Vehicle, Candidate, CompanyDoc, SignatoryDoc, EmployeeFile, Signature, Template, CompanyHistory, AuditLog,
               EmployeeTimeline]
 # جداول الحسابات والصلاحيات ← بتتعامل مع بعض في النسخ الاحتياطي (include_users)
-AUTH_MODELS = (Role, User, UserCompany)
+AUTH_MODELS = (Role, User, UserCompany, UserCostCenter)

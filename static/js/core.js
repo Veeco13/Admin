@@ -744,8 +744,10 @@ async function openUsersModal(tab) {
   catch (e) { return toast(e.message, 'err'); }
   const roles = roleData.roles;
   const roleOf = id => roles.find(r => r.id === id);
+  const ccName = id => (STATE.costCenters.find(c => c.id === id) || {}).name || id;
   const scopeText = u => u.allCompanies ? `<span class="chip on">${t('كل الشركات')}</span>`
-    : u.companies.map(c => `<span class="chip">${esc(companyName(c) || c)}</span>`).join(' ');
+    : u.companies.map(c => `<span class="chip">${esc(companyName(c) || c)}</span>`).join(' ')
+      + (u.costCenters || []).map(c => `<span class="chip" title="${esc(t('مركز تكلفة'))}">💼 ${esc(ccName(c))}</span>`).join(' ');
   const usersPane = `<div class="row" style="margin-bottom:10px"><span class="muted">${users.length} ${t('مستخدم')} · ${users.filter(u => u.active).length} ${t('نشط')}</span><span class="spacer"></span>
       <button class="btn primary" data-user-add>➕ ${t('إضافة مستخدم')}</button></div>
     <div class="table-wrap"><table class="data"><thead><tr><th>${t('المستخدم')}</th><th>${t('الوظيفة')}</th><th>${t('الدور')}</th><th>${t('نطاق الشركات')}</th><th>${t('الحالة')}</th><th>${t('آخر دخول')}</th><th></th></tr></thead><tbody>
@@ -787,7 +789,7 @@ async function openUsersModal(tab) {
 
 function openUserEditModal(u, roles, done) {
   const isNew = !u;
-  u = u || { active: true, allCompanies: true, companies: [], roleId: (roles.find(r => r.id === 'viewer') || roles[0]).id };
+  u = u || { active: true, allCompanies: true, companies: [], costCenters: [], roleId: (roles.find(r => r.id === 'viewer') || roles[0]).id };
   const v = k => esc(u[k] ?? '');
   const isSelf = !isNew && u.id === STATE.me.id;
   const roleHelp = id => { const r = roles.find(x => x.id === id); return r ? `<div class="small muted">${esc(r.description || '')}</div><div class="row" style="flex-wrap:wrap;gap:4px;margin-top:4px">${permSummary(r.permissions, r.isAdmin)}</div>` : ''; };
@@ -806,9 +808,13 @@ function openUserEditModal(u, roles, done) {
       <label class="full"><span class="req">${t('الدور')}</span><select name="roleId" ${isSelf ? 'disabled' : ''}>${roles.map(r => opt(r.id, r.name, r.id === u.roleId)).join('')}</select><div id="role-help">${roleHelp(u.roleId)}</div></label>
       <h4>${t('نطاق الشركات')}</h4>
       <label class="check full"><input type="radio" name="scope" value="all" ${u.allCompanies ? 'checked' : ''}> ${t('كل الشركات')}</label>
-      <label class="check full"><input type="radio" name="scope" value="some" ${u.allCompanies ? '' : 'checked'}> ${t('شركات محددة بس — يشوف الموظفين المسجّلين على الشركة + الموظفين اللي على مراكز تكلفة تابعة لها، ومايشوفش أي حاجة تانية')}</label>
-      <div class="full" id="scope-box" style="grid-column:1/-1;${u.allCompanies ? 'display:none' : ''}"><div class="form">
-        ${scopedCompanies().map(c => `<label class="check"><input type="checkbox" data-co="${c.id}" ${u.companies.includes(c.id) ? 'checked' : ''}> ${esc(companyName(c.id))}</label>`).join('')}</div></div>
+      <label class="check full"><input type="radio" name="scope" value="some" ${u.allCompanies ? '' : 'checked'}> ${t('شركات أو مراكز تكلفة محددة بس — ومايشوفش أي حاجة تانية')}</label>
+      <div class="full" id="scope-box" style="grid-column:1/-1;${u.allCompanies ? 'display:none' : ''}">
+        <div class="small muted" style="margin:4px 0">🏢 ${t('الشركات: الموظفين المسجّلين على الشركة + اللي على مراكز تكلفة تابعة لها')}</div>
+        <div class="form">${scopedCompanies().map(c => `<label class="check"><input type="checkbox" data-co="${c.id}" ${u.companies.includes(c.id) ? 'checked' : ''}> ${esc(companyName(c.id))}</label>`).join('')}</div>
+        <div class="small muted" style="margin:10px 0 4px">💼 ${t('مراكز التكلفة: كل موظفين المركز (مفيدة لمركز من غير شركة مسجّلة)')}</div>
+        <div class="form">${STATE.costCenters.slice().sort((a, b) => (a.companyId ? 1 : 0) - (b.companyId ? 1 : 0)).map(c => `<label class="check"><input type="checkbox" data-cc="${c.id}" ${(u.costCenters || []).includes(c.id) ? 'checked' : ''}> ${esc(c.name)}
+          <span class="small muted">${c.companyId ? '(' + esc(companyName(c.companyId)) + ')' : '(' + t('من غير شركة') + ')'}</span></label>`).join('')}</div></div>
       </form>
       ${isSelf ? `<div class="notice">${t('ده حسابك: مش هينفع تغيّر دورك أو توقفه من هنا.')}</div>` : ''}`,
     foot: `${!isNew && !isSelf ? `<button class="btn danger" data-del>🗑️ ${t('حذف')}</button><span class="spacer"></span>` : ''}
@@ -822,6 +828,7 @@ function openUserEditModal(u, roles, done) {
     delete d.scope;
     d.allCompanies = $('[name=scope]:checked', f).value === 'all';
     d.companies = $$('[data-co]', f).filter(x => x.checked).map(x => x.dataset.co);
+    d.costCenters = $$('[data-cc]', f).filter(x => x.checked).map(x => x.dataset.cc);
     if (!d.password) delete d.password;
     if (isSelf) { delete d.active; delete d.roleId; }
     if (!isNew) delete d.username;

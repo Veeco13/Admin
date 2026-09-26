@@ -167,7 +167,7 @@ OUT_OF_SCOPE = "السجل ده غير متاح"
 def emp_ok(s, emp_id):
     """الموظف في نطاق المستخدم: الشركة المسجّل عليها أو الشركة الفعلية (مركز التكلفة)."""
     e = s.get(M.Employee, emp_id)
-    return bool(e) and me().affs_ok(db.get_affiliations(s, emp_id), db.cost_center_company(s, e.costCenter))
+    return bool(e) and me().affs_ok(db.get_affiliations(s, emp_id), db.cost_center_company(s, e.costCenter), e.costCenter)
 
 
 LEAVES_SCOPE = "مش هينفع الحفظ بالشكل ده: السجل هيختفي من عندك (لازم يفضل على شركة أو مركز تكلفة من اللي عندك)"
@@ -184,7 +184,7 @@ def scoped_affs(s, sent, existing, cost_center):
     if any(a.get("companyId") and not u.company_ok(a["companyId"]) and a["companyId"] not in old for a in sent or []):
         return None, NEW_OUT_OF_SCOPE
     merged = u.merge_affs(sent, existing)
-    if not u.affs_ok(merged, db.cost_center_company(s, cost_center)):
+    if not u.affs_ok(merged, db.cost_center_company(s, cost_center), cost_center):
         return None, LEAVES_SCOPE
     return merged, None
 
@@ -1023,6 +1023,8 @@ def delete_cost_center(ccid):
             n = s.scalar(select(func.count()).select_from(M.Employee).where(M.Employee.costCenter == c.name))
             if n:
                 return err(f"لا يمكن الحذف: مرتبط بـ {n} موظف")
+            s.query(M.UserCostCenter).filter(M.UserCostCenter.costCenterId == ccid).delete()
+            s.flush()
             s.delete(c)
     return jsonify({"ok": True})
 
@@ -1040,13 +1042,13 @@ def save_candidate(cand_id=None):
     with db.session_scope() as s:
         old = s.get(M.Candidate, cand_id) if cand_id else None
         u = me()
-        if old and not u.record_ok(old.targetCompanyId, db.cost_center_company(s, old.costCenter)):
+        if old and not u.record_ok(old.targetCompanyId, db.cost_center_company(s, old.costCenter), old.costCenter):
             return forbidden(OUT_OF_SCOPE)
         target = (d.get("targetCompanyId") or None) if "targetCompanyId" in d else (old.targetCompanyId if old else None)
         if target and not u.company_ok(target) and target != (old.targetCompanyId if old else None):
             return forbidden(NEW_OUT_OF_SCOPE)
         cc = d["costCenter"] if "costCenter" in d else (old.costCenter if old else None)
-        if not u.record_ok(target, db.cost_center_company(s, cc)):
+        if not u.record_ok(target, db.cost_center_company(s, cc), cc):
             return forbidden(LEAVES_SCOPE)
         x = find_duplicate_civil_id(s, (d.get("civilId") or "").strip(), exclude_cand=cand_id)
         if x:
@@ -1081,7 +1083,7 @@ def save_candidate(cand_id=None):
 def delete_candidate(cand_id):
     with db.session_scope() as s:
         c = s.get(M.Candidate, cand_id)
-        if c and not me().record_ok(c.targetCompanyId, db.cost_center_company(s, c.costCenter)):
+        if c and not me().record_ok(c.targetCompanyId, db.cost_center_company(s, c.costCenter), c.costCenter):
             return forbidden(OUT_OF_SCOPE)
         if c:
             s.delete(c)
@@ -1096,7 +1098,7 @@ def convert_candidate(cand_id):
         c = s.get(M.Candidate, cand_id)
         if not c:
             return err("غير موجود", 404)
-        if not me().record_ok(c.targetCompanyId, db.cost_center_company(s, c.costCenter)):
+        if not me().record_ok(c.targetCompanyId, db.cost_center_company(s, c.costCenter), c.costCenter):
             return forbidden(OUT_OF_SCOPE)
         civil = (c.civilId or "").strip()
         if not civil:
@@ -1419,9 +1421,10 @@ def restore():
 # ---------------------------------------------------------------------------
 # المستخدمين (للمدير)
 # ---------------------------------------------------------------------------
-def _user_api(u, scopes):
+def _user_api(u, scopes, cc_scopes):
     return {"id": u.id, "username": u.username, "displayName": u.displayName, "roleId": u.roleId,
-            "allCompanies": bool(u.allCompanies), "companies": scopes.get(u.id, []), "active": bool(u.active),
+            "allCompanies": bool(u.allCompanies), "companies": scopes.get(u.id, []),
+            "costCenters": cc_scopes.get(u.id, []), "active": bool(u.active),
             "jobTitle": u.jobTitle, "email": u.email, "phone": u.phone,
             "lastLogin": db.ser(u.lastLogin), "createdAt": db.ser(u.createdAt)}
 
@@ -1447,16 +1450,20 @@ def _set_user_fields(s, u, d):
         u.active = bool(d["active"])
     if "allCompanies" in d:
         u.allCompanies = bool(d["allCompanies"])
+    s.flush()
     if "companies" in d:
         cids = [c for c in dict.fromkeys(d["companies"] or []) if s.get(M.Company, c)]
-        if not u.allCompanies and not cids:
-            return "اختار شركة واحدة على الأقل، أو فعّل «كل الشركات»"
-        s.flush()
         s.query(M.UserCompany).filter(M.UserCompany.userId == u.id).delete()
         s.add_all([M.UserCompany(userId=u.id, companyId=c) for c in cids])
-    elif "allCompanies" in d and not u.allCompanies and not s.scalar(
-            select(func.count()).select_from(M.UserCompany).where(M.UserCompany.userId == u.id)):
-        return "اختار شركة واحدة على الأقل، أو فعّل «كل الشركات»"
+    if "costCenters" in d:
+        ccids = [c for c in dict.fromkeys(d["costCenters"] or []) if s.get(M.CostCenter, c)]
+        s.query(M.UserCostCenter).filter(M.UserCostCenter.userId == u.id).delete()
+        s.add_all([M.UserCostCenter(userId=u.id, costCenterId=c) for c in ccids])
+    s.flush()
+    if not u.allCompanies and not (
+            s.scalar(select(func.count()).select_from(M.UserCompany).where(M.UserCompany.userId == u.id))
+            or s.scalar(select(func.count()).select_from(M.UserCostCenter).where(M.UserCostCenter.userId == u.id))):
+        return "اختار شركة أو مركز تكلفة واحد على الأقل، أو فعّل «كل الشركات»"
     if d.get("password"):
         if len(d["password"]) < 6:
             return "كلمة المرور لازم 6 أحرف على الأقل"
@@ -1468,10 +1475,12 @@ def _set_user_fields(s, u, d):
 @admin_required
 def list_users():
     with db.session_scope(commit=False) as s:
-        scopes = {}
+        scopes, cc_scopes = {}, {}
         for r in s.scalars(select(M.UserCompany)):
             scopes.setdefault(r.userId, []).append(r.companyId)
-        return jsonify([_user_api(u, scopes) for u in s.scalars(select(M.User).order_by(M.User.id))])
+        for r in s.scalars(select(M.UserCostCenter)):
+            cc_scopes.setdefault(r.userId, []).append(r.costCenterId)
+        return jsonify([_user_api(u, scopes, cc_scopes) for u in s.scalars(select(M.User).order_by(M.User.id))])
 
 
 @app.post("/api/users")
@@ -1533,6 +1542,7 @@ def delete_user(uid):
             if u.roleId and s.get(M.Role, u.roleId).isAdmin and u.active and not _active_admins(s, exclude=uid):
                 return err("لازم يفضل مدير نظام واحد نشط على الأقل")
             s.query(M.UserCompany).filter(M.UserCompany.userId == uid).delete()
+            s.query(M.UserCostCenter).filter(M.UserCostCenter.userId == uid).delete()
             s.flush()
             db.log_audit(s, "user_delete", f"حذف المستخدم: {u.username}", uname())
             s.delete(u)
