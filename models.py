@@ -265,6 +265,16 @@ class EmployeeFile(Base):
     uploadedBy: Mapped[Optional[str]] = col("uploaded_by", NAME)
 
 
+class Signature(Base):
+    """صورة توقيع الشخص (مفوّض أو موظف) — مرة واحدة لكل رقم مدني، وبتتحط في العقود لو اتختارت."""
+    __tablename__ = "signatures"
+    civilId: Mapped[str] = col("civil_id", ID, primary_key=True)
+    name: Mapped[Optional[str]] = col("name", NAME)            # اسم الملف الأصلي
+    path: Mapped[str] = col("path", Unicode(500), nullable=False)
+    uploadedAt: Mapped[Optional[datetime]] = col("uploaded_at", DateTime)
+    uploadedBy: Mapped[Optional[str]] = col("uploaded_by", NAME)
+
+
 class CompanyHistory(Base):
     __tablename__ = "company_history"
     id: Mapped[str] = col("id", ID, primary_key=True)
@@ -297,7 +307,7 @@ class EmployeeTimeline(Base):
 
 # ترتيب الجداول للنسخ/النقل (الأب قبل الابن)
 ALL_MODELS = [Meta, Role, User, Company, UserCompany, Project, CostCenter, Signatory, Employee, EmployeeAffiliation,
-              Vehicle, Candidate, CompanyDoc, SignatoryDoc, EmployeeFile, Template, CompanyHistory, AuditLog,
+              Vehicle, Candidate, CompanyDoc, SignatoryDoc, EmployeeFile, Signature, Template, CompanyHistory, AuditLog,
               EmployeeTimeline]
 # جداول الحسابات والصلاحيات ← بتتعامل مع بعض في النسخ الاحتياطي (include_users)
 AUTH_MODELS = (Role, User, UserCompany)

@@ -35,7 +35,7 @@ BASE_DIR = db.BASE_DIR
 BUILTIN_TEMPLATES = os.path.join(BASE_DIR, "templates_docs")     # القوالب اللي جاية مع الكود
 TEMPLATE_DOCS = db.data_path("templates_docs")                  # القوالب المستخدمة (بتتحفظ مع البيانات)
 UPLOADS = db.data_path("uploads")
-for sub in ("", "employees", "companies", "signatories", "logos", "imports"):
+for sub in ("", "employees", "companies", "signatories", "signatures", "logos", "imports"):
     os.makedirs(os.path.join(UPLOADS, sub), exist_ok=True)
 os.makedirs(TEMPLATE_DOCS, exist_ok=True)
 if os.path.abspath(TEMPLATE_DOCS) != os.path.abspath(BUILTIN_TEMPLATES) and os.path.isdir(BUILTIN_TEMPLATES):
@@ -808,6 +808,88 @@ def get_signatory_doc(civil_id):
     return send_file(db.resolve_file(r.path), download_name=r.name)
 
 
+# ---------------------------------------------------------------------------
+# التوقيعات (مفوّض أو موظف — واحد لكل رقم مدني)
+# ---------------------------------------------------------------------------
+def _signature_access(s, civil_id, write):
+    """مين يرفع/يشوف توقيع الرقم المدني ده: مفوّض في شركة من النطاق (الشركات)، أو موظف في النطاق (الجواز والمرفقات)."""
+    u = me()
+    is_sig = s.scalar(select(M.Signatory.id).where(M.Signatory.civilId == civil_id)) is not None
+    if is_sig and _signatory_visible(s, civil_id) and \
+            (u.can("companies.edit") if write else (u.can("companies.view") or u.can("contract.view"))):
+        return True
+    e = s.get(M.Employee, civil_id)
+    return bool(e) and emp_ok(s, civil_id) and u.can("sensitive.documents") and \
+        (u.can("employees.edit") if write else u.can("employees.view"))
+
+
+@app.post("/api/signatures/<civil_id>")
+@login_required
+def upload_signature(civil_id):
+    f = request.files.get("file")
+    if not f:
+        return err("لا يوجد ملف")
+    data = f.read()
+    msg = contracts.check_signature_image(data)
+    if msg:
+        return err(msg)
+    with db.session_scope() as s:
+        if not _signature_access(s, civil_id, write=True):
+            return forbidden()
+        ext = ".png" if data[:4] == b"\x89PNG" else ".jpg"
+        old = s.get(M.Signature, civil_id)
+        if old:
+            try:
+                os.remove(db.resolve_file(old.path))
+            except OSError:
+                pass
+        path = os.path.join(UPLOADS, "signatures", f"{civil_id}_{db.new_id('s')}{ext}")
+        with open(path, "wb") as out:
+            out.write(data)
+        s.merge(M.Signature(civilId=civil_id, name=f.filename, path=db.rel_file(path), uploadedAt=db.now(), uploadedBy=uname()))
+        if s.get(M.Employee, civil_id):
+            db.push_timeline(s, civil_id, "file", "رفع صورة التوقيع", uname())
+        db.log_audit(s, "signature_upload", f"رفع توقيع للرقم المدني {civil_id}", uname())
+    return jsonify({"ok": True})
+
+
+@app.delete("/api/signatures/<civil_id>")
+@login_required
+def delete_signature(civil_id):
+    with db.session_scope() as s:
+        r = s.get(M.Signature, civil_id)
+        if not r:
+            return jsonify({"ok": True})
+        if not _signature_access(s, civil_id, write=True):
+            return forbidden()
+        try:
+            os.remove(db.resolve_file(r.path))
+        except OSError:
+            pass
+        s.delete(r)
+        db.log_audit(s, "signature_delete", f"حذف توقيع الرقم المدني {civil_id}", uname())
+    return jsonify({"ok": True})
+
+
+@app.get("/files/signature/<civil_id>")
+@login_required
+def get_signature(civil_id):
+    with db.session_scope(commit=False) as s:
+        if not _signature_access(s, civil_id, write=False):
+            abort(403)
+        r = s.get(M.Signature, civil_id)
+    if not r:
+        abort(404)
+    try:        # في الذاكرة (صورة صغيرة) ← الملف مايفضلش مفتوح، فويندوز يقدر يمسحه لو التوقيع اتغيّر
+        with open(db.resolve_file(r.path), "rb") as fh:
+            data = fh.read()
+    except OSError:
+        abort(404)
+    resp = send_file(io.BytesIO(data), mimetype="image/png" if data[:4] == b"\x89PNG" else "image/jpeg")
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
 @app.post("/api/projects")
 @require("companies.edit")
 def create_project():
@@ -1077,14 +1159,39 @@ def _contract_context(s, emp_id, args, fill=True, tpl=None):
     ctx = contracts.extra_context(docx_engine.resolve_contract_template(
         emp, company, db.to_dict(sig), project, args.get("date") or None))
     contracts.housing_context(ctx, contracts.housing_included(args.get("housing"), emp))
+    contracts.signature_context(ctx)
     data = None
     if fill:
         tpl = tpl or _contract_template(s, args.get("tpl"))
         data = docx_engine.fill_docx_template(os.path.join(TEMPLATE_DOCS, tpl.filename), ctx)
+        images = {}
+        if _truthy(args.get("signFirst")) and sig is not None and sig.civilId:
+            images["first"] = _signature_file(s, sig.civilId)
+        if _truthy(args.get("signSecond")):
+            images["second"] = _signature_file(s, emp["id"])
+        data = contracts.apply_signatures(data, images)
+    ctx["_signatoryCivilId"] = sig.civilId if sig is not None else None
     return emp, ctx, data
 
 
+def _truthy(v):
+    return str(v).lower() in ("1", "true", "on", "yes")
+
+
+def _signature_file(s, civil_id):
+    r = s.get(M.Signature, civil_id) if civil_id else None
+    path = db.resolve_file(r.path) if r else None
+    return path if path and os.path.exists(path) else None
+
+
+def _check_sign_args(args):
+    """التوقيعات على العقود محتاجة صلاحية contract.sign."""
+    if (_truthy(args.get("signFirst")) or _truthy(args.get("signSecond"))) and not me().can("contract.sign"):
+        abort(403, "طباعة العقود بالتوقيعات محتاجة صلاحية «طباعة العقود بالتوقيعات المرفوعة»")
+
+
 def _contract_bundle(args):
+    _check_sign_args(args)
     with db.session_scope(commit=False) as s:
         emp, ctx, data = _contract_context(s, args.get("emp", ""), args)
     return emp, data, ctx
@@ -1120,6 +1227,7 @@ def contract_pdf():
 # --- عقود كتير مرة واحدة ---
 def _batch_args():
     d = body()
+    _check_sign_args(d)
     ids = list(dict.fromkeys(str(x) for x in (d.get("emps") or []) if x))
     if not ids:
         abort(400, "اختار موظف واحد على الأقل")
@@ -1132,7 +1240,7 @@ def _batch_emp_args(d, emp):
     """تاريخ العقد: تاريخ واحد للكل، أو تاريخ تعيين كل موظف (ولو مالوش ← التاريخ الموحّد)."""
     date = (emp.get("dateOfHire") if d.get("useHireDate") else None) or d.get("date") or None
     return {"tpl": d.get("tpl"), "date": date, "company": d.get("company") or None, "sig": d.get("sig") or None,
-            "housing": d.get("housing", "1")}
+            "housing": d.get("housing", "1"), "signFirst": d.get("signFirst"), "signSecond": d.get("signSecond")}
 
 
 def _sig_registered(s, sig, company_id):
@@ -1147,7 +1255,7 @@ def _sig_registered(s, sig, company_id):
 def contract_batch_check():
     """البيانات الناقصة لكل موظف قبل إنشاء العقود."""
     d, ids = _batch_args()
-    out, not_registered = [], {}
+    out, not_registered, no_sig_emps, no_sig_first = [], {}, [], {}
     with db.session_scope(commit=False) as s:
         sig = s.get(M.Signatory, d.get("sig") or "")
         for i in ids:
@@ -1158,12 +1266,21 @@ def contract_batch_check():
             miss = contracts.missing_fields(ctx)
             if miss:
                 out.append({"id": i, "name": emp["name"], "missing": miss})
+            if _truthy(d.get("signSecond")) and not _signature_file(s, i):
+                no_sig_emps.append(emp["name"])
+            if _truthy(d.get("signFirst")):
+                civ = ctx.get("_signatoryCivilId")
+                if not _signature_file(s, civ):
+                    key = ctx.get("auth_name") or "—"
+                    no_sig_first[key] = no_sig_first.get(key, 0) + 1
             cid = d.get("company") or (base["affiliations"] or [{}])[0].get("companyId")
             if sig and cid and not _sig_registered(s, sig, cid):
                 not_registered[cid] = not_registered.get(cid, 0) + 1
         sig_warn = [{"company": (s.get(M.Company, c).nameAr if s.get(M.Company, c) else c), "count": n}
                     for c, n in not_registered.items()]
-    return jsonify({"count": len(ids), "incomplete": out, "sigNotRegistered": sig_warn, "engine": contracts.backend()})
+    return jsonify({"count": len(ids), "incomplete": out, "sigNotRegistered": sig_warn, "engine": contracts.backend(),
+                    "noSignatureEmployees": no_sig_emps,
+                    "noSignatureSignatories": [{"name": k, "count": v} for k, v in no_sig_first.items()]})
 
 
 @app.post("/api/contract/batch")
@@ -1187,6 +1304,9 @@ def contract_batch():
         if d.get("sig") and s.get(M.Signatory, d["sig"]):
             chosen += f" — المفوّض: {s.get(M.Signatory, d['sig']).nameAr}"
         chosen += " — بند بدل السكن: " + {"0": "لا يُضاف", "auto": "حسب بيانات الموظف"}.get(str(d.get("housing", "1")), "يُضاف")
+        signs = [x for x, k in (("المفوّض", "signFirst"), ("الموظف", "signSecond")) if _truthy(d.get(k))]
+        if signs:
+            chosen += " — بتوقيع: " + " و".join(signs)
     stamp = datetime.now().strftime("%Y-%m-%d")
     if fmt == "zip":
         out, name, mime = contracts.zip_docs(named), f"عقود عمل ({len(named)}) - {stamp}.zip", "application/zip"

@@ -267,6 +267,9 @@ async function openProfileCard(id, tab = 'info') {
         ${EMP_DATE_FIELDS.filter(f => !f.driverOnly || e.isDriver).map(f => `<tr><td>${esc(t(f.label))}</td><td>${f.key === 'passportExp' ? esc(e.passportNo || '') : ''}</td><td>${datePill(e[f.key])}</td><td class="small">${esc(daysText(daysUntil(e[f.key])))}</td>
           <td class="write-only" data-p="employees.edit"><button class="btn sm" data-renew="${f.key}">🔄 ${t('تجديد سريع')}</button></td></tr>`).join('')}
         </tbody></table>
+        <div data-p="sensitive.documents"><h4>✍️ ${t('التوقيع')}</h4>
+          <div class="row">${hasSignature(e.id) ? `<img src="${esc(STATE.signatures[e.id].url)}?t=${encodeURIComponent(STATE.signatures[e.id].uploadedAt || '')}" alt="" style="max-height:60px;background:#fff;border:1px solid var(--border);border-radius:6px;padding:4px">` : `<span class="muted">${t('مفيش توقيع مرفوع')}</span>`}
+            <span class="spacer"></span><button class="btn sm" data-a="signature">✍️ ${hasSignature(e.id) ? t('عرض / تغيير') : t('رفع التوقيع')}</button></div></div>
         <h4>${t('المعاملة الحكومية')}</h4>
         <div class="kv">${field('المرحلة', govStagePill(e.govStage))}${field('المسؤول', esc(e.govStageResponsible))}${field('تاريخ البدء', fmtDate(e.govStageStartDate))}${can('sensitive.salary') ? field('التكلفة', fmtMoney(e.govTransactionCost)) : ''}</div>
         ${comp.missing.length ? `<div class="notice warn" style="margin-top:10px">${t('بيانات ناقصة')}: ${comp.missing.map(x => esc(t(x))).join('، ')}</div>` : ''}
@@ -293,6 +296,7 @@ async function openProfileCard(id, tab = 'info') {
     const a = b.dataset.a;
     if (a === 'edit') { m.close(); openEmployeeModal(e.id); }
     else if (a === 'stage') { m.close(); openGovStageModal(e.id); }
+    else if (a === 'signature') { m.close(); openSignatureModal(e.id, e.name, canAll('employees.edit sensitive.documents')); }
     else if (a === 'contract') { m.close(); VIEW_ARGS = { emp: e.id }; setView('contract'); }
     else if (a === 'print') printHtml(e.name, `<h1>${esc(e.name)}</h1><div class="muted">${esc(e.nameEn || '')} · ${esc(e.id)}</div>` + $('[data-pane="info"]', m.el).innerHTML + $('[data-pane="docs"]', m.el).innerHTML);
     else if (a === 'delete') {

@@ -157,7 +157,7 @@ function isReadOnly() { return !!(STATE && STATE.me && STATE.me.readOnly); }
 const PERM_KEYS = [
   ...['employees', 'companies', 'vehicles', 'costcenters', 'recruitment'].flatMap(m => ['view', 'edit', 'delete'].map(a => `${m}.${a}`)),
   'contract.view', 'contract.edit', 'companylog.view',
-  'sensitive.salary', 'sensitive.bank', 'sensitive.documents', 'system.import', 'system.backup', 'scope.all', 'admin',
+  'sensitive.salary', 'sensitive.bank', 'sensitive.documents', 'system.import', 'system.backup', 'contract.sign', 'scope.all', 'admin',
 ];
 const VIEW_PERM = { employees: 'employees.view', companies: 'companies.view', vehicles: 'vehicles.view', costcenters: 'costcenters.view',
   contract: 'contract.view', recruitment: 'recruitment.view', companylog: 'companylog.view' };
@@ -187,6 +187,37 @@ function companyInScope(cid) { const c = cid && IDX.company[cid]; return !c || !
 function scopedEmployees() { return STATE.employees; }
 function scopedCompanies() { return STATE.companies.filter(c => !c.outOfScope); }
 function scopedProjects() { return STATE.projects.filter(p => !p.outOfScope); }
+/* ---------- التوقيعات (واحد لكل رقم مدني: مفوّض أو موظف) ---------- */
+function hasSignature(civilId) { return !!(civilId && STATE.signatures && STATE.signatures[civilId]); }
+function signatureChip(civilId) {
+  return hasSignature(civilId) ? `<span class="chip on" title="${esc(t('التوقيع مرفوع'))}">✍️ ✓</span>` : `<span class="chip" title="${esc(t('مفيش توقيع مرفوع'))}">✍️ —</span>`;
+}
+/** نافذة التوقيع: عرض + رفع/تغيير + حذف. canWrite = صلاحية التعديل على الشخص ده */
+function openSignatureModal(civilId, name, canWrite) {
+  if (!civilId) return openBlockAlert(t('سجّل الرقم المدني الأول'));
+  const has = hasSignature(civilId);
+  const m = openModal({
+    title: '✍️ ' + t('التوقيع') + ': ' + esc(name || civilId), size: 'narrow',
+    body: `<div class="notice">${t('التوقيع بيتحفظ مرة واحدة لكل رقم مدني، وبيتحط في العقود لو اخترت «بتوقيع» وقت الطباعة.')}</div>
+      <div class="sig-box">${has ? `<img src="${esc(STATE.signatures[civilId].url)}?t=${encodeURIComponent(STATE.signatures[civilId].uploadedAt || '')}" alt="">` : `<span class="muted">${t('مفيش توقيع مرفوع')}</span>`}</div>
+      ${has ? `<div class="small muted" style="margin-top:6px">${t('آخر رفع')}: ${fmtDateTime(STATE.signatures[civilId].uploadedAt)}</div>` : ''}
+      <p class="small muted">${t('الأفضل صورة PNG بخلفية شفافة أو بيضاء، التوقيع واضح وممسوح حواليه (أقل من 3MB).')}</p>`,
+    foot: `${canWrite ? `<button class="btn primary" data-up>📤 ${has ? t('تغيير التوقيع') : t('رفع التوقيع')}</button>${has ? `<button class="btn danger" data-del>🗑️ ${t('حذف')}</button>` : ''}` : ''}
+      <span class="spacer"></span><button class="btn" data-close>إغلاق</button>`,
+  });
+  const up = $('[data-up]', m.el), del = $('[data-del]', m.el);
+  if (up) up.onclick = async () => {
+    const f = await pickFile('image/png,image/jpeg');
+    if (!f) return;
+    const fd = new FormData(); fd.append('file', f);
+    try { await persist('POST', '/api/signatures/' + encodeURIComponent(civilId), fd, 'تم رفع التوقيع'); m.close(); openSignatureModal(civilId, name, canWrite); } catch (_) {}
+  };
+  if (del) del.onclick = async () => {
+    if (!await openConfirm(t('حذف التوقيع؟'), { danger: true })) return;
+    try { await persist('DELETE', '/api/signatures/' + encodeURIComponent(civilId), undefined, 'تم الحذف'); m.close(); } catch (_) {}
+  };
+}
+
 /** الشركة الفعلية لمركز تكلفة (بالاسم) */
 function costCenterCompanyId(name) { const c = name && STATE.costCenters.find(x => x.name === name); return (c && c.companyId) || null; }
 /** الموظف تابع للشركة: مسجّل عليها أو على مركز تكلفة تابع لها */
@@ -693,6 +724,7 @@ const PERM_LABELS = {
   other: {
     'sensitive.salary': 'المرتب وبدل السكن وتكلفة المعاملات', 'sensitive.bank': 'البنك والـ IBAN',
     'sensitive.documents': 'رقم الجواز والمرفقات', 'system.import': 'استيراد الموظفين من Excel/CSV', 'system.backup': 'تنزيل نسخة احتياطية كاملة',
+    'contract.sign': 'طباعة العقود بالتوقيعات المرفوعة (المفوّض والموظف)',
   },
 };
 /** ملخص صلاحيات دور بشكل مقروء: [{label, acts:[…]}] */

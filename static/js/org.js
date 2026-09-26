@@ -40,6 +40,7 @@ function renderCompanies() {
         return `<div class="row small" style="padding:4px 0;border-bottom:1px dashed var(--border)"><b>${esc(s.nameAr)}</b><span class="muted">${esc(s.nameEn || '')}</span><span class="num">${esc(s.civilId || '')}</span>
           <span class="spacer"></span>${sd ? `${datePill(sd.expiryDate)} ${sd.url && sd.name ? `<a class="btn sm" href="${esc(sd.url)}" target="_blank">🪪</a>` : ''}` : ''}
           <button class="btn sm write-only" data-p="companies.edit" data-sig-doc="${esc(s.civilId || '')}">🪪 ${t('البطاقة')}</button>
+          <button class="btn sm" data-sig-sign="${esc(s.civilId || '')}" data-sig-name="${esc(s.nameAr)}">${hasSignature(s.civilId) ? '✍️ ✓' : '✍️'} ${t('التوقيع')}</button>
           <button class="btn sm write-only" data-p="companies.edit" data-sig-edit="${s.id}">✏️</button><button class="btn sm danger write-only" data-p="companies.delete" data-sig-del="${s.id}">✕</button></div>`;
       }).join('') || `<div class="muted small">—</div>`}
       <h4 style="margin:12px 0 6px">📁 ${t('المشاريع')} <button class="btn sm write-only" data-p="companies.edit" data-proj-add="${c.id}">➕</button></h4>
@@ -67,6 +68,7 @@ function renderCompanies() {
   $$('[data-sig-edit]', R).forEach(b => b.onclick = () => { const s = STATE.companies.flatMap(c => c.signatories).find(x => x.id === b.dataset.sigEdit); openSignatoryModal(s.companyId, s); });
   $$('[data-sig-del]', R).forEach(b => b.onclick = async () => { if (await openConfirm(t('حذف المفوّض؟'), { danger: true })) await persist('DELETE', '/api/signatories/' + b.dataset.sigDel, undefined, 'تم الحذف'); });
   $$('[data-sig-doc]', R).forEach(b => b.onclick = () => openCivilIdDocModal(b.dataset.sigDoc));
+  $$('[data-sig-sign]', R).forEach(b => b.onclick = () => openSignatureModal(b.dataset.sigSign, b.dataset.sigName, can('companies.edit')));
   $$('[data-proj-add]', R).forEach(b => b.onclick = () => openProjectModal(b.dataset.projAdd, null));
   $$('[data-proj-edit]', R).forEach(b => b.onclick = () => { const p = IDX.project[b.dataset.projEdit]; openProjectModal(p.companyId, p); });
   $$('[data-proj-del]', R).forEach(b => b.onclick = async () => { if (await openConfirm(t('حذف المشروع؟ (الموظفين هيفضلوا في الشركة بدون مشروع)'), { danger: true })) await persist('DELETE', '/api/projects/' + b.dataset.projDel, undefined, 'تم الحذف'); });

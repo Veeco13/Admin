@@ -40,6 +40,7 @@ SENSITIVE = [
 SYSTEM = [
     ("system.import", "استيراد الموظفين من Excel/CSV"),
     ("system.backup", "تنزيل نسخة احتياطية كاملة"),
+    ("contract.sign", "طباعة العقود بالتوقيعات المرفوعة (المفوّض والموظف)"),
 ]
 
 ALL_KEYS = ([f"{m}.{a}" for m, _, acts in MODULES for a in acts]

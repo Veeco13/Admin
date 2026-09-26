@@ -13,7 +13,7 @@ const CONTRACT_FIELDS_HELP = [
   ['passport_no', 'رقم الجواز'], ['residency_exp', 'انتهاء الإقامة'],
   ['housing_clause', 'بند بدل السكن (أو «لايوجد»)'], ['housing_clause_en', 'بند بدل السكن بالإنجليزي (أو NONE)'],
 ];
-let CONTRACT = { emp: '', tpl: '', company: '', sig: '', date: '', salary: '', housing: '1' };
+let CONTRACT = { emp: '', tpl: '', company: '', sig: '', date: '', salary: '', housing: '1', signFirst: '', signSecond: '' };
 let CONTRACT_PREVIEW = 'pdf';          // pdf | quick
 
 function contractQuery(extra = {}) {
@@ -28,7 +28,7 @@ function renderContractView() {
       <div class="notice warn">${t('إنشاء العقود محتاج صلاحية عرض الموظفين وصلاحية «المرتب» لأن العقد فيه الراتب. كلّم مدير النظام.')}</div>`;
     return;
   }
-  if (VIEW_ARGS.emp) { CONTRACT = { emp: VIEW_ARGS.emp, tpl: CONTRACT.tpl, company: '', sig: '', date: '', salary: '', housing: CONTRACT.housing }; VIEW_ARGS = {}; }
+  if (VIEW_ARGS.emp) { CONTRACT = { emp: VIEW_ARGS.emp, tpl: CONTRACT.tpl, company: '', sig: '', date: '', salary: '', housing: CONTRACT.housing, signFirst: CONTRACT.signFirst, signSecond: CONTRACT.signSecond }; VIEW_ARGS = {}; }
   const e = IDX.employee[CONTRACT.emp];
   const defTpl = STATE.templates.find(x => x.isDefault) || STATE.templates[0];
   if (!CONTRACT.tpl || !IDX.template[CONTRACT.tpl]) CONTRACT.tpl = defTpl ? defTpl.id : '';
@@ -36,6 +36,7 @@ function renderContractView() {
   const sigs = coId && IDX.company[coId] ? IDX.company[coId].signatories : STATE.companies.flatMap(c => c.signatories);
   if (CONTRACT.sig && !sigs.find(s => s.id === CONTRACT.sig)) CONTRACT.sig = '';
   const empList = scopedEmployees().filter(x => x.employmentStatus !== 'terminated');
+  const selSig = CONTRACT.sig ? sigs.find(s => s.id === CONTRACT.sig) : (coId && IDX.company[coId] ? (IDX.company[coId].signatories || [])[0] : null);
   const pdfMode = STATE.pdfAvailable && CONTRACT_PREVIEW === 'pdf';
 
   viewRoot().innerHTML = `<div class="page-head"><div><h1>عقد العمل</h1><div class="sub">${t('ملف Word أو PDF بنفس تنسيق القالب')}</div></div>
@@ -51,6 +52,10 @@ function renderContractView() {
           <label>${t('تاريخ العقد')}<input type="date" id="c-date" value="${esc(CONTRACT.date || (e && e.dateOfHire) || '')}"></label>
           <label>${t('الراتب في العقد (اختياري)')}<input type="number" step="0.001" id="c-salary" placeholder="${e && e.salary ? esc(e.salary) : ''}" value="${esc(CONTRACT.salary)}"></label>
           <label class="check"><input type="checkbox" id="c-housing" ${CONTRACT.housing !== '0' ? 'checked' : ''}> ${t('إضافة بند بدل السكن (البند الثالث عشر)')}</label>
+          <label class="check" data-p="contract.sign"><input type="checkbox" id="c-sign1" ${CONTRACT.signFirst ? 'checked' : ''}> ✍️ ${t('بتوقيع المفوّض')}
+            ${selSig ? (hasSignature(selSig.civilId) ? '<span class="small" style="color:var(--green,#1f7a4d)">✓</span>' : `<span class="small" style="color:var(--orange)">(${t('مفيش توقيع مرفوع')})</span>`) : ''}</label>
+          <label class="check" data-p="contract.sign"><input type="checkbox" id="c-sign2" ${CONTRACT.signSecond ? 'checked' : ''}> ✍️ ${t('بتوقيع الموظف')}
+            ${e ? (hasSignature(e.id) ? '<span class="small" style="color:var(--green,#1f7a4d)">✓</span>' : `<span class="small" style="color:var(--orange)">(${t('مفيش توقيع مرفوع')})</span>`) : ''}</label>
         </div>
         <div id="c-warn"></div>
         <div class="row" style="margin-top:12px;flex-wrap:wrap">
@@ -90,6 +95,8 @@ function renderContractView() {
   $('#c-date').onchange = ev => set({ date: ev.target.value });
   $('#c-salary').onchange = ev => set({ salary: ev.target.value });
   $('#c-housing').onchange = ev => set({ housing: ev.target.checked ? '1' : '0' });
+  $('#c-sign1').onchange = ev => set({ signFirst: ev.target.checked ? '1' : '' });
+  $('#c-sign2').onchange = ev => set({ signSecond: ev.target.checked ? '1' : '' });
   $$('[data-pv]').forEach(b => b.onclick = () => { CONTRACT_PREVIEW = b.dataset.pv; render(); });
   $('#c-batch').onclick = () => openBatchContractModal(CONTRACT.emp ? [CONTRACT.emp] : []);
   $('#c-print').onclick = () => {
@@ -139,6 +146,8 @@ function openBatchContractModal(preselected = []) {
         <label>${t('المفوّض بالتوقيع')}<select name="sig">${batchSigOptions('')}</select></label>
         <label>${t('بند بدل السكن (البند الثالث عشر)')}<select name="housing">${opt('1', t('يُضاف لكل العقود'), true)}${opt('0', t('لا يُضاف («لايوجد»)'), false)}${opt('auto', t('حسب «بدل السكن مشمول» عند كل موظف'), false)}</select></label>
         <label>${t('تاريخ العقد')}<input type="date" name="date" value="${todayISO()}"></label>
+        <label class="check" data-p="contract.sign"><input type="checkbox" name="signFirst"> ✍️ ${t('بتوقيع المفوّض (المرفوع)')}</label>
+        <label class="check" data-p="contract.sign"><input type="checkbox" name="signSecond"> ✍️ ${t('بتوقيع الموظف (المرفوع)')}</label>
         <label class="check"><input type="checkbox" name="useHireDate"> ${t('استخدم تاريخ تعيين كل موظف (واللي مالوش ← التاريخ ده)')}</label>
       </div>
       <div class="small muted" id="bc-hint" style="margin:6px 0"></div>
@@ -212,7 +221,8 @@ function openBatchContractModal(preselected = []) {
     const o = formValues($('#bc-opts', el));
     // الترتيب: زي ترتيب القائمة (بالاسم)
     const order = scopedEmployees().map(e => e.id).filter(id => sel.has(id));
-    return { emps: order, tpl: o.tpl, date: o.date, useHireDate: !!o.useHireDate, company: o.company || '', sig: o.sig || '', housing: o.housing || '1' };
+    return { emps: order, tpl: o.tpl, date: o.date, useHireDate: !!o.useHireDate, company: o.company || '', sig: o.sig || '', housing: o.housing || '1',
+      signFirst: can('contract.sign') && !!o.signFirst, signSecond: can('contract.sign') && !!o.signSecond };
   };
   $$('[data-go]', el).forEach(b => b.onclick = async () => {
     const go = b.dataset.go, p = payload();
@@ -226,12 +236,15 @@ function openBatchContractModal(preselected = []) {
       msg(`<div class="notice">${t('جاري فحص البيانات…')}</div>`);
       const chk = await api('POST', '/api/contract/batch/check', p);
       const sigWarn = chk.sigNotRegistered || [];
-      if (chk.incomplete.length || sigWarn.length) {
+      const noSigE = chk.noSignatureEmployees || [], noSigF = chk.noSignatureSignatories || [];
+      if (chk.incomplete.length || sigWarn.length || noSigE.length || noSigF.length) {
         const list = chk.incomplete.slice(0, 15).map(x => `<li><b>${esc(x.name)}</b>: ${x.missing.map(y => esc(t(y))).join('، ')}</li>`).join('');
         const sw = sigWarn.map(x => `<li>${esc(x.company)} (${x.count} ${t('عقد')})</li>`).join('');
         const ok = await openConfirm(
           (chk.incomplete.length ? `${chk.incomplete.length} ${t('عقد فيه بيانات ناقصة وهيطلع فيه خانات فاضية')}:<ul style="margin:6px 0">${list}</ul>${chk.incomplete.length > 15 ? '…' : ''}` : '')
           + (sw ? `⚠️ ${t('المفوّض المختار مش مسجّل كمفوّض بالتوقيع في')}:<ul style="margin:6px 0">${sw}</ul>` : '')
+          + (noSigF.length ? `✍️ ${t('مفيش توقيع مرفوع للمفوّض (الخانة هتفضل فاضية)')}:<ul style="margin:6px 0">${noSigF.map(x => `<li>${esc(x.name)} (${x.count} ${t('عقد')})</li>`).join('')}</ul>` : '')
+          + (noSigE.length ? `✍️ ${noSigE.length} ${t('موظف مالهمش توقيع مرفوع (الخانة هتفضل فاضية)')}${noSigE.length <= 10 ? ': ' + noSigE.map(esc).join('، ') : ''}<br>` : '')
           + t('تكمّل؟'), { okLabel: t('كمّل') });
         if (!ok) { msg(''); return; }
       }

@@ -440,6 +440,11 @@ def dump_state(s, ctx=None):
                     d["label"] = redact_salary(d["label"])
                 timeline.setdefault(r.employeeId, []).append(d)
 
+    # التوقيعات المرفوعة: للمفوّضين الظاهرين، وللموظفين الظاهرين لو معاه «الجواز والمرفقات»
+    sig_people = set(visible_sigs) | (emp_ids if can("sensitive.documents") else set())
+    signatures = {r.civilId: {"uploadedAt": ser(r.uploadedAt), "url": f"/files/signature/{r.civilId}"}
+                  for r in s.scalars(select(M.Signature)) if not ctx or r.civilId in sig_people}
+
     audit = []
     if can("companylog.view") and all_companies:     # سجل التدقيق مش مربوط بشركة ← للنطاق الكامل بس
         for x in s.scalars(select(M.AuditLog).order_by(M.AuditLog.date.desc()).limit(2000)):
@@ -467,6 +472,7 @@ def dump_state(s, ctx=None):
             for r in s.scalars(select(M.SignatoryDoc)) if not ctx or r.civilId in visible_sigs
         } if can("companies.view") else {},
         "auditLog": audit,
+        "signatures": signatures,
         "employeeTimeline": timeline,
         "templates": [to_dict(x) for x in s.scalars(select(M.Template).order_by(M.Template.isDefault.desc(),
                                                                                   M.Template.createdAt))]

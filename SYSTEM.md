@@ -143,6 +143,7 @@ zahed/
 | `employee_files` | المرفقات (بدل Google Drive) |
 | `templates` | قوالب Word، ومنها قالب واحد افتراضي (`is_default`) |
 | `cost_centers` | معاه `company_id`: الشركة الفعلية لموظفين المركز (القسم 19) |
+| `signatures` | صورة توقيع لكل رقم مدني، مفوّض أو موظف (القسم 11) |
 | `roles` | الأدوار، والصلاحيات JSON (القسم 19) |
 | `users` | المستخدمين: الدور (`role_id`)، `all_companies`، `active`، الوظيفة، آخر دخول |
 | `user_companies` | نطاق الشركات للمستخدم لو `all_companies = false` |
@@ -261,7 +262,13 @@ fill_docx_template()  ← {{ field }} حتى لو متقسّم على أكتر �
   - من غير البند بيتكتب «لايوجد» / «NONE» زي البندين 2 و3.
   - البارامتر `housing`: `1` يُضاف (الافتراضي)، `0` لا يُضاف، `auto` حسب «بدل السكن مشمول» عند الموظف.
   - في الواجهة: مربع اختيار في العقد الفردي، واختيار من التلاتة في العقود المتعددة.
-- **الصلاحيات:** العقود (فردي ومتعدد) محتاجة `contract.view` و`employees.view` و`sensitive.salary`، وكل موظف لازم يكون في نطاق المستخدم.
+- **التوقيعات:** صورة توقيع واحدة لكل رقم مدني (جدول `signatures`، ترحيل `0005`)، سواء كان مفوّض أو موظف.
+  - **الرفع:** المفوّض من شاشة الشركات (زر «✍️ التوقيع» جنب كل مفوّض)، والموظف من ملفه في تبويب «المستندات والتواريخ».
+  - **في القوالب التلاتة:** `{{sig_first_party}}` و`{{sig_second_party}}` في أول سطر فاضي تحت «الطرف الأول» و«الطرف الثاني». المحرك بيحط مكانهم علامة، و`contracts.apply_signatures()` بتحط الصورة (ارتفاع 1.4 سم، وعرض لحد 5 سم) أو تشيل العلامة.
+  - **الصفحات:** بعد صورة الطرف الأول بيتشال سطرين فاضيين، عشان العقد يفضل صفحتين.
+  - **على العقد:** `signFirst` / `signSecond` (مربعات «بتوقيع المفوّض / الموظف» في العقد الفردي والمتعدد). الفحص قبل الدفعة بيعدّ اللي مالهمش توقيع مرفوع، وخانتهم بتفضل فاضية.
+  - **صلاحيات الرفع والعرض:** توقيع المفوّض (`companies.edit` للرفع، و`companies.view` أو `contract.view` للعرض، في شركة من النطاق). توقيع الموظف (`employees.edit` + `sensitive.documents` للرفع، و`employees.view` + `sensitive.documents` للعرض، والموظف في النطاق).
+- **الصلاحيات:** العقود (فردي ومتعدد) محتاجة `contract.view` و`employees.view` و`sensitive.salary`، وكل موظف لازم يكون في نطاق المستخدم. **والعقود بالتوقيعات** محتاجة كمان `contract.sign`، ودي اتضافت لدوري «محرر» و«موارد بشرية».
 
 ---
 
@@ -289,7 +296,8 @@ fill_docx_template()  ← {{ field }} حتى لو متقسّم على أكتر �
 | POST | `/api/signatory-docs/<civilId>` | بطاقة المفوّض |
 | POST | `/api/candidates/<id>/convert` | تحويل لموظف |
 | GET | `/api/contract/preview`، `/docx`، `/pdf` | العقود. البارامترات: `emp`، `tpl`، `company`، `sig`، `date`، `salary`. `pdf` من غير `dl=1` = معاينة |
-| POST | `/api/contract/batch`، `/api/contract/batch/check` | عقود متعددة: `{emps, tpl, date, useHireDate, format: pdf\|zip, dl}` |
+| POST | `/api/contract/batch`، `/api/contract/batch/check` | عقود متعددة: `{emps, tpl, date, useHireDate, company, sig, housing, signFirst, signSecond, format: pdf\|zip, dl}` |
+| POST / DELETE | `/api/signatures/<civilId>`، GET `/files/signature/<civilId>` | صورة التوقيع (PNG/JPG أقل من 3MB) |
 | POST / DELETE | `/api/templates[/<id>]`، `/api/templates/<id>/default` | القوالب |
 | GET / POST | `/api/backup`، `/api/restore` | النسخ الاحتياطي (JSON لكل الجداول) |
 | GET / POST / PUT / DELETE | `/api/users` | المستخدمين (للمدير بس) |
@@ -483,6 +491,7 @@ docker compose exec db pg_dump -U lunx lunx > lunx.sql          # نسخة SQL �
 | `sensitive.documents` | رقم الجواز ومرفقات الموظف |
 | `system.import` | استيراد Excel/CSV. محتاج كمان `employees.edit` وكل البيانات الحساسة ونطاق كل الشركات |
 | `system.backup` | تنزيل نسخة احتياطية. محتاج كمان كل البيانات الحساسة ونطاق كل الشركات |
+| `contract.sign` | طباعة العقود بالتوقيعات المرفوعة (المفوّض والموظف) |
 
 - التعديل أو الحذف بيضيف «عرض» لوحده.
 - الدور اللي `is_admin` عنده كل الصلاحيات على كل الشركات، ومعاها إدارة المستخدمين والأدوار والاستعادة.

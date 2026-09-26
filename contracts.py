@@ -113,6 +113,71 @@ def housing_context(ctx, include):
     return ctx
 
 
+# ---------------------------------------------------------------------------
+# التوقيعات: القالب فيه {{sig_first_party}} و{{sig_second_party}} في جدول التوقيع.
+# المحرك بيحط مكانهم علامة نصية، وبعدين apply_signatures بتحط الصورة مكان العلامة (أو تشيلها).
+# ---------------------------------------------------------------------------
+SIG_MARKS = {"first": "[[LUNX_SIG_FIRST]]", "second": "[[LUNX_SIG_SECOND]]"}
+SIG_HEIGHT_CM, SIG_MAX_WIDTH_CM = 1.4, 5.0
+SIG_MAX_BYTES = 3 * 1024 * 1024
+
+
+def signature_context(ctx):
+    ctx["sig_first_party"] = SIG_MARKS["first"]
+    ctx["sig_second_party"] = SIG_MARKS["second"]
+    return ctx
+
+
+def check_signature_image(data):
+    """صورة التوقيع: PNG أو JPG، أقل من 3MB. بيرجّع رسالة خطأ أو None."""
+    from docx.image.image import Image as DocxImage
+    if len(data) > SIG_MAX_BYTES:
+        return "حجم صورة التوقيع لازم يكون أقل من 3MB"
+    if not (data[:8] == b"\x89PNG\r\n\x1a\n" or data[:3] == b"\xff\xd8\xff"):
+        return "صورة التوقيع لازم تكون PNG أو JPG"
+    try:
+        img = DocxImage.from_blob(data)
+        if not img.px_width or not img.px_height:
+            raise ValueError
+    except Exception:
+        return "ملف الصورة تالف"
+    return None
+
+
+def apply_signatures(docx_bytes, images):
+    """images = {"first": مسار صورة أو None، "second": …}. بيحط الصورة مكان العلامة أو يشيل العلامة.
+    بعد صورة الطرف الأول بيشيل سطرين فاضيين من نفس الخانة عشان العقد مايزيدش صفحة."""
+    from docx import Document
+    from docx.image.image import Image as DocxImage
+    from docx.shared import Cm
+    doc = Document(io.BytesIO(docx_bytes))
+    changed = False
+    for p in docx_engine._iter_paragraphs(doc):
+        for run in p.runs:
+            for kind, mark in SIG_MARKS.items():
+                if mark not in run.text:
+                    continue
+                run.text = run.text.replace(mark, "")
+                changed = True
+                path = images.get(kind)
+                if not path:
+                    continue
+                img = DocxImage.from_file(path)
+                w = SIG_HEIGHT_CM * img.px_width / img.px_height
+                run.add_picture(path, width=Cm(min(w, SIG_MAX_WIDTH_CM)))
+                nxt, removed = p._p.getnext(), 0
+                while nxt is not None and removed < 2 and nxt.tag.endswith("}p") and not "".join(nxt.itertext()).strip() \
+                        and not list(nxt.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing")):
+                    following = nxt.getnext()
+                    nxt.getparent().remove(nxt)
+                    nxt, removed = following, removed + 1
+    if not changed:
+        return docx_bytes
+    out = io.BytesIO()
+    doc.save(out)
+    return out.getvalue()
+
+
 # الحقول اللي لو فاضية العقد يطلع ناقص (الاسم المعروض للمستخدم)
 REQUIRED_FIELDS = [
     ("employee_name_en", "الاسم بالإنجليزي"), ("nationality_en", "الجنسية بالإنجليزي"), ("profession", "المهنة"),
