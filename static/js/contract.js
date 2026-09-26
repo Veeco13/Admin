@@ -8,11 +8,12 @@ const CONTRACT_FIELDS_HELP = [
   ['employee_name', 'اسم الموظف'], ['employee_name_en', 'الاسم بالإنجليزي'], ['civil_id', 'الرقم المدني'],
   ['nationality', 'الجنسية'], ['nationality_en', 'الجنسية بالإنجليزي'], ['profession', 'المهنة'], ['profession_en', 'المهنة بالإنجليزي'],
   ['salary', 'الراتب'], ['housing_amount', 'بدل السكن'], ['start_date', 'تاريخ العقد'], ['day_name', 'اليوم'], ['day_name_en', 'اليوم بالإنجليزي'],
-  ['company_name', 'اسم الشركة'], ['company_name_en', 'اسم الشركة بالإنجليزي'], ['labor_office', 'إدارة العمل'], ['file_number', 'رقم الملف'],
+  ['company_name', 'اسم الشركة'], ['company_name_en', 'اسم الشركة بالإنجليزي'], ['labor_office', 'إدارة العمل'], ['labor_office_en', 'إدارة العمل بالإنجليزي'], ['file_number', 'رقم الملف'],
   ['project_name', 'المشروع'], ['auth_name', 'المفوّض بالتوقيع'], ['auth_name_en', 'المفوّض بالإنجليزي'], ['auth_civil_id', 'الرقم المدني للمفوّض'],
   ['passport_no', 'رقم الجواز'], ['residency_exp', 'انتهاء الإقامة'],
 ];
 let CONTRACT = { emp: '', tpl: '', company: '', sig: '', date: '', salary: '' };
+let CONTRACT_PREVIEW = 'pdf';          // pdf | quick
 
 function contractQuery(extra = {}) {
   const p = new URLSearchParams();
@@ -34,26 +35,28 @@ function renderContractView() {
   const sigs = coId && IDX.company[coId] ? IDX.company[coId].signatories : STATE.companies.flatMap(c => c.signatories);
   if (CONTRACT.sig && !sigs.find(s => s.id === CONTRACT.sig)) CONTRACT.sig = '';
   const empList = scopedEmployees().filter(x => x.employmentStatus !== 'terminated');
+  const pdfMode = STATE.pdfAvailable && CONTRACT_PREVIEW === 'pdf';
 
-  viewRoot().innerHTML = `<div class="page-head"><div><h1>عقد العمل</h1><div class="sub">${t('ملف Word بنفس تنسيق القالب الأصلي')}</div></div></div>
+  viewRoot().innerHTML = `<div class="page-head"><div><h1>عقد العمل</h1><div class="sub">${t('ملف Word أو PDF بنفس تنسيق القالب')}</div></div>
+      <div class="actions"><button class="btn primary" id="c-batch">📚 ${t('عقود متعددة (PDF واحد)')}</button></div></div>
     <div class="contract-layout">
       <div class="card no-print">
         <div class="form" style="grid-template-columns:1fr">
           <label><span class="req">${t('الموظف')}</span><input id="c-emp" list="c-emp-list" placeholder="اكتب الاسم أو الرقم المدني…" value="${e ? esc(e.name + ' — ' + e.id) : ''}"></label>
           <datalist id="c-emp-list">${empList.map(x => `<option value="${esc(x.name + ' — ' + x.id)}">`).join('')}</datalist>
           <label>${t('القالب')}<select id="c-tpl">${STATE.templates.map(x => opt(x.id, (x.isDefault ? '★ ' : '') + x.name, x.id === CONTRACT.tpl)).join('')}</select></label>
-          <label>${t('الشركة (الطرف الأول)')}<select id="c-co">${companyOptions(coId, '— شركة الموظف —')}</select></label>
+          <label>${t('الشركة (الطرف الأول)')}<select id="c-co">${companyOptions(coId, '— الشركة المسجّل عليها —')}</select></label>
           <label>${t('المفوّض بالتوقيع')}<select id="c-sig">${opt('', t('— أول مفوّض في الشركة —'), !CONTRACT.sig)}${sigs.map(s => opt(s.id, s.nameAr + (s.civilId ? ' (' + s.civilId + ')' : ''), s.id === CONTRACT.sig)).join('')}</select></label>
           <label>${t('تاريخ العقد')}<input type="date" id="c-date" value="${esc(CONTRACT.date || (e && e.dateOfHire) || '')}"></label>
           <label>${t('الراتب في العقد (اختياري)')}<input type="number" step="0.001" id="c-salary" placeholder="${e && e.salary ? esc(e.salary) : ''}" value="${esc(CONTRACT.salary)}"></label>
         </div>
-        ${e ? contractWarnings(e, coId) : ''}
-        <div class="row" style="margin-top:12px">
-          <a class="btn primary ${e ? '' : 'disabled'}" id="c-docx" ${e ? `href="/api/contract/docx?${contractQuery()}"` : ''}>⬇️ Word</a>
-          ${STATE.pdfAvailable ? `<a class="btn ${e ? '' : 'disabled'}" id="c-pdf" ${e ? `href="/api/contract/pdf?${contractQuery({ dl: 1 })}"` : ''}>⬇️ PDF</a>` : ''}
+        <div id="c-warn"></div>
+        <div class="row" style="margin-top:12px;flex-wrap:wrap">
+          <a class="btn primary ${e ? '' : 'disabled'}" ${e ? `href="/api/contract/docx?${contractQuery()}"` : ''}>⬇️ Word</a>
+          ${STATE.pdfAvailable ? `<a class="btn ${e ? '' : 'disabled'}" ${e ? `href="/api/contract/pdf?${contractQuery({ dl: 1 })}"` : ''}>⬇️ PDF</a>` : ''}
           <button class="btn" id="c-print" ${e ? '' : 'disabled'}>🖨️ ${t('طباعة')}</button>
         </div>
-        ${!STATE.pdfAvailable ? `<div class="small muted" style="margin-top:6px">${t('تحويل PDF محتاج LibreOffice على السيرفر.')}</div>` : ''}
+        ${!STATE.pdfAvailable ? `<div class="small muted" style="margin-top:6px">${t('تحويل PDF محتاج LibreOffice أو Microsoft Word على السيرفر.')}</div>` : ''}
         <hr class="sep">
         <h3>📑 ${t('قوالب العقود')}</h3>
         ${STATE.templates.map(x => `<div class="row small" style="padding:4px 0;border-bottom:1px dashed var(--border)">
@@ -64,7 +67,14 @@ function renderContractView() {
         <details style="margin-top:10px"><summary class="small">${t('الحقول المتاحة في القوالب')}</summary>
           <div class="small" data-no-i18n style="direction:ltr;text-align:left">${CONTRACT_FIELDS_HELP.map(([k, l]) => `<div><code>{{ ${k} }}</code> <span class="muted">${esc(t(l))}</span></div>`).join('')}</div></details>
       </div>
-      <div><div class="contract-paper" id="c-preview" dir="rtl">${e ? `<div class="empty">${t('جاري تجهيز المعاينة…')}</div>` : `<div class="empty">${t('اختر موظف لعرض معاينة العقد')}</div>`}</div></div>
+      <div>
+        ${STATE.pdfAvailable ? `<div class="tabs no-print" style="margin-bottom:8px">
+          <button data-pv="pdf" class="${pdfMode ? 'active' : ''}">📄 ${t('معاينة PDF')}</button>
+          <button data-pv="quick" class="${pdfMode ? '' : 'active'}">⚡ ${t('معاينة سريعة')}</button></div>` : ''}
+        ${pdfMode && e
+          ? `<iframe id="c-pdf-frame" class="pdf-frame" src="/api/contract/pdf?${contractQuery()}" title="PDF"></iframe>`
+          : `<div class="contract-paper" id="c-preview" dir="rtl">${e ? `<div class="empty">${t('جاري تجهيز المعاينة…')}</div>` : `<div class="empty">${t('اختر موظف لعرض معاينة العقد')}</div>`}</div>`}
+      </div>
     </div>`;
 
   const set = (patch) => { Object.assign(CONTRACT, patch); render(); };
@@ -77,31 +87,149 @@ function renderContractView() {
   $('#c-sig').onchange = ev => set({ sig: ev.target.value });
   $('#c-date').onchange = ev => set({ date: ev.target.value });
   $('#c-salary').onchange = ev => set({ salary: ev.target.value });
-  $('#c-print').onclick = () => printHtml(t('عقد عمل'), `<style>td{width:50%;vertical-align:top;padding:8px}p{margin:0 0 3px}body{font-family:"Times New Roman",serif;line-height:1.7}@page{size:A4 portrait}</style>` + $('#c-preview').innerHTML);
+  $$('[data-pv]').forEach(b => b.onclick = () => { CONTRACT_PREVIEW = b.dataset.pv; render(); });
+  $('#c-batch').onclick = () => openBatchContractModal(CONTRACT.emp ? [CONTRACT.emp] : []);
+  $('#c-print').onclick = () => {
+    const fr = $('#c-pdf-frame');
+    if (fr) { try { fr.contentWindow.focus(); fr.contentWindow.print(); return; } catch (_) { window.open(fr.src, '_blank'); return; } }
+    printHtml(t('عقد عمل'), `<style>td{width:50%;vertical-align:top;padding:8px}p{margin:0 0 3px}body{font-family:"Times New Roman",serif;line-height:1.7}@page{size:A4 portrait}</style>` + $('#c-preview').innerHTML);
+  };
   $('#t-upload').onclick = openTemplateUploadModal;
   $$('[data-tdef]').forEach(b => b.onclick = () => persist('POST', `/api/templates/${b.dataset.tdef}/default`, {}, 'تم'));
   $$('[data-tdel]').forEach(b => b.onclick = async () => { if (await openConfirm(t('حذف القالب؟'), { danger: true })) persist('DELETE', '/api/templates/' + b.dataset.tdel, undefined, 'تم الحذف'); });
-  if (e) buildContractHtml();
+  if (e) buildContractHtml(!pdfMode);
 }
 
-function contractWarnings(e, coId) {
-  const w = [];
-  if (!e.nameEn) w.push('الاسم بالإنجليزي');
-  if (!e.salary && !CONTRACT.salary) w.push('الراتب');
-  if (!e.nationalityEn && !e.nationality) w.push('الجنسية');
-  if (!e.professionEn) w.push('المهنة بالإنجليزي');
-  if (!coId) w.push('الشركة');
-  else if (!(IDX.company[coId].signatories || []).length) w.push('مفوّض بالتوقيع للشركة');
-  if (!CONTRACT.date && !e.dateOfHire) w.push('تاريخ العقد');
-  return w.length ? `<div class="notice warn" style="margin-top:10px">${t('بيانات ناقصة في العقد')}: ${w.map(x => esc(t(x))).join('، ')}</div>` : '';
-}
-
-async function buildContractHtml() {
-  const box = $('#c-preview');
+/** المعاينة السريعة (HTML) + البيانات الناقصة من السيرفر (بعد الترجمات والمفوّض الافتراضي) */
+async function buildContractHtml(showHtml = true) {
+  const box = $('#c-preview'), warn = $('#c-warn');
   try {
     const r = await api('GET', '/api/contract/preview?' + contractQuery());
-    if ($('#c-preview') === box) box.innerHTML = r.html;
-  } catch (e) { box.innerHTML = `<div class="notice err">${esc(e.message)}</div>`; }
+    if (showHtml && box && $('#c-preview') === box) box.innerHTML = r.html;
+    if (warn && $('#c-warn') === warn) warn.innerHTML = (r.missing || []).length
+      ? `<div class="notice warn" style="margin-top:10px">${t('بيانات ناقصة في العقد')}: ${r.missing.map(x => esc(t(x))).join('، ')}</div>` : '';
+  } catch (e) { if (box) box.innerHTML = `<div class="notice err">${esc(e.message)}</div>`; }
+}
+
+/* =====================================================================
+   عقود متعددة — اختيار موظفين ← ملف PDF واحد (معاينة / طباعة / تنزيل)
+   ===================================================================== */
+async function postForBlob(url, body) {
+  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (r.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
+  if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || r.statusText); }
+  const cd = r.headers.get('Content-Disposition') || '';
+  const m = cd.match(/filename\*=UTF-8''([^;]+)/i) || cd.match(/filename="?([^";]+)"?/i);
+  return { blob: await r.blob(), name: m ? decodeURIComponent(m[1]) : 'contracts.pdf' };
+}
+
+function openBatchContractModal(preselected = []) {
+  const max = STATE.contractBatchMax || 300;
+  const sel = new Set(preselected.filter(id => IDX.employee[id]));
+  const F = { q: '', company: '', status: 'active_only' };
+  const defTpl = STATE.templates.find(x => x.isDefault) || STATE.templates[0];
+  const m = openModal({
+    title: '📚 ' + t('عقود متعددة'), size: 'wide',
+    body: `<div class="form" id="bc-opts">
+        <label>${t('القالب')}<select name="tpl">${STATE.templates.map(x => opt(x.id, (x.isDefault ? '★ ' : '') + x.name, defTpl && x.id === defTpl.id)).join('')}</select></label>
+        <label>${t('تاريخ العقد')}<input type="date" name="date" value="${todayISO()}"></label>
+        <label class="check"><input type="checkbox" name="useHireDate"> ${t('استخدم تاريخ تعيين كل موظف (واللي مالوش ← التاريخ ده)')}</label>
+      </div>
+      <p class="small muted">${t('كل عقد بيطلع بالشركة المسجّل عليها الموظف وأول مفوّض بالتوقيع فيها.')}</p>
+      <h4>${t('الموظفين')} <span class="chip on" id="bc-count"></span></h4>
+      <div class="filters">
+        <input type="search" id="bc-q" placeholder="${t('بحث بالاسم أو الرقم المدني…')}">
+        <select id="bc-co">${companyOptions('', '— كل الشركات —')}</select>
+        <select id="bc-st">${opt('active_only', t('غير المنتهية خدماتهم'), true)}${opt('', t('— كل الحالات —'), false)}</select>
+        <button class="btn sm" id="bc-all">☑️ ${t('تحديد الظاهرين')}</button>
+        <button class="btn sm ghost" id="bc-none">✕ ${t('إلغاء التحديد')}</button>
+      </div>
+      <div class="table-wrap" style="max-height:42vh;overflow:auto"><table class="data"><tbody id="bc-list"></tbody></table></div>
+      <div id="bc-msg" style="margin-top:8px"></div>`,
+    foot: `<button class="btn primary" data-go="preview">👁️ ${t('معاينة PDF')}</button>
+      <button class="btn" data-go="pdf">⬇️ ${t('تنزيل PDF')}</button>
+      <button class="btn" data-go="zip">⬇️ ${t('Word (ZIP)')}</button>
+      <span class="spacer"></span><button class="btn" data-close>إغلاق</button>`,
+  });
+  const el = m.el;
+  const visible = () => scopedEmployees().filter(e => {
+    if (F.status === 'active_only' && e.employmentStatus === 'terminated') return false;
+    if (F.company && !empInCompany(e, F.company)) return false;
+    const q = norm(F.q);
+    return !q || norm(e.name).includes(q) || norm(e.nameEn).includes(q) || String(e.id).includes(q);
+  });
+  const draw = () => {
+    const list = visible();
+    $('#bc-list', el).innerHTML = list.slice(0, 600).map(e => `<tr><td style="width:30px"><input type="checkbox" data-id="${esc(e.id)}" ${sel.has(e.id) ? 'checked' : ''}></td>
+      <td><b>${esc(e.name)}</b> <span class="small muted num">${esc(e.id)}</span></td>
+      <td class="small">${esc(companyName(empCompanyId(e)) || '—')}</td><td class="small muted">${esc(e.profession || '')}</td></tr>`).join('')
+      || `<tr><td class="empty">${t('لا توجد نتائج')}</td></tr>`;
+    $$('#bc-list [data-id]', el).forEach(cb => cb.onchange = () => { cb.checked ? sel.add(cb.dataset.id) : sel.delete(cb.dataset.id); count(); });
+    count();
+    translateDomText($('#bc-list', el));
+  };
+  const count = () => {
+    const n = sel.size;
+    $('#bc-count', el).textContent = `${n} ${t('محدد')}`;
+    $('#bc-count', el).style.background = n > max ? 'var(--red-soft)' : '';
+  };
+  $('#bc-q', el).addEventListener('input', debounce(ev => { F.q = ev.target.value; draw(); }, 200));
+  $('#bc-co', el).onchange = ev => { F.company = ev.target.value; draw(); };
+  $('#bc-st', el).onchange = ev => { F.status = ev.target.value; draw(); };
+  $('#bc-all', el).onclick = () => { visible().forEach(e => sel.add(e.id)); draw(); };
+  $('#bc-none', el).onclick = () => { sel.clear(); draw(); };
+  draw();
+
+  const msg = (html) => { $('#bc-msg', el).innerHTML = html; };
+  const payload = () => {
+    const o = formValues($('#bc-opts', el));
+    // الترتيب: زي ترتيب القائمة (بالاسم)
+    const order = scopedEmployees().map(e => e.id).filter(id => sel.has(id));
+    return { emps: order, tpl: o.tpl, date: o.date, useHireDate: !!o.useHireDate };
+  };
+  $$('[data-go]', el).forEach(b => b.onclick = async () => {
+    const go = b.dataset.go, p = payload();
+    if (!p.emps.length) return toast('اختار موظف واحد على الأقل', 'err');
+    if (p.emps.length > max) return openBlockAlert(`${t('الحد الأقصى')} ${max} ${t('عقد في المرة')}`);
+    if (go !== 'zip' && !STATE.pdfAvailable) return openBlockAlert(t('تحويل PDF محتاج LibreOffice أو Microsoft Word على السيرفر.'));
+    if (!p.date && !p.useHireDate) return toast('اختار تاريخ العقد', 'err');
+    const btns = $$('[data-go]', el);
+    btns.forEach(x => x.disabled = true);
+    try {
+      msg(`<div class="notice">${t('جاري فحص البيانات…')}</div>`);
+      const chk = await api('POST', '/api/contract/batch/check', p);
+      if (chk.incomplete.length) {
+        const list = chk.incomplete.slice(0, 15).map(x => `<li><b>${esc(x.name)}</b>: ${x.missing.map(y => esc(t(y))).join('، ')}</li>`).join('');
+        const ok = await openConfirm(`${chk.incomplete.length} ${t('عقد فيه بيانات ناقصة وهيطلع فيه خانات فاضية')}:<ul style="margin:6px 0">${list}</ul>${chk.incomplete.length > 15 ? '…' : ''}${t('تكمّل؟')}`, { okLabel: t('كمّل') });
+        if (!ok) { msg(''); return; }
+      }
+      const secs = Math.max(5, Math.round(p.emps.length * (chk.engine === 'word' ? 1.1 : 0.7)));
+      msg(`<div class="notice">⏳ ${t('جاري تجهيز')} ${p.emps.length} ${t('عقد')}… ${t('حوالي')} ${secs} ${t('ثانية')}</div>`);
+      const res = await postForBlob('/api/contract/batch', { ...p, format: go === 'zip' ? 'zip' : 'pdf', dl: go !== 'preview' });
+      msg('');
+      if (go === 'preview') openPdfPreviewModal(res.blob, res.name, p.emps.length);
+      else { downloadBlob(res.blob, res.name); toast('تم التنزيل', 'ok'); }
+    } catch (e) { msg(`<div class="notice err">${esc(e.message)}</div>`); }
+    finally { btns.forEach(x => x.disabled = false); }
+  });
+}
+
+function openPdfPreviewModal(blob, name, n) {
+  const url = URL.createObjectURL(blob);
+  const m = openModal({
+    title: `📄 ${esc(name)}`, size: 'wide',
+    body: `<iframe class="pdf-frame" src="${url}" title="PDF"></iframe>`,
+    foot: `<button class="btn primary" data-print>🖨️ ${t('طباعة')} (${n})</button>
+      <button class="btn" data-dl>⬇️ ${t('تنزيل PDF')}</button>
+      <a class="btn" href="${url}" target="_blank" rel="noopener">↗️ ${t('فتح في تبويب')}</a>
+      <span class="spacer"></span><button class="btn" data-close>إغلاق</button>`,
+    onClose: () => setTimeout(() => URL.revokeObjectURL(url), 60000),
+  });
+  $('[data-dl]', m.el).onclick = () => downloadBlob(blob, name);
+  $('[data-print]', m.el).onclick = () => {
+    const fr = $('iframe', m.el);
+    try { fr.contentWindow.focus(); fr.contentWindow.print(); } catch (_) { window.open(url, '_blank'); }
+  };
 }
 
 function openTemplateUploadModal() {

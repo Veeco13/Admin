@@ -98,6 +98,7 @@ function renderEmployees() {
     ${sel ? `<div class="bulkbar no-print"><b>${sel} ${t('محدد')}</b>
       <button class="btn sm write-only" data-p="employees.edit" id="b-assign">🏢 تعيين جماعي</button>
       <button class="btn sm write-only" data-p="employees.edit" id="b-renew">🔄 تجديد جماعي</button>
+      <button class="btn sm" data-p="contract.view sensitive.salary" id="b-contracts">📄 عقود المحدد (PDF)</button>
       <button class="btn sm" id="b-export">📤 تصدير المحدد</button>
       <button class="btn sm" id="b-print">🖨️ طباعة المحدد</button>
       <span class="spacer"></span><button class="btn sm ghost" id="b-clear">${t('إلغاء التحديد')}</button></div>` : ''}
@@ -167,6 +168,7 @@ function renderEmployees() {
     const selected = () => list.filter(e => EMP_SELECTED.has(e.id)).concat([...EMP_SELECTED].filter(id => !list.find(e => e.id === id)).map(id => IDX.employee[id]).filter(Boolean));
     $('#b-assign').onclick = () => openBulkAssignModal([...EMP_SELECTED]);
     $('#b-renew').onclick = () => openBulkRenewModal([...EMP_SELECTED]);
+    $('#b-contracts').onclick = () => openBatchContractModal(selected().map(e => e.id));
     $('#b-export').onclick = () => exportEmployeesCsv(selected());
     $('#b-print').onclick = () => printEmployeeReport(selected());
     $('#b-clear').onclick = () => { EMP_SELECTED.clear(); render(); };
