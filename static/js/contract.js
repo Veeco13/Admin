@@ -11,8 +11,9 @@ const CONTRACT_FIELDS_HELP = [
   ['company_name', 'اسم الشركة'], ['company_name_en', 'اسم الشركة بالإنجليزي'], ['labor_office', 'إدارة العمل'], ['labor_office_en', 'إدارة العمل بالإنجليزي'], ['file_number', 'رقم الملف'],
   ['project_name', 'المشروع'], ['auth_name', 'المفوّض بالتوقيع'], ['auth_name_en', 'المفوّض بالإنجليزي'], ['auth_civil_id', 'الرقم المدني للمفوّض'],
   ['passport_no', 'رقم الجواز'], ['residency_exp', 'انتهاء الإقامة'],
+  ['housing_clause', 'بند بدل السكن (أو «لايوجد»)'], ['housing_clause_en', 'بند بدل السكن بالإنجليزي (أو NONE)'],
 ];
-let CONTRACT = { emp: '', tpl: '', company: '', sig: '', date: '', salary: '' };
+let CONTRACT = { emp: '', tpl: '', company: '', sig: '', date: '', salary: '', housing: '1' };
 let CONTRACT_PREVIEW = 'pdf';          // pdf | quick
 
 function contractQuery(extra = {}) {
@@ -27,7 +28,7 @@ function renderContractView() {
       <div class="notice warn">${t('إنشاء العقود محتاج صلاحية عرض الموظفين وصلاحية «المرتب» لأن العقد فيه الراتب. كلّم مدير النظام.')}</div>`;
     return;
   }
-  if (VIEW_ARGS.emp) { CONTRACT = { emp: VIEW_ARGS.emp, tpl: CONTRACT.tpl, company: '', sig: '', date: '', salary: '' }; VIEW_ARGS = {}; }
+  if (VIEW_ARGS.emp) { CONTRACT = { emp: VIEW_ARGS.emp, tpl: CONTRACT.tpl, company: '', sig: '', date: '', salary: '', housing: CONTRACT.housing }; VIEW_ARGS = {}; }
   const e = IDX.employee[CONTRACT.emp];
   const defTpl = STATE.templates.find(x => x.isDefault) || STATE.templates[0];
   if (!CONTRACT.tpl || !IDX.template[CONTRACT.tpl]) CONTRACT.tpl = defTpl ? defTpl.id : '';
@@ -49,6 +50,7 @@ function renderContractView() {
           <label>${t('المفوّض بالتوقيع')}<select id="c-sig">${opt('', t('— أول مفوّض في الشركة —'), !CONTRACT.sig)}${sigs.map(s => opt(s.id, s.nameAr + (s.civilId ? ' (' + s.civilId + ')' : ''), s.id === CONTRACT.sig)).join('')}</select></label>
           <label>${t('تاريخ العقد')}<input type="date" id="c-date" value="${esc(CONTRACT.date || (e && e.dateOfHire) || '')}"></label>
           <label>${t('الراتب في العقد (اختياري)')}<input type="number" step="0.001" id="c-salary" placeholder="${e && e.salary ? esc(e.salary) : ''}" value="${esc(CONTRACT.salary)}"></label>
+          <label class="check"><input type="checkbox" id="c-housing" ${CONTRACT.housing !== '0' ? 'checked' : ''}> ${t('إضافة بند بدل السكن (البند الثالث عشر)')}</label>
         </div>
         <div id="c-warn"></div>
         <div class="row" style="margin-top:12px;flex-wrap:wrap">
@@ -87,6 +89,7 @@ function renderContractView() {
   $('#c-sig').onchange = ev => set({ sig: ev.target.value });
   $('#c-date').onchange = ev => set({ date: ev.target.value });
   $('#c-salary').onchange = ev => set({ salary: ev.target.value });
+  $('#c-housing').onchange = ev => set({ housing: ev.target.checked ? '1' : '0' });
   $$('[data-pv]').forEach(b => b.onclick = () => { CONTRACT_PREVIEW = b.dataset.pv; render(); });
   $('#c-batch').onclick = () => openBatchContractModal(CONTRACT.emp ? [CONTRACT.emp] : []);
   $('#c-print').onclick = () => {
@@ -134,6 +137,7 @@ function openBatchContractModal(preselected = []) {
         <label>${t('القالب')}<select name="tpl">${STATE.templates.map(x => opt(x.id, (x.isDefault ? '★ ' : '') + x.name, defTpl && x.id === defTpl.id)).join('')}</select></label>
         <label>${t('الشركة (الطرف الأول)')}<select name="company">${companyOptions('', '— الشركة المسجّل عليها كل موظف —')}</select></label>
         <label>${t('المفوّض بالتوقيع')}<select name="sig">${batchSigOptions('')}</select></label>
+        <label>${t('بند بدل السكن (البند الثالث عشر)')}<select name="housing">${opt('1', t('يُضاف لكل العقود'), true)}${opt('0', t('لا يُضاف («لايوجد»)'), false)}${opt('auto', t('حسب «بدل السكن مشمول» عند كل موظف'), false)}</select></label>
         <label>${t('تاريخ العقد')}<input type="date" name="date" value="${todayISO()}"></label>
         <label class="check"><input type="checkbox" name="useHireDate"> ${t('استخدم تاريخ تعيين كل موظف (واللي مالوش ← التاريخ ده)')}</label>
       </div>
@@ -208,7 +212,7 @@ function openBatchContractModal(preselected = []) {
     const o = formValues($('#bc-opts', el));
     // الترتيب: زي ترتيب القائمة (بالاسم)
     const order = scopedEmployees().map(e => e.id).filter(id => sel.has(id));
-    return { emps: order, tpl: o.tpl, date: o.date, useHireDate: !!o.useHireDate, company: o.company || '', sig: o.sig || '' };
+    return { emps: order, tpl: o.tpl, date: o.date, useHireDate: !!o.useHireDate, company: o.company || '', sig: o.sig || '', housing: o.housing || '1' };
   };
   $$('[data-go]', el).forEach(b => b.onclick = async () => {
     const go = b.dataset.go, p = payload();

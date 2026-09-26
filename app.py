@@ -1076,6 +1076,7 @@ def _contract_context(s, emp_id, args, fill=True, tpl=None):
             emp[k] = args.get(k)
     ctx = contracts.extra_context(docx_engine.resolve_contract_template(
         emp, company, db.to_dict(sig), project, args.get("date") or None))
+    contracts.housing_context(ctx, contracts.housing_included(args.get("housing"), emp))
     data = None
     if fill:
         tpl = tpl or _contract_template(s, args.get("tpl"))
@@ -1130,7 +1131,8 @@ def _batch_args():
 def _batch_emp_args(d, emp):
     """تاريخ العقد: تاريخ واحد للكل، أو تاريخ تعيين كل موظف (ولو مالوش ← التاريخ الموحّد)."""
     date = (emp.get("dateOfHire") if d.get("useHireDate") else None) or d.get("date") or None
-    return {"tpl": d.get("tpl"), "date": date, "company": d.get("company") or None, "sig": d.get("sig") or None}
+    return {"tpl": d.get("tpl"), "date": date, "company": d.get("company") or None, "sig": d.get("sig") or None,
+            "housing": d.get("housing", "1")}
 
 
 def _sig_registered(s, sig, company_id):
@@ -1184,6 +1186,7 @@ def contract_batch():
             chosen += f" — الشركة: {s.get(M.Company, d['company']).nameAr}"
         if d.get("sig") and s.get(M.Signatory, d["sig"]):
             chosen += f" — المفوّض: {s.get(M.Signatory, d['sig']).nameAr}"
+        chosen += " — بند بدل السكن: " + {"0": "لا يُضاف", "auto": "حسب بيانات الموظف"}.get(str(d.get("housing", "1")), "يُضاف")
     stamp = datetime.now().strftime("%Y-%m-%d")
     if fmt == "zip":
         out, name, mime = contracts.zip_docs(named), f"عقود عمل ({len(named)}) - {stamp}.zip", "application/zip"

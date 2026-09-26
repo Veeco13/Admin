@@ -96,6 +96,23 @@ def extra_context(ctx):
     return ctx
 
 
+# البند الثالث عشر (شروط خاصة) — بند بدل السكن اختياري. من غيره البند بيتكتب «لايوجد» زي البندين 2 و3.
+HOUSING_CLAUSE_AR = "يتضمن الأجر الشهري المنصوص عليه في البند الرابع من هذا العقد بدل سكن."
+HOUSING_CLAUSE_EN = "The monthly remuneration provided for in Clause Four of this contract includes a housing allowance."
+
+
+def housing_included(choice, emp):
+    """choice: 1 = يُضاف (الافتراضي)، 0 = لا يُضاف، auto = حسب «بدل السكن مشمول» في بيانات الموظف."""
+    choice = str(choice if choice not in (None, "") else "1")
+    return bool((emp or {}).get("housingIncluded")) if choice == "auto" else choice != "0"
+
+
+def housing_context(ctx, include):
+    ctx["housing_clause"] = HOUSING_CLAUSE_AR if include else "لايوجد"
+    ctx["housing_clause_en"] = HOUSING_CLAUSE_EN if include else "NONE"
+    return ctx
+
+
 # الحقول اللي لو فاضية العقد يطلع ناقص (الاسم المعروض للمستخدم)
 REQUIRED_FIELDS = [
     ("employee_name_en", "الاسم بالإنجليزي"), ("nationality_en", "الجنسية بالإنجليزي"), ("profession", "المهنة"),
