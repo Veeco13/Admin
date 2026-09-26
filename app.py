@@ -1061,11 +1061,14 @@ def _contract_context(s, emp_id, args, fill=True, tpl=None):
     if not emp_ok(s, emp["id"]) or (args.get("company") and not me().company_ok(args["company"])):
         abort(403, OUT_OF_SCOPE)
     aff = (emp.get("affiliations") or [{}])[0]
-    company = db.to_dict(s.get(M.Company, args.get("company") or aff.get("companyId") or ""))
-    project = db.to_dict(s.get(M.Project, aff.get("projectId") or ""))
+    cid = args.get("company") or aff.get("companyId") or ""
+    company = db.to_dict(s.get(M.Company, cid))
+    # مشروع الموظف (إدارة العمل ورقم الملف) بيخص الشركة المسجّل عليها بس — لو الشركة اتغيّرت مالوش لازمة
+    project = db.to_dict(s.get(M.Project, aff.get("projectId") or "")) if cid == aff.get("companyId") else None
+    # المفوّض: المختار (حتى لو من شركة تانية — حرية الاختيار)، وإلا أول مفوّض في شركة العقد
     sig = s.get(M.Signatory, args.get("sig") or "")
-    if sig and company and sig.companyId != company["id"]:
-        sig = None
+    if sig and not me().company_ok(sig.companyId):
+        abort(403, OUT_OF_SCOPE)
     if not sig and company:
         sig = s.scalar(select(M.Signatory).where(M.Signatory.companyId == company["id"]))
     for k in ("salary", "profession", "professionEn", "nameEn", "nationalityEn"):
@@ -1127,7 +1130,14 @@ def _batch_args():
 def _batch_emp_args(d, emp):
     """تاريخ العقد: تاريخ واحد للكل، أو تاريخ تعيين كل موظف (ولو مالوش ← التاريخ الموحّد)."""
     date = (emp.get("dateOfHire") if d.get("useHireDate") else None) or d.get("date") or None
-    return {"tpl": d.get("tpl"), "date": date}
+    return {"tpl": d.get("tpl"), "date": date, "company": d.get("company") or None, "sig": d.get("sig") or None}
+
+
+def _sig_registered(s, sig, company_id):
+    """المفوّض ده مسجّل كمفوّض في الشركة دي؟ (نفس الشخص = نفس الرقم المدني، أو نفس الاسم لو مفيش رقم)."""
+    q = select(M.Signatory.id).where(M.Signatory.companyId == company_id)
+    q = q.where(M.Signatory.civilId == sig.civilId) if sig.civilId else q.where(M.Signatory.nameAr == sig.nameAr)
+    return s.scalar(q) is not None
 
 
 @app.post("/api/contract/batch/check")
@@ -1135,8 +1145,9 @@ def _batch_emp_args(d, emp):
 def contract_batch_check():
     """البيانات الناقصة لكل موظف قبل إنشاء العقود."""
     d, ids = _batch_args()
-    out = []
+    out, not_registered = [], {}
     with db.session_scope(commit=False) as s:
+        sig = s.get(M.Signatory, d.get("sig") or "")
         for i in ids:
             base = db.employee_full(s, i)
             if not base:
@@ -1145,7 +1156,12 @@ def contract_batch_check():
             miss = contracts.missing_fields(ctx)
             if miss:
                 out.append({"id": i, "name": emp["name"], "missing": miss})
-    return jsonify({"count": len(ids), "incomplete": out, "engine": contracts.backend()})
+            cid = d.get("company") or (base["affiliations"] or [{}])[0].get("companyId")
+            if sig and cid and not _sig_registered(s, sig, cid):
+                not_registered[cid] = not_registered.get(cid, 0) + 1
+        sig_warn = [{"company": (s.get(M.Company, c).nameAr if s.get(M.Company, c) else c), "count": n}
+                    for c, n in not_registered.items()]
+    return jsonify({"count": len(ids), "incomplete": out, "sigNotRegistered": sig_warn, "engine": contracts.backend()})
 
 
 @app.post("/api/contract/batch")
@@ -1163,6 +1179,11 @@ def contract_batch():
                 continue
             emp, _, data = _contract_context(s, i, _batch_emp_args(d, base), tpl=tpl)
             named.append((f"عقد عمل - {emp['name']} - {emp['id']}.docx", data))
+        chosen = ""
+        if d.get("company") and s.get(M.Company, d["company"]):
+            chosen += f" — الشركة: {s.get(M.Company, d['company']).nameAr}"
+        if d.get("sig") and s.get(M.Signatory, d["sig"]):
+            chosen += f" — المفوّض: {s.get(M.Signatory, d['sig']).nameAr}"
     stamp = datetime.now().strftime("%Y-%m-%d")
     if fmt == "zip":
         out, name, mime = contracts.zip_docs(named), f"عقود عمل ({len(named)}) - {stamp}.zip", "application/zip"
@@ -1173,7 +1194,7 @@ def contract_batch():
             return err(str(e), 501)
         name, mime = f"عقود عمل ({len(named)}) - {stamp}.pdf", "application/pdf"
     with db.session_scope() as s:
-        db.log_audit(s, "contract_batch", f"إنشاء {len(named)} عقد عمل ({'PDF' if fmt != 'zip' else 'Word'}) — قالب: {tpl.name}",
+        db.log_audit(s, "contract_batch", f"إنشاء {len(named)} عقد عمل ({'PDF' if fmt != 'zip' else 'Word'}) — قالب: {tpl.name}{chosen}",
                      uname())
     return send_file(io.BytesIO(out), as_attachment=d.get("dl", True), download_name=name, mimetype=mime)
 

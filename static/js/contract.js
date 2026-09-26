@@ -132,10 +132,12 @@ function openBatchContractModal(preselected = []) {
     title: '📚 ' + t('عقود متعددة'), size: 'wide',
     body: `<div class="form" id="bc-opts">
         <label>${t('القالب')}<select name="tpl">${STATE.templates.map(x => opt(x.id, (x.isDefault ? '★ ' : '') + x.name, defTpl && x.id === defTpl.id)).join('')}</select></label>
+        <label>${t('الشركة (الطرف الأول)')}<select name="company">${companyOptions('', '— الشركة المسجّل عليها كل موظف —')}</select></label>
+        <label>${t('المفوّض بالتوقيع')}<select name="sig">${batchSigOptions('')}</select></label>
         <label>${t('تاريخ العقد')}<input type="date" name="date" value="${todayISO()}"></label>
         <label class="check"><input type="checkbox" name="useHireDate"> ${t('استخدم تاريخ تعيين كل موظف (واللي مالوش ← التاريخ ده)')}</label>
       </div>
-      <p class="small muted">${t('كل عقد بيطلع بالشركة المسجّل عليها الموظف وأول مفوّض بالتوقيع فيها.')}</p>
+      <div class="small muted" id="bc-hint" style="margin:6px 0"></div>
       <h4>${t('الموظفين')} <span class="chip on" id="bc-count"></span></h4>
       <div class="filters">
         <input type="search" id="bc-q" placeholder="${t('بحث بالاسم أو الرقم المدني…')}">
@@ -152,6 +154,27 @@ function openBatchContractModal(preselected = []) {
       <span class="spacer"></span><button class="btn" data-close>إغلاق</button>`,
   });
   const el = m.el;
+  const coSel = $('[name=company]', el), sigSel = $('[name=sig]', el);
+  const hint = () => {
+    const co = coSel.value, sg = sigSel.value && batchSigById(sigSel.value);
+    const parts = [co ? `🏢 ${t('كل العقود باسم')} <b>${esc(companyName(co))}</b>` : `🏢 ${t('كل عقد بالشركة المسجّل عليها الموظف')}`,
+      sg ? `✍️ ${t('المفوّض في كل العقود')}: <b>${esc(sg.nameAr)}</b>` : `✍️ ${t('أول مفوّض بالتوقيع في شركة كل عقد')}`];
+    if (sg && co && sg.companyId !== co && !(IDX.company[co].signatories || []).some(x => sameSigPerson(x, sg)))
+      parts.push(`<span style="color:var(--orange)">⚠️ ${t('المفوّض ده مش مسجّل كمفوّض للشركة دي')}</span>`);
+    $('#bc-hint', el).innerHTML = parts.join(' · ');
+  };
+  coSel.onchange = () => {
+    const keep = sigSel.value && batchSigById(sigSel.value);
+    sigSel.innerHTML = batchSigOptions(coSel.value);
+    // نفس الشخص لو ليه تسجيل في الشركة الجديدة ← نختاره هناك، وإلا نسيبه زي ما هو (حرية الاختيار)
+    if (keep) {
+      const own = (IDX.company[coSel.value] ? IDX.company[coSel.value].signatories || [] : []).find(x => sameSigPerson(x, keep));
+      sigSel.value = own ? own.id : keep.id;
+    }
+    hint(); translateDomText(el);
+  };
+  sigSel.onchange = hint;
+  hint();
   const visible = () => scopedEmployees().filter(e => {
     if (F.status === 'active_only' && e.employmentStatus === 'terminated') return false;
     if (F.company && !empInCompany(e, F.company)) return false;
@@ -185,7 +208,7 @@ function openBatchContractModal(preselected = []) {
     const o = formValues($('#bc-opts', el));
     // الترتيب: زي ترتيب القائمة (بالاسم)
     const order = scopedEmployees().map(e => e.id).filter(id => sel.has(id));
-    return { emps: order, tpl: o.tpl, date: o.date, useHireDate: !!o.useHireDate };
+    return { emps: order, tpl: o.tpl, date: o.date, useHireDate: !!o.useHireDate, company: o.company || '', sig: o.sig || '' };
   };
   $$('[data-go]', el).forEach(b => b.onclick = async () => {
     const go = b.dataset.go, p = payload();
@@ -198,9 +221,14 @@ function openBatchContractModal(preselected = []) {
     try {
       msg(`<div class="notice">${t('جاري فحص البيانات…')}</div>`);
       const chk = await api('POST', '/api/contract/batch/check', p);
-      if (chk.incomplete.length) {
+      const sigWarn = chk.sigNotRegistered || [];
+      if (chk.incomplete.length || sigWarn.length) {
         const list = chk.incomplete.slice(0, 15).map(x => `<li><b>${esc(x.name)}</b>: ${x.missing.map(y => esc(t(y))).join('، ')}</li>`).join('');
-        const ok = await openConfirm(`${chk.incomplete.length} ${t('عقد فيه بيانات ناقصة وهيطلع فيه خانات فاضية')}:<ul style="margin:6px 0">${list}</ul>${chk.incomplete.length > 15 ? '…' : ''}${t('تكمّل؟')}`, { okLabel: t('كمّل') });
+        const sw = sigWarn.map(x => `<li>${esc(x.company)} (${x.count} ${t('عقد')})</li>`).join('');
+        const ok = await openConfirm(
+          (chk.incomplete.length ? `${chk.incomplete.length} ${t('عقد فيه بيانات ناقصة وهيطلع فيه خانات فاضية')}:<ul style="margin:6px 0">${list}</ul>${chk.incomplete.length > 15 ? '…' : ''}` : '')
+          + (sw ? `⚠️ ${t('المفوّض المختار مش مسجّل كمفوّض بالتوقيع في')}:<ul style="margin:6px 0">${sw}</ul>` : '')
+          + t('تكمّل؟'), { okLabel: t('كمّل') });
         if (!ok) { msg(''); return; }
       }
       const secs = Math.max(5, Math.round(p.emps.length * (chk.engine === 'word' ? 1.1 : 0.7)));
@@ -212,6 +240,24 @@ function openBatchContractModal(preselected = []) {
     } catch (e) { msg(`<div class="notice err">${esc(e.message)}</div>`); }
     finally { btns.forEach(x => x.disabled = false); }
   });
+}
+
+/* ---------- المفوّضين (عقود متعددة) ---------- */
+function allSignatories() { return scopedCompanies().flatMap(c => (c.signatories || []).map(s => ({ ...s, companyId: s.companyId || c.id }))); }
+function batchSigById(id) { return allSignatories().find(s => s.id === id); }
+function sameSigPerson(a, b) { return a.civilId && b.civilId ? a.civilId === b.civilId : norm(a.nameAr) === norm(b.nameAr); }
+function uniqSigPeople(list) { const out = []; list.forEach(s => { if (!out.some(x => sameSigPerson(x, s))) out.push(s); }); return out; }
+/** شركة محددة: مفوّضينها الأول + مفوّضين شركات تانية. من غير شركة: كل الأشخاص مرة واحدة. */
+function batchSigOptions(companyId) {
+  const all = allSignatories();
+  const label = s => s.nameAr + (s.civilId ? ' (' + s.civilId + ')' : '');
+  if (!companyId) {
+    return opt('', t('— أول مفوّض في شركة كل عقد —'), true) + uniqSigPeople(all).map(s => opt(s.id, label(s), false)).join('');
+  }
+  const own = all.filter(s => s.companyId === companyId);
+  const others = uniqSigPeople(all.filter(s => s.companyId !== companyId && !own.some(o => sameSigPerson(o, s))));
+  return opt('', t('— أول مفوّض في الشركة —'), true) + own.map(s => opt(s.id, label(s), false)).join('')
+    + (others.length ? `<optgroup label="${esc(t('مفوّضين في شركات تانية'))}">${others.map(s => opt(s.id, label(s), false)).join('')}</optgroup>` : '');
 }
 
 function openPdfPreviewModal(blob, name, n) {
