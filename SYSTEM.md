@@ -224,9 +224,10 @@ zahed/
 
 ---
 
-## 11. محرك عقود العمل (Word)
+## 11. محرك عقود العمل (Word / PDF)
 
 ```
+templates_docs/contract_reference.docx     (العقد المرجعي — القطاع الأهلي، الافتراضي)
 templates_docs/contract_template_v2.docx   (معمول من «عقد حكومي بدل سكن» الأصلي بتنسيقه)
       │
 resolve_contract_template(emp, company, signatory, project, date) ──► 22+ حقل
@@ -235,14 +236,25 @@ resolve_contract_template(emp, company, signatory, project, date) ──► 22+ 
       │   auth_name(_en), auth_civil_id, passport_no, residency_exp, today
       │   + أسماء قديمة: sponsor, status, end_date
       ▼
+contracts.extra_context()  ← labor_office_en + ترجمات تكميلية للمهنة والجنسية (contracts.py)
+      ▼
 fill_docx_template()  ← {{ field }} حتى لو متقسّم على أكتر من run، مع الحفاظ على تنسيق أول run، + MERGEFIELD
       ▼
-/api/contract/docx  ·  /api/contract/pdf  ·  /api/contract/preview (HTML)
+/api/contract/docx  ·  /api/contract/pdf  ·  /api/contract/preview (HTML)  ·  /api/contract/batch (PDF واحد / ZIP)
 ```
 
 - الشركة والمفوّض واليوم بقوا بيتعبّوا **تلقائي**. في القالب القديم كانوا مكتوبين ثابتين (أبراج انرجي / عبدالعزيز المطيري / الأحد).
 - القالب القديم `contract_template.docx` لسه موجود ويشتغل. `replace_literals()` بتحوّل أي عقد حقيقي لقالب من غير ما تبوّظ تنسيقه.
-- قاموسي `PROFESSION_EN` و`NATIONALITY_EN` بيكمّلوا الإنجليزي لو ناقص.
+- قاموسي `PROFESSION_EN` و`NATIONALITY_EN` بيكمّلوا الإنجليزي لو ناقص. ولأن المحرك مُجمَّد، `contracts.py` فيه قاموس تكميلي (`PROFESSION_EN_EXTRA` / `NATIONALITY_EN_EXTRA`). القاموس ده بيتستخدم بس لو القيمة لسه فاضية، واللي مكتوب في «المهنة (إنجليزي)» عند الموظف بيكسب دايمًا.
+- **العقد المرجعي:** الأصل كان فيه حقول بأسماء عربي (`{{الاسم العربي}}`) وإنجليزي (`{{Salary}}`)، والمحرك مابيقراش غير `[a-zA-Z0-9_]`. فالأسماء اتغيّرت بـ `replace_literals()` لأسماء المحرك، والنص والتنسيق زي ما هم بالظبط. `labor_office_en` حقل جديد (مثلًا «Manpower - Ahmadi Governorate Labour Department»).
+- **PDF (`contracts.py`):** بيستخدم LibreOffice لو موجود (في Docker)، وإلا Microsoft Word عن طريق COM على ويندوز (`pywin32`). عقود الدفعة كلها بتتحول في جلسة واحدة، وبتتدمج بـ `pypdf` بترتيب الاختيار. السرعة حوالي ثانية للعقد مع Word.
+- **عقود متعددة:** من شاشة العقد («📚 عقود متعددة») أو من شريط التحديد في شاشة الموظفين («📄 عقود المحدد»):
+  - **التاريخ:** تاريخ واحد للكل، أو تاريخ تعيين كل موظف.
+  - **الشركة والمفوّض:** كل عقد بالشركة المسجّل عليها الموظف وأول مفوّض فيها.
+  - **قبل التجهيز:** `/api/contract/batch/check` بيعرض الناقص.
+  - **النتيجة:** معاينة PDF أو طباعة أو تنزيل، أو ZIP فيه ملفات Word.
+  - **الحد:** `LUNX_CONTRACT_BATCH_MAX` (الافتراضي 300)، وكل دفعة بتتسجل في سجل التدقيق.
+- **الصلاحيات:** العقود (فردي ومتعدد) محتاجة `contract.view` و`employees.view` و`sensitive.salary`، وكل موظف لازم يكون في نطاق المستخدم.
 
 ---
 
@@ -269,7 +281,8 @@ fill_docx_template()  ← {{ field }} حتى لو متقسّم على أكتر �
 | POST | `/api/companies/<id>/docs/<kind>` | مستندات الشركة والشعار (`kind=logo`) |
 | POST | `/api/signatory-docs/<civilId>` | بطاقة المفوّض |
 | POST | `/api/candidates/<id>/convert` | تحويل لموظف |
-| GET | `/api/contract/preview`، `/docx`، `/pdf` | العقود. البارامترات: `emp`، `tpl`، `company`، `sig`، `date`، `salary` |
+| GET | `/api/contract/preview`، `/docx`، `/pdf` | العقود. البارامترات: `emp`، `tpl`، `company`، `sig`، `date`، `salary`. `pdf` من غير `dl=1` = معاينة |
+| POST | `/api/contract/batch`، `/api/contract/batch/check` | عقود متعددة: `{emps, tpl, date, useHireDate, format: pdf\|zip, dl}` |
 | POST / DELETE | `/api/templates[/<id>]`، `/api/templates/<id>/default` | القوالب |
 | GET / POST | `/api/backup`، `/api/restore` | النسخ الاحتياطي (JSON لكل الجداول) |
 | GET / POST / PUT / DELETE | `/api/users` | المستخدمين (للمدير بس) |
