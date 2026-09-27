@@ -245,6 +245,14 @@ table.data tr.sel td { background: var(--primary-soft); }
 .drop-menu button:hover { background: var(--surface-2); }
 .drop-menu .info { padding: 8px 10px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--border); margin-bottom: 4px; }
 
+/* ---------- إعداد التقارير ---------- */
+.rb { display: flex; flex-direction: column; gap: 14px; }
+.rb-sec h4 { margin: 0 0 8px; font-size: 13px; color: var(--primary); display: flex; align-items: center; gap: 8px; }
+.rb-cols { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px 16px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+.rb-cols > div { display: flex; flex-direction: column; gap: 3px; }
+.rb-cols b { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+.rb-cols label.check { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
+
 /* ---------- مركز إدارة الشركات ---------- */
 .co-tabs { margin-bottom: 14px; }
 .co-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 14px; }

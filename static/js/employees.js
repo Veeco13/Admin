@@ -162,7 +162,7 @@ function renderEmployees() {
   $('#e-add').onclick = () => openEmployeeModal(null);
   $('#e-import').onclick = handleImportCsv;
   $('#e-export').onclick = () => exportEmployeesCsv(list);
-  $('#e-print').onclick = () => printEmployeeReport(list);
+  $('#e-print').onclick = () => openEmployeeReportModal();
   $('#e-cal').onclick = () => renderRenewalCalendarModal();
   if (sel) {
     const selected = () => list.filter(e => EMP_SELECTED.has(e.id)).concat([...EMP_SELECTED].filter(id => !list.find(e => e.id === id)).map(id => IDX.employee[id]).filter(Boolean));
@@ -170,7 +170,7 @@ function renderEmployees() {
     $('#b-renew').onclick = () => openBulkRenewModal([...EMP_SELECTED]);
     $('#b-contracts').onclick = () => openBatchContractModal(selected().map(e => e.id));
     $('#b-export').onclick = () => exportEmployeesCsv(selected());
-    $('#b-print').onclick = () => printEmployeeReport(selected());
+    $('#b-print').onclick = () => openEmployeeReportModal(selected().map(e => e.id));
     $('#b-clear').onclick = () => { EMP_SELECTED.clear(); render(); };
   }
 }
@@ -190,15 +190,233 @@ function exportEmployeesCsv(list) {
   const keep = r => r.filter((_, i) => !drop.includes(i));
   downloadBlob(toCsv([keep(head).map(t), ...rows.map(keep)]), `employees-${todayISO()}.csv`, 'text/csv;charset=utf-8');
 }
-function printEmployeeReport(list) {
-  const f = UI.emp;
-  const filt = [f.company && companyName(f.company), f.project && projectName(f.project), f.status && (EMP_STATUS_LABELS[f.status] || {}).ar,
-    f.stage && (govStageInfo(f.stage) || {}).label, f.nationality, f.costCenter, f.q && '«' + f.q + '»'].filter(Boolean).join(' · ');
-  printHtml(t('تقرير الموظفين'), `<h1>${t('تقرير الموظفين')}</h1><div class="muted">${fmtDate(todayISO())} · ${list.length} ${t('موظف')}${filt ? ' · ' + esc(filt) : ''}</div>
-    <table><thead><tr><th>#</th><th>${t('الاسم')}</th><th>${t('الرقم المدني')}</th><th>${t('الجنسية')}</th><th>${t('المهنة')}</th><th>${t('الشركة')}</th><th>${t('الإقامة')}</th><th>${t('إذن العمل')}</th><th>${t('الجواز')}</th><th>${t('المعاملة')}</th></tr></thead>
-    <tbody>${list.map((e, i) => `<tr><td>${i + 1}</td><td>${esc(empName(e))}</td><td>${esc(e.id)}</td><td>${esc(e.nationality || '')}</td><td>${esc(e.profession || '')}</td>
-      <td>${esc(companyName(empCompanyId(e)))}</td><td>${datePill(e.residencyExp)}</td><td>${datePill(e.workPermitExp)}</td><td>${datePill(e.passportExp)}</td>
-      <td>${esc(t((govStageInfo(e.govStage) || {}).label || ''))}${e.govStageNote ? ' — ' + esc(e.govStageNote) : ''}</td></tr>`).join('')}</tbody></table>`);
+/* ---------- تقرير الموظفين: اختيار الأعمدة والفلاتر والتجميع ← openReportWindow ----------
+   الأعمدة: v = القيمة (نص)، date = تاريخ (شارة ملوّنة حسب المستوى)، money = مبلغ (بيتجمع)، perm = صلاحية لازمة */
+const EMP_REPORT_GROUPS = [['basic', 'البيانات الأساسية'], ['work', 'العمل'], ['docs', 'المستندات'], ['gov', 'المعاملة الحكومية'], ['contact', 'الاتصال والبنك']];
+const EMP_REPORT_COLS = [
+  { k: 'name', g: 'basic', l: 'الاسم', v: e => empName(e) },
+  { k: 'nameEn', g: 'basic', l: 'الاسم (إنجليزي)', v: e => e.nameEn },
+  { k: 'id', g: 'basic', l: 'الرقم المدني', v: e => e.id, num: true },
+  { k: 'unifiedNumber', g: 'basic', l: 'الرقم الموحد', v: e => e.unifiedNumber, num: true },
+  { k: 'nationality', g: 'basic', l: 'الجنسية', v: e => e.nationality },
+  { k: 'gender', g: 'basic', l: 'الجنس', v: e => t(GENDER_LABELS[e.gender] || '') },
+  { k: 'dateOfBirth', g: 'basic', l: 'تاريخ الميلاد', date: true },
+  { k: 'profession', g: 'basic', l: 'المهنة', v: e => e.profession },
+  { k: 'company', g: 'work', l: 'الشركة', v: e => companyName(empCompanyId(e)) },
+  { k: 'project', g: 'work', l: 'المشروع', v: e => projectName(primaryAff(e).projectId) },
+  { k: 'costCenter', g: 'work', l: 'مركز التكلفة', v: e => e.costCenter },
+  { k: 'status', g: 'work', l: 'الحالة الوظيفية', v: e => { const s = EMP_STATUS_LABELS[e.employmentStatus || 'active'] || {}; return LANG === 'en' ? s.en : s.ar; } },
+  { k: 'dateOfHire', g: 'work', l: 'تاريخ التعيين', date: true, plain: true },
+  { k: 'serviceEndDate', g: 'work', l: 'تاريخ انتهاء الخدمة', date: true, plain: true },
+  { k: 'contractType', g: 'work', l: 'نوع العقد', v: e => e.contractType },
+  { k: 'fileNo', g: 'work', l: 'رقم الملف', v: e => e.fileNo, num: true },
+  { k: 'actualWorkplace', g: 'work', l: 'مكان العمل الفعلي', v: e => e.actualWorkplace },
+  { k: 'salary', g: 'work', l: 'الراتب', money: true, perm: 'sensitive.salary' },
+  { k: 'housingAmount', g: 'work', l: 'بدل السكن', money: true, perm: 'sensitive.salary' },
+  { k: 'residencyExp', g: 'docs', l: 'انتهاء الإقامة', date: true },
+  { k: 'workPermitExp', g: 'docs', l: 'انتهاء إذن العمل', date: true },
+  { k: 'passportNo', g: 'docs', l: 'رقم الجواز', v: e => e.passportNo, perm: 'sensitive.documents' },
+  { k: 'passportExp', g: 'docs', l: 'انتهاء الجواز', date: true },
+  { k: 'healthCardExp', g: 'docs', l: 'انتهاء البطاقة الصحية', date: true },
+  { k: 'drivingLicenseExp', g: 'docs', l: 'انتهاء رخصة القيادة', date: true },
+  { k: 'urgency', g: 'docs', l: 'الأقرب انتهاءً', v: e => { const u = empUrgency(e); return u === null ? '' : daysText(u); } },
+  { k: 'govStage', g: 'gov', l: 'مرحلة المعاملة', v: e => t((govStageInfo(e.govStage) || {}).label || '') },
+  { k: 'govStageNote', g: 'gov', l: 'ملاحظة التعطّل', v: e => e.govStageNote },
+  { k: 'govStageResponsible', g: 'gov', l: 'المسؤول', v: e => e.govStageResponsible },
+  { k: 'govStageStartDate', g: 'gov', l: 'تاريخ بدء المعاملة', date: true, plain: true },
+  { k: 'govTransactionCost', g: 'gov', l: 'تكلفة المعاملة', money: true, perm: 'sensitive.salary' },
+  { k: 'phone', g: 'contact', l: 'الهاتف', v: e => e.phone, num: true },
+  { k: 'homePhone', g: 'contact', l: 'هاتف المنزل', v: e => e.homePhone, num: true },
+  { k: 'address', g: 'contact', l: 'عنوان السكن', v: e => addressText(e) },
+  { k: 'bank', g: 'contact', l: 'البنك', v: e => e.bank, perm: 'sensitive.bank' },
+  { k: 'iban', g: 'contact', l: 'IBAN', v: e => e.iban, perm: 'sensitive.bank' },
+];
+const EMP_REPORT_PRESETS = [
+  { id: 'general', l: 'عام', cols: ['name', 'id', 'nationality', 'profession', 'company', 'status', 'residencyExp', 'workPermitExp', 'passportExp'] },
+  { id: 'docs', l: 'المستندات والتواريخ', cols: ['name', 'id', 'company', 'residencyExp', 'workPermitExp', 'passportNo', 'passportExp', 'healthCardExp', 'urgency'], sort: 'urgency' },
+  { id: 'payroll', l: 'الرواتب', cols: ['name', 'id', 'company', 'costCenter', 'profession', 'dateOfHire', 'salary', 'housingAmount'], group: 'company', perm: 'sensitive.salary' },
+  { id: 'gov', l: 'المعاملات الحكومية', cols: ['name', 'id', 'company', 'govStage', 'govStageNote', 'govStageResponsible', 'govStageStartDate', 'residencyExp'], group: 'govStage' },
+  { id: 'contact', l: 'بيانات الاتصال', cols: ['name', 'id', 'company', 'phone', 'homePhone', 'address'] },
+];
+const EMP_REPORT_GROUPBY = [['', 'بدون تجميع'], ['company', 'الشركة'], ['project', 'المشروع'], ['costCenter', 'مركز التكلفة'], ['nationality', 'الجنسية'], ['status', 'الحالة الوظيفية'], ['govStage', 'مرحلة المعاملة']];
+const EMP_REPORT_SORTS = ['name', 'id', 'company', 'nationality', 'residencyExp', 'workPermitExp', 'passportExp', 'dateOfHire', 'salary', 'urgency'];
+
+/** مبلغ من غير العملة (العملة في عنوان العمود) */
+function rptNum(v) { return Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 3 }); }
+function empReportCols() { return EMP_REPORT_COLS.filter(c => !c.perm || can(c.perm)); }
+function empReportCell(c, e, colors) {
+  if (c.date) return c.plain || !colors ? esc(fmtDate(e[c.k]) || '') : (e[c.k] ? datePill(e[c.k]) : '');
+  if (c.money) return e[c.k] ? rptNum(e[c.k]) : '';
+  return esc(c.v(e) || '');
+}
+function empReportRaw(c, e) { return c.date || c.money ? (e[c.k] ?? '') : (c.v(e) ?? ''); }
+function empReportSortVal(k, e) {
+  if (k === 'urgency') { const u = empUrgency(e); return u === null ? 1e9 : u; }
+  if (k === 'salary') return -(e.salary || 0);
+  const c = EMP_REPORT_COLS.find(x => x.k === k);
+  return c.date ? (e[k] || '9999') : String(c.v(e) || '');
+}
+function empGroupKey(by, e) {
+  if (by === 'company') return [empCompanyId(e) || '', companyName(empCompanyId(e)) || t('بدون شركة')];
+  if (by === 'project') {   // مشاريع كتير بنفس الاسم ← رقم الملف بيفرّق بينها
+    const p = primaryAff(e).projectId, pr = IDX.project[p];
+    return [p || '', p ? projectName(p) + (pr && pr.fileNumber ? ` — ${t('رقم الملف')} ${pr.fileNumber}` : '') : t('بدون مشروع')];
+  }
+  if (by === 'costCenter') return [e.costCenter || '', e.costCenter || t('بدون مركز تكلفة')];
+  if (by === 'nationality') return [e.nationality || '', e.nationality || '—'];
+  if (by === 'status') { const s = e.employmentStatus || 'active'; return [s, EMP_REPORT_COLS.find(c => c.k === 'status').v(e)]; }
+  if (by === 'govStage') return [e.govStage || '', e.govStage ? t((govStageInfo(e.govStage) || {}).label) : t('بدون معاملة')];
+  return ['', ''];
+}
+
+/** نافذة إعداد التقرير. selected = الموظفين المحددين (لو فيه) */
+function openEmployeeReportModal(selected = []) {
+  const R = UI.report = Object.assign({ preset: 'general', cols: EMP_REPORT_PRESETS[0].cols, groupBy: '', sort: 'name', orientation: 'auto', summary: true, sign: false, colors: true }, UI.report || {});
+  const F = { ...UI.emp };                               // الفلاتر: نسخة من فلاتر الشاشة (مابتغيّرهاش)
+  let scope = selected.length ? 'selected' : 'filters';
+  const cols = empReportCols();
+  const presets = EMP_REPORT_PRESETS.filter(p => !p.perm || can(p.perm));
+  const nats = uniq(scopedEmployees().map(e => e.nationality || '—')).sort();
+  const m = openModal({
+    title: '📊 ' + t('تقرير الموظفين'), size: 'wide',
+    body: `<div class="rb">
+      <div class="rb-sec"><h4>${t('القالب')}</h4><div class="row" id="rb-presets">${presets.map(p => `<span class="chip clickable" data-preset="${p.id}">${esc(t(p.l))}</span>`).join('')}<span class="chip clickable" data-preset="custom">${t('مخصص')}</span></div></div>
+      <div class="rb-sec"><h4>${t('الأعمدة')} <span class="muted small" id="rb-ncols"></span></h4>
+        <div class="rb-cols">${EMP_REPORT_GROUPS.map(([g, gl]) => { const list = cols.filter(c => c.g === g); return list.length ? `<div><b>${esc(t(gl))}</b>${list.map(c => `<label class="check"><input type="checkbox" data-col="${c.k}"> ${esc(t(c.l))}</label>`).join('')}</div>` : ''; }).join('')}</div></div>
+      <div class="rb-sec"><h4>${t('الموظفين')} <span class="chip on" id="rb-count"></span></h4>
+        ${selected.length ? `<div class="row" style="margin-bottom:8px"><label class="check"><input type="radio" name="rb-scope" value="selected" checked> ${t('المحددين فقط')} (${selected.length})</label>
+          <label class="check"><input type="radio" name="rb-scope" value="filters"> ${t('حسب الفلاتر')}</label></div>` : ''}
+        <div class="form" id="rb-filters">
+          <label>${t('الشركة')}<select name="company">${companyOptions(F.company, '— كل الشركات —')}</select></label>
+          <label>${t('المشروع')}<select name="project">${opt('', t('— كل المشاريع —'), !F.project)}${opt('__none', t('بدون مشروع'), F.project === '__none')}${scopedProjects().map(p => opt(p.id, `${projectName(p.id)} — ${companyName(p.companyId)}`, p.id === F.project)).join('')}</select></label>
+          <label>${t('الحالة الوظيفية')}<select name="status">${opt('', t('— كل الحالات —'), !F.status)}${Object.entries(EMP_STATUS_LABELS).map(([k, v]) => opt(k, LANG === 'en' ? v.en : v.ar, k === F.status)).join('')}</select></label>
+          <label>${t('الجنسية')}<select name="nationality">${opt('', t('— كل الجنسيات —'), !F.nationality)}${nats.map(n => opt(n, n, n === F.nationality)).join('')}</select></label>
+          <label>${t('مركز التكلفة')}<select name="costCenter">${costCenterOptions(F.costCenter, '— كل مراكز التكلفة —')}</select></label>
+          <label>${t('مرحلة المعاملة')}<select name="stage">${opt('', t('— كل مراحل المعاملات —'), !F.stage)}${opt('__none', t('بدون معاملة'), F.stage === '__none')}${opt('__note', t('عليها ملاحظة تعطّل'), F.stage === '__note')}${GOV_STAGES.map(g => opt(g.id, g.dot + ' ' + t(g.label), g.id === F.stage)).join('')}</select></label>
+          <label>${t('المستند')}<select name="tierField">${opt('any', t('أي مستند'), F.tierField === 'any')}${EMP_DATE_FIELDS.map(x => opt(x.key, t(x.label), x.key === F.tierField)).join('')}</select></label>
+          <label>${t('المستوى')}<select name="tier">${opt('', t('— كل المستويات —'), !F.tier)}${opt('soon', t('منتهي أو خلال 30 يوم'), F.tier === 'soon')}${Object.entries(TIERS).map(([k, v]) => opt(k, t(v.label), k === F.tier)).join('')}</select></label>
+          <label>${t('بحث')}<input name="q" value="${esc(F.q || '')}" placeholder="${esc(t('الاسم، الرقم المدني، الجواز…'))}"></label>
+          <label class="check"><input type="checkbox" name="driver" ${F.driver ? 'checked' : ''}> 🚚 ${t('السائقين فقط')}</label>
+        </div></div>
+      <div class="rb-sec"><h4>${t('التنسيق')}</h4><div class="form">
+          <label class="full">${t('عنوان التقرير')}<input id="rb-title" value="${esc(t('تقرير الموظفين'))}"></label>
+          <label>${t('تجميع حسب')}<select id="rb-group">${EMP_REPORT_GROUPBY.map(([k, l]) => opt(k, t(l), k === R.groupBy)).join('')}</select></label>
+          <label>${t('ترتيب حسب')}<select id="rb-sort">${EMP_REPORT_SORTS.filter(k => cols.some(c => c.k === k)).map(k => opt(k, t(EMP_REPORT_COLS.find(c => c.k === k).l), k === R.sort)).join('')}</select></label>
+          <label>${t('اتجاه الصفحة')}<select id="rb-orient">${opt('auto', t('تلقائي حسب عدد الأعمدة'), R.orientation === 'auto')}${opt('landscape', t('عرضي'), R.orientation === 'landscape')}${opt('portrait', t('طولي'), R.orientation === 'portrait')}</select></label>
+          <label class="check"><input type="checkbox" id="rb-summary" ${R.summary ? 'checked' : ''}> ${t('ملخص في أول التقرير')}</label>
+          <label class="check"><input type="checkbox" id="rb-colors" ${R.colors ? 'checked' : ''}> ${t('تلوين التواريخ حسب الانتهاء')}</label>
+          <label class="check"><input type="checkbox" id="rb-sign" ${R.sign ? 'checked' : ''}> ${t('خانات التوقيع (أعده / راجعه / اعتمده)')}</label>
+        </div></div>
+      </div>`,
+    foot: `<button class="btn primary" data-go="print">🖨️ ${t('معاينة وطباعة')}</button><button class="btn" data-go="csv">📤 ${t('Excel (CSV) بنفس الأعمدة')}</button>
+      <span class="spacer"></span><button class="btn" data-close>إلغاء</button>`,
+  });
+  const E = m.el;
+  const chosen = () => cols.filter(c => R.cols.includes(c.k));
+  const filters = () => ({ ...F, ...formValues($('#rb-filters', E)), link: '', page: 1 });
+  const rows = () => scope === 'selected' ? selected.map(id => IDX.employee[id]).filter(Boolean) : filteredEmployees(filters());
+  const sync = () => {
+    $$('[data-preset]', E).forEach(c => c.classList.toggle('on', c.dataset.preset === R.preset));
+    $$('[data-col]', E).forEach(cb => { cb.checked = R.cols.includes(cb.dataset.col); });
+    $('#rb-ncols', E).textContent = `(${chosen().length})`;
+    $('#rb-count', E).textContent = `${rows().length} ${t('موظف')}`;
+    $('#rb-filters', E).style.opacity = scope === 'selected' ? .45 : 1;
+    $$('#rb-filters select, #rb-filters input', E).forEach(x => { x.disabled = scope === 'selected'; });
+  };
+  $$('[data-preset]', E).forEach(c => c.onclick = () => {
+    const p = presets.find(x => x.id === c.dataset.preset);
+    R.preset = c.dataset.preset;
+    if (p) {
+      R.cols = p.cols.filter(k => cols.some(x => x.k === k));
+      if (p.group !== undefined) { R.groupBy = p.group; $('#rb-group', E).value = p.group; }
+      if (p.sort) { R.sort = p.sort; $('#rb-sort', E).value = p.sort; }
+    }
+    sync();
+  });
+  $$('[data-col]', E).forEach(cb => cb.onchange = () => {
+    R.cols = cb.checked ? [...R.cols, cb.dataset.col] : R.cols.filter(k => k !== cb.dataset.col);
+    R.cols = cols.map(c => c.k).filter(k => R.cols.includes(k));     // بترتيب الكتالوج
+    R.preset = 'custom'; sync();
+  });
+  $$('input[name="rb-scope"]', E).forEach(r => r.onchange = () => { scope = r.value; sync(); });
+  $('#rb-filters', E).addEventListener('change', sync);
+  $('#rb-filters', E).addEventListener('input', debounce(sync, 250));
+  sync();
+  $$('[data-go]', E).forEach(b => b.onclick = () => {
+    Object.assign(R, { groupBy: $('#rb-group', E).value, sort: $('#rb-sort', E).value, orientation: $('#rb-orient', E).value,
+      summary: $('#rb-summary', E).checked, colors: $('#rb-colors', E).checked, sign: $('#rb-sign', E).checked });
+    saveUiStateToLocalStorage();
+    if (!chosen().length) return toast('اختار عمود واحد على الأقل', 'err');
+    const list = rows();
+    if (!list.length) return toast('مفيش موظفين بالفلاتر دي', 'err');
+    const f = filters();
+    if (b.dataset.go === 'csv') return exportEmployeeReportCsv(list, chosen());
+    printEmployeeReport(list, chosen(), { title: $('#rb-title', E).value.trim() || t('تقرير الموظفين'), filters: scope === 'selected' ? null : f,
+      selectedCount: scope === 'selected' ? list.length : 0 });
+  });
+}
+
+function exportEmployeeReportCsv(list, cols) {
+  const sorted = list.slice().sort((a, b) => { const x = empReportSortVal(UI.report.sort, a), y = empReportSortVal(UI.report.sort, b); return typeof x === 'number' ? x - y : String(x).localeCompare(String(y), 'ar'); });
+  downloadBlob(toCsv([cols.map(c => t(c.l)), ...sorted.map(e => cols.map(c => empReportRaw(c, e)))]), `employees-report-${todayISO()}.csv`, 'text/csv;charset=utf-8');
+}
+
+/** التقرير نفسه: رأس الشركة، المعايير، الملخص، الجدول (مجمّع بإجماليات لو فيه مبالغ) */
+function printEmployeeReport(list, cols, { title, filters, selectedCount }) {
+  const R = UI.report;
+  const cmp = (a, b) => { const x = empReportSortVal(R.sort, a), y = empReportSortVal(R.sort, b); return typeof x === 'number' ? x - y : String(x).localeCompare(String(y), 'ar'); };
+  // الشعار: شركة الفلتر، أو لو كل الموظفين على شركة واحدة
+  const coIds = uniq(list.map(empCompanyId));
+  const company = (filters && filters.company && IDX.company[filters.company]) || (coIds.length === 1 ? IDX.company[coIds[0]] : null);
+  // المعايير المطبّقة
+  const crit = [];
+  if (selectedCount) crit.push(`${t('موظفين محددين')}: ${selectedCount}`);
+  if (filters) {
+    const f = filters;
+    if (f.company) crit.push(`${t('الشركة')}: ${esc(companyName(f.company))}`);
+    if (f.project) crit.push(`${t('المشروع')}: ${esc(f.project === '__none' ? t('بدون مشروع') : projectName(f.project))}`);
+    if (f.status) crit.push(`${t('الحالة')}: ${esc((EMP_STATUS_LABELS[f.status] || {})[LANG === 'en' ? 'en' : 'ar'] || f.status)}`);
+    if (f.nationality) crit.push(`${t('الجنسية')}: ${esc(f.nationality)}`);
+    if (f.costCenter) crit.push(`${t('مركز التكلفة')}: ${esc(f.costCenter)}`);
+    if (f.stage) crit.push(`${t('المعاملة')}: ${esc(f.stage === '__none' ? t('بدون معاملة') : f.stage === '__note' ? t('عليها ملاحظة تعطّل') : t((govStageInfo(f.stage) || {}).label || ''))}`);
+    if (f.tier) crit.push(`${esc(f.tierField === 'any' ? t('أي مستند') : t((EMP_DATE_FIELDS.find(x => x.key === f.tierField) || {}).label || ''))}: ${esc(f.tier === 'soon' ? t('منتهي أو خلال 30 يوم') : t(TIERS[f.tier].label))}`);
+    if (f.driver) crit.push(t('السائقين فقط'));
+    if (f.q) crit.push(`${t('بحث')}: «${esc(f.q)}»`);
+  }
+  const groupLabel = (EMP_REPORT_GROUPBY.find(g => g[0] === R.groupBy) || [])[1];
+  if (R.groupBy) crit.push(`${t('تجميع حسب')}: ${esc(t(groupLabel))}`);
+  crit.push(`${t('ترتيب حسب')}: ${esc(t(EMP_REPORT_COLS.find(c => c.k === R.sort).l))}`);
+  // الملخص
+  const expired = list.filter(e => EMP_DATE_FIELDS.some(f => (!f.driverOnly || e.isDriver) && tierOf(e[f.key]) === 'expired')).length;
+  const soon = list.filter(e => EMP_DATE_FIELDS.some(f => (!f.driverOnly || e.isDriver) && tierOf(e[f.key]) === 'd30')).length;
+  const summary = R.summary ? [[list.length, t('إجمالي الموظفين')], [list.filter(e => (e.employmentStatus || 'active') === 'active').length, t('في الخدمة')],
+    [expired, t('عندهم مستند منتهي')], [soon, t('مستند بينتهي خلال 30 يوم')],
+    ...(can('sensitive.salary') && cols.some(c => c.k === 'salary') ? [[fmtMoney(sum(list.map(e => e.salary))), t('إجمالي الرواتب')]] : [])] : [];
+  // الجدول
+  const money = cols.filter(c => c.money);
+  const totalsRow = (cls, label, rs) => money.length ? `<tr class="${cls}"><td></td>${cols.map((c, i) => c.money ? `<td class="num">${rptNum(sum(rs.map(e => e[c.k])))}</td>` : i === 0 ? `<td>${label}</td>` : '<td></td>').join('')}</tr>` : '';
+  let z = 0;
+  const rowHtml = (e, i) => `<tr class="${z++ % 2 ? 'z' : ''}"><td class="idx">${i}</td>${cols.map(c => `<td class="${c.num || c.money ? 'num' : ''}">${empReportCell(c, e, R.colors)}</td>`).join('')}</tr>`;
+  let body = '', n = 0;
+  if (R.groupBy) {
+    const groups = new Map();
+    list.slice().sort(cmp).forEach(e => { const [k, l] = empGroupKey(R.groupBy, e); if (!groups.has(k)) groups.set(k, { l, rows: [] }); groups.get(k).rows.push(e); });
+    [...groups.entries()].sort((a, b) => b[1].rows.length - a[1].rows.length || String(a[1].l).localeCompare(String(b[1].l), 'ar')).forEach(([k, g]) => {
+      const logo = R.groupBy === 'company' && IDX.company[k] && IDX.company[k].logoUrl ? `<img src="${esc(location.origin + IDX.company[k].logoUrl)}" alt="">` : '';
+      z = 0;
+      body += `<tr class="grp"><td colspan="${cols.length + 1}">${logo}${esc(g.l)}<small>${g.rows.length} ${t('موظف')}</small></td></tr>`;
+      body += g.rows.map(e => rowHtml(e, ++n)).join('');
+      body += totalsRow('sub', `${t('إجمالي')} ${esc(g.l)}`, g.rows);
+    });
+  } else {
+    body = list.slice().sort(cmp).map(e => rowHtml(e, ++n)).join('');
+  }
+  const table = `<table class="rpt"><thead><tr><th>#</th>${cols.map(c => `<th class="${c.num || c.money ? 'num' : ''}">${esc(t(c.l))}${c.money ? ` (${t('د.ك')})` : ''}</th>`).join('')}</tr></thead>
+    <tbody>${body}</tbody>${money.length ? `<tfoot>${totalsRow('', `${t('الإجمالي العام')} (${list.length})`, list)}</tfoot>` : ''}</table>`;
+  const landscape = R.orientation === 'landscape' || (R.orientation === 'auto' && cols.length > 6);
+  const preset = EMP_REPORT_PRESETS.find(p => p.id === R.preset);
+  openReportWindow({ title, subtitle: preset ? t(preset.l) : '', company, criteria: crit.join(' · '), summary, body: table, sign: R.sign, landscape,
+    meta: [[t('عدد السجلات'), String(list.length)], [t('رقم التقرير'), 'EMP-' + todayISO().replace(/-/g, '') + '-' + new Date().toTimeString().slice(0, 5).replace(':', '')]] });
 }
 
 /* ---------- الاستيراد ---------- */

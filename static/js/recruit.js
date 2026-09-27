@@ -131,9 +131,24 @@ function renderCandidatesReportModal() {
     ...rows.map(r => [r.c.name, r.c.nameEn, r.c.nationality, r.c.profession, r.c.source, r.st, companyName(r.c.targetCompanyId), r.c.salary, r.c.housingAllowance ? 'yes' : '', r.c.passportNo, r.c.appliedDate, r.deadline])]), `candidates-${todayISO()}.csv`, 'text/csv');
 }
 function printCandidatesReport(rows) {
-  printHtml(t('تقرير المترشّحين'), `<h1>${t('تقرير المترشّحين')}</h1><div class="muted">${fmtDate(todayISO())} · ${rows.length}</div>
-    <table><thead><tr><th>#</th><th>${t('الاسم')}</th><th>${t('الجنسية')}</th><th>${t('المهنة')}</th><th>${t('المصدر')}</th><th>${t('المرحلة')}</th><th>${t('الشركة المستهدفة')}</th><th>${t('الراتب')}</th><th>${t('بدل السكن')}</th><th>${t('المهلة')}</th></tr></thead>
-    <tbody>${rows.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.c.name)}</td><td>${esc(r.c.nationality || '')}</td><td>${esc(r.c.profession || '')}</td><td>${r.c.source === 'internal' ? t('نقل داخلي') : t('من الخارج')}</td><td>${esc(r.st)}</td><td>${esc(companyName(r.c.targetCompanyId))}</td><td>${r.c.salary || ''}</td><td>${r.c.housingAllowance ? '✓' : ''}</td><td>${datePill(r.deadline)}</td></tr>`).join('')}</tbody></table>`);
+  // نفس شكل تقارير الموظفين (openReportWindow): شعار الشركة لو كل المترشّحين على شركة واحدة
+  const f = UI.cand, coIds = uniq(rows.map(r => r.c.targetCompanyId));
+  const company = (f.company && IDX.company[f.company]) || (coIds.length === 1 ? IDX.company[coIds[0]] : null);
+  const sal = can('sensitive.salary');
+  const crit = [f.source && `${t('المصدر')}: ${t(f.source === 'internal' ? 'نقل داخلي' : 'استقدام من الخارج')}`,
+    f.stage && `${t('المرحلة')}: ${esc(t((recruitStageInfo(f.source || 'outside', f.stage) || recruitStageInfo('internal', f.stage) || {}).label || f.stage))}`,
+    f.company && `${t('الشركة المستهدفة')}: ${esc(companyName(f.company))}`, f.q && `${t('بحث')}: «${esc(f.q)}»`].filter(Boolean).join(' · ');
+  const active = rows.filter(r => r.c.stage !== 'rejected');
+  const table = `<table class="rpt"><thead><tr><th>#</th><th>${t('الاسم')}</th><th>${t('الجنسية')}</th><th>${t('المهنة')}</th><th>${t('المصدر')}</th><th>${t('المرحلة')}</th><th>${t('الشركة المستهدفة')}</th>
+      ${sal ? `<th class="num">${t('الراتب')} (${t('د.ك')})</th>` : ''}<th>${t('بدل السكن')}</th><th>${t('المهلة')}</th></tr></thead>
+    <tbody>${rows.map((r, i) => `<tr class="${i % 2 ? 'z' : ''}"><td class="idx">${i + 1}</td><td>${esc(r.c.name)}</td><td>${esc(r.c.nationality || '')}</td><td>${esc(r.c.profession || '')}</td>
+      <td>${r.c.source === 'internal' ? t('نقل داخلي') : t('من الخارج')}</td><td>${esc(r.st)}</td><td>${esc(companyName(r.c.targetCompanyId))}</td>
+      ${sal ? `<td class="num">${r.c.salary ? rptNum(r.c.salary) : ''}</td>` : ''}<td>${r.c.housingAllowance ? '✓' : ''}</td><td>${r.deadline ? datePill(r.deadline) : ''}</td></tr>`).join('')}</tbody>
+    ${sal ? `<tfoot><tr><td></td><td colspan="6">${t('إجمالي الرواتب المتفق عليها')} (${active.length})</td><td class="num">${rptNum(sum(active.map(r => r.c.salary)))}</td><td></td><td></td></tr></tfoot>` : ''}</table>`;
+  openReportWindow({ title: t('تقرير المترشّحين'), company, criteria: crit, body: table, landscape: true,
+    summary: [[rows.length, t('الإجمالي')], [rows.filter(r => r.c.source !== 'internal').length, t('من الخارج')], [rows.filter(r => r.c.source === 'internal').length, t('نقل داخلي')],
+      [rows.filter(r => r.c.stage === 'rejected').length, t('مرفوض')]],
+    meta: [[t('عدد السجلات'), String(rows.length)]] });
 }
 
 /* ---------- نموذج المترشّح ---------- */

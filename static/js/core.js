@@ -390,6 +390,88 @@ function printHtml(title, html) {
   w.document.close();
 }
 
+/* ---------- التقارير المطبوعة (شكل ERP) ----------
+   رأس: شعار الشركة واسمها + عنوان التقرير + بيانات الطباعة، وبعدين المعايير والملخص والجدول وخانات التوقيع.
+   رأس الجدول بيتكرر في كل صفحة، وترقيم «صفحة X من Y» في هامش الصفحة (@page). */
+const REPORT_CSS = `
+  :root{--ink:#1d2623;--muted:#66736f;--line:#d3dbd8;--head:#1f4d40;--band:#f1f5f3;--zebra:#f8faf9}
+  *{box-sizing:border-box} html{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body{margin:0;font-family:"IBM Plex Sans Arabic","Cairo","Segoe UI",Tahoma,sans-serif;font-size:10.5px;color:var(--ink);background:#e7ecea}
+  .toolbar{position:sticky;top:0;z-index:5;display:flex;gap:8px;align-items:center;padding:8px 16px;background:#163f32;color:#fff;font-size:13px}
+  .toolbar button{font:inherit;border:0;border-radius:6px;padding:6px 14px;cursor:pointer;background:rgba(255,255,255,.14);color:#fff}
+  .toolbar button.primary{background:#fff;color:#163f32;font-weight:600} .toolbar .sp{flex:1} .toolbar small{opacity:.75}
+  .sheet{background:#fff;margin:14px auto;padding:12mm 10mm;box-shadow:0 2px 14px rgba(0,0,0,.14)}
+  .sheet.land{width:297mm} .sheet.port{width:210mm}
+  .rpt-head{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:14px;padding-bottom:10px;border-bottom:2px solid var(--head)}
+  .rpt-brand{display:flex;align-items:center;gap:10px;min-width:0}
+  .rpt-brand img{height:54px;max-width:130px;object-fit:contain}
+  .rpt-brand .mark{width:46px;height:46px;border-radius:8px;background:var(--head);color:#fff;display:grid;place-items:center;font-weight:800;font-size:20px}
+  .rpt-brand .ar{font-size:14px;font-weight:700;line-height:1.3} .rpt-brand .en{font-size:9.5px;color:var(--muted);direction:ltr;unicode-bidi:plaintext}
+  .rpt-title{text-align:center} .rpt-title h1{margin:0;font-size:18px} .rpt-title .sub{color:var(--muted);font-size:11px;margin-top:3px}
+  .rpt-meta{justify-self:end;border-collapse:collapse;font-size:9.5px}
+  .rpt-meta th{color:var(--muted);font-weight:500;text-align:start;padding:1px 0;padding-inline-end:10px;white-space:nowrap} .rpt-meta td{font-weight:600;padding:1px 0;white-space:nowrap}
+  .rpt-criteria{margin:9px 0 8px;padding:6px 10px;background:var(--band);border-inline-start:3px solid var(--head);font-size:9.5px;line-height:1.6}
+  .rpt-criteria b{color:var(--head)}
+  .rpt-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:8px;margin:0 0 10px}
+  .rpt-summary div{border:1px solid var(--line);border-top:3px solid var(--head);border-radius:3px;padding:5px 9px}
+  .rpt-summary b{display:block;font-size:15px;line-height:1.3} .rpt-summary span{color:var(--muted);font-size:9px}
+  table.rpt{width:100%;border-collapse:collapse;font-size:9.8px}
+  table.rpt thead th{background:var(--head);color:#fff;font-weight:600;text-align:start;padding:6px 5px;border:1px solid var(--head);white-space:nowrap}
+  table.rpt td{padding:4px 5px;border:1px solid var(--line);vertical-align:top}
+  table.rpt tr{break-inside:avoid} table.rpt tr.z td{background:var(--zebra)}
+  table.rpt td.num,table.rpt th.num{text-align:end;font-variant-numeric:tabular-nums;white-space:nowrap} table.rpt td.idx{color:var(--muted);text-align:center;width:28px}
+  table.rpt tr.grp td{background:var(--band);font-weight:700;font-size:10.5px;padding:6px;border-top:1.5px solid var(--head)}
+  table.rpt tr.grp img{height:18px;max-width:40px;object-fit:contain;vertical-align:middle;margin-inline-end:6px}
+  table.rpt tr.grp small{color:var(--muted);font-weight:500;margin-inline-start:6px}
+  table.rpt tr.sub td{font-weight:600;background:#fbfcfb;border-bottom:1.5px solid var(--line)}
+  table.rpt tfoot td{font-weight:700;background:var(--band);border-top:2px solid var(--head);padding:6px 5px}
+  .pill{display:inline-block;padding:0 5px;border-radius:3px;white-space:nowrap}
+  .t-expired{background:#fbe7e5;color:#b3261e}.t-d30{background:#fdeede;color:#b35c00}.t-d60{background:#fbf3d6;color:#7a5d00}.t-d90{background:#e2f3e9;color:#1e6b43}.t-ok,.t-none{background:none;color:inherit}
+  .rpt-sign{display:grid;grid-template-columns:repeat(3,1fr);gap:28px;margin-top:30px;break-inside:avoid}
+  .rpt-sign div{border-top:1px solid var(--ink);padding-top:4px;text-align:center;font-size:9.5px;color:var(--muted)}
+  .rpt-end{text-align:center;color:var(--muted);font-size:8.5px;margin-top:14px;letter-spacing:.3px}
+  @media print{body{background:#fff}.no-print{display:none!important}.sheet{margin:0;padding:0;box-shadow:none;width:auto}}`;
+/** CSS string آمن لـ content: في @page */
+function cssStr(s) { return '"' + String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, ' ') + '"'; }
+/**
+ * معاينة طباعة تقرير في نافذة جديدة (فيها زرار طباعة).
+ * company = شركة واحدة (شعارها واسمها في الرأس) أو null (اسم المجموعة). meta = [[العنوان، القيمة]].
+ * summary = [[القيمة، الوصف]]. body = جدول/محتوى التقرير.
+ */
+function openReportWindow({ title, subtitle = '', company = null, meta = [], criteria = '', summary = [], body = '', sign = false, landscape = true }) {
+  const w = window.open('', '_blank');
+  if (!w) { toast('المتصفح منع نافذة الطباعة', 'err'); return; }
+  const en = LANG === 'en', dir = en ? 'ltr' : 'rtl';
+  const group = ($('.brand small') || {}).textContent || 'Lunx';
+  const brand = company
+    ? `${company.logoUrl ? `<img src="${esc(location.origin + company.logoUrl)}" alt="">` : `<div class="mark">${esc((company.nameAr || '?').trim()[0])}</div>`}
+       <div><div class="ar">${esc(en ? (company.nameEn || company.nameAr) : company.nameAr)}</div>${!en && company.nameEn ? `<div class="en">${esc(company.nameEn)}</div>` : ''}</div>`
+    : `<div class="mark">${esc(group.trim()[0] || 'L')}</div><div><div class="ar">${esc(group)}</div><div class="en">${esc(t('كل الشركات'))}</div></div>`;
+  const printed = `${fmtDate(todayISO())} ${new Date().toTimeString().slice(0, 5)}`;
+  const pageNo = en ? `"Page " counter(page) " of " counter(pages)` : `"صفحة " counter(page) " من " counter(pages)`;
+  const box = `font-family:"IBM Plex Sans Arabic",Tahoma,sans-serif;font-size:8pt;color:#66736f`;
+  w.document.write(`<!DOCTYPE html><html dir="${dir}" lang="${LANG}"><head><meta charset="utf-8"><title>${esc(title)}</title>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap">
+    <style>${REPORT_CSS}
+      @page{size:A4 ${landscape ? 'landscape' : 'portrait'};margin:11mm 9mm 13mm;
+        @bottom-center{content:${pageNo};${box}}
+        @bottom-${en ? 'left' : 'right'}{content:${cssStr(title + ' — ' + (company ? (en ? company.nameEn || company.nameAr : company.nameAr) : group))};${box}}
+        @bottom-${en ? 'right' : 'left'}{content:${cssStr(printed)};${box}}}</style></head>
+    <body><div class="toolbar no-print"><button class="primary" onclick="print()">🖨️ ${esc(t('طباعة'))}</button><button onclick="close()">${esc(t('إغلاق'))}</button>
+      <span class="sp"></span><small>${esc(t('معاينة الطباعة'))} · A4 ${esc(t(landscape ? 'عرضي' : 'طولي'))}</small></div>
+    <div class="sheet ${landscape ? 'land' : 'port'}">
+      <header class="rpt-head"><div class="rpt-brand">${brand}</div>
+        <div class="rpt-title"><h1>${esc(title)}</h1>${subtitle ? `<div class="sub">${esc(subtitle)}</div>` : ''}</div>
+        <table class="rpt-meta">${[[t('تاريخ الطباعة'), printed], [t('أعده'), (STATE.me && (STATE.me.displayName || STATE.me.username)) || ''], ...meta]
+          .map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('')}</table></header>
+      ${criteria ? `<div class="rpt-criteria"><b>${esc(t('معايير التقرير'))}:</b> ${criteria}</div>` : ''}
+      ${summary.length ? `<div class="rpt-summary">${summary.map(([v, l]) => `<div><b>${esc(v)}</b><span>${esc(l)}</span></div>`).join('')}</div>` : ''}
+      ${body}
+      ${sign ? `<div class="rpt-sign"><div>${esc(t('أعده'))}</div><div>${esc(t('راجعه'))}</div><div>${esc(t('اعتمده'))}</div></div>` : ''}
+      <div class="rpt-end">— ${esc(t('نهاية التقرير'))} —</div></div></body></html>`);
+  w.document.close();
+}
+
 /* =====================================================================
    THEME
    ===================================================================== */
