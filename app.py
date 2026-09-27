@@ -1740,10 +1740,22 @@ def api_http_error(e):
     return e
 
 
+def lan_ip():
+    """عنوان الجهاز على الشبكة المحلية (للرسالة بس). الـ connect على UDP مابيبعتش حاجة، بس بيختار كارت الشبكة."""
+    import socket
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("10.255.255.255", 1))
+            return sock.getsockname()[0]
+    except OSError:
+        return None
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5050))
-    # Update the print statement so it visually reflects your network IP
-    print(f"Lunx {APP_VERSION} [{db.engine.dialect.name}] → http://192.168.1.87:{port}")
-    
-    # Changing the fallback from "127.0.0.1" to "0.0.0.0"
-    app.run(host=os.environ.get("HOST", "0.0.0.0"), port=port, debug=bool(os.environ.get("DEBUG")))
+    host = os.environ.get("HOST", "127.0.0.1")     # الجهاز ده بس. على الشبكة: HOST=0.0.0.0 (run_windows.bat)
+    url = f"http://localhost:{port}"
+    if host == "0.0.0.0" and lan_ip():
+        url += f"  ·  على الشبكة: http://{lan_ip()}:{port}"
+    print(f"Lunx {APP_VERSION} [{db.engine.dialect.name}] → {url}")
+    app.run(host=host, port=port, debug=bool(os.environ.get("DEBUG")))
