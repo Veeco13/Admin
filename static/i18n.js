@@ -163,6 +163,7 @@ window.I18N = {
   'تعديل بيانات المترشّح': 'Edit candidate details', 'اسم المفوّض بالإنجليزي': 'Signatory name (English)',
   'بتوقيع المفوّض': 'With signatory signature', 'إضافة بند بدل السكن (البند الثالث عشر)': 'Add housing allowance clause (Clause 13)',
   'تم التنزيل': 'Downloaded',
+  'توقيعات المفوّضين والموظفين': 'Signatory & employee signatures',
   // عقود متعددة: ملف لكل موظف
   'PDF لكل موظف': 'PDF per employee', 'ملف PDF منفصل باسم كل موظف': "A separate PDF named after each employee",
   'تم تنزيل': 'Downloaded', 'ملف': 'files', 'لو المتصفح سأل عن تنزيل ملفات متعددة، اختار «السماح».': 'If the browser asks about downloading multiple files, choose "Allow".',

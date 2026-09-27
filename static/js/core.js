@@ -733,7 +733,7 @@ const PERM_LABELS = {
   other: {
     'sensitive.salary': 'المرتب وبدل السكن وتكلفة المعاملات', 'sensitive.bank': 'البنك والـ IBAN',
     'sensitive.documents': 'رقم الجواز والمرفقات', 'system.import': 'استيراد الموظفين من Excel/CSV', 'system.backup': 'تنزيل نسخة احتياطية كاملة',
-    'contract.sign': 'طباعة العقود بالتوقيعات المرفوعة (المفوّض والموظف)',
+    'contract.sign': 'توقيعات المفوّضين والموظفين',
   },
 };
 /** ملخص صلاحيات دور بشكل مقروء: [{label, acts:[…]}] */
