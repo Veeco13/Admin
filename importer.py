@@ -45,6 +45,7 @@ HEADER_MAP = {
     "تاريخ إصدار الجواز": "passportIssueDate", "تاريخ اصدار الجواز": "passportIssueDate",
     "passportissuedate": "passportIssueDate",
     "الرقم الموحد": "unifiedNumber", "unifiednumber": "unifiedNumber",
+    "تاريخ انتهاء الخدمة": "serviceEndDate", "serviceenddate": "serviceEndDate",
     "فصيلة الدم": "bloodType", "bloodtype": "bloodType", "blood type": "bloodType",
     "المنطقة": "addressArea", "القطعة": "addressBlock", "الشارع": "addressStreet", "المنزل": "addressHouse",
     "الشقة": "addressApartment", "هاتف المنزل": "homePhone", "homephone": "homePhone",
@@ -60,7 +61,7 @@ HEADER_MAP = {
     "حالة التحويل": "transferNote", "ملاحظات": "notes", "notes": "notes",
 }
 
-DATE_FIELDS = {"workPermitIssue", "workPermitExp", "residencyExp", "passportIssueDate", "passportExp", "healthCardExp",
+DATE_FIELDS = {"workPermitIssue", "workPermitExp", "residencyExp", "passportIssueDate", "passportExp", "healthCardExp", "serviceEndDate",
                "dateOfBirth", "dateOfHire", "drivingLicenseExp"}
 
 

@@ -253,7 +253,7 @@ async function openProfileCard(id, tab = 'info') {
       <div data-pane="info" ${tab !== 'info' ? 'hidden' : ''}><div class="kv">
         ${field('الرقم المدني', `<b class="num">${esc(e.id)}</b>`)}${field('الجنسية', esc(e.nationality))}${field('المهنة', esc(e.profession) + (e.professionEn ? `<div class="small muted">${esc(e.professionEn)}</div>` : ''))}
         ${field('تاريخ الميلاد', fmtDate(e.dateOfBirth))}${field('الجنس', esc(t(GENDER_LABELS[e.gender] || '')))}${field('مكان الميلاد', esc(e.placeOfBirth))}
-        ${field('تاريخ إصدار الجواز', fmtDate(e.passportIssueDate))}${field('تاريخ التعيين', fmtDate(e.dateOfHire))}
+        ${field('تاريخ إصدار الجواز', fmtDate(e.passportIssueDate))}${field('تاريخ التعيين', fmtDate(e.dateOfHire))}${field('تاريخ انتهاء الخدمة', fmtDate(e.serviceEndDate))}
         ${field('الرقم الموحد', e.unifiedNumber ? `<span class="num">${esc(e.unifiedNumber)}</span>` : '')}${field('فصيلة الدم', esc(e.bloodType))}
         ${field('عنوان السكن', esc(addressText(e)))}${field('هاتف المنزل', esc(e.homePhone))}${can('sensitive.salary') ? field('الراتب', fmtMoney(e.salary)) : ''}
         ${field('بدل السكن', e.housingIncluded ? (e.housingAmount ? fmtMoney(e.housingAmount) : t('مشمول')) : t('غير مشمول'))}
@@ -294,6 +294,7 @@ async function openProfileCard(id, tab = 'info') {
       <button class="btn" data-p="contract.view employees.view sensitive.salary" data-a="contract">📄 عقد العمل</button>
       ${empNeedsResidency(e) ? '<button class="btn" data-p="sensitive.documents" data-a="residency">🪪 نموذج الإقامة</button>' : ''}
       <button class="btn" data-a="driving">🚗 نموذج رخصة القيادة</button>
+      <button class="btn" data-a="clearance">🧾 إقرار مخالصة</button>
       <button class="btn" data-a="print">🖨️ طباعة</button>
       <span class="spacer"></span>
       <button class="btn danger write-only" data-p="employees.delete" data-a="delete">🗑️ حذف</button>`,
@@ -314,6 +315,7 @@ async function openProfileCard(id, tab = 'info') {
     else if (a === 'contract') { m.close(); VIEW_ARGS = { emp: e.id }; setView('contract'); }
     else if (a === 'residency') openOfficialFormModal('residency', 'employee', e.id);
     else if (a === 'driving') openOfficialFormModal('driving', 'employee', e.id);
+    else if (a === 'clearance') openClearanceModal(e.id);
     else if (a === 'print') printHtml(e.name, `<h1>${esc(e.name)}</h1><div class="muted">${esc(e.nameEn || '')} · ${esc(e.id)}</div>` + $('[data-pane="info"]', m.el).innerHTML + $('[data-pane="docs"]', m.el).innerHTML);
     else if (a === 'delete') {
       if (await openConfirm(`${t('حذف الموظف')} «${esc(e.name)}» ${t('نهائيًا؟')}`, { danger: true, okLabel: t('حذف') })) {
@@ -349,19 +351,19 @@ const OFFICIAL_FIELDS = {
   addressStreet: ['الشارع'], addressHouse: ['المنزل'], addressApartment: ['الشقة'], phone: ['الهاتف النقال', 'text', 'dir="ltr"'],
   homePhone: ['هاتف المنزل', 'text', 'dir="ltr"'],
   'company.licenseCivilNo': ['الرقم المدني للرخصة (الشركة)'], 'company.unifiedNumber': ['الرقم الموحد للشركة', 'text', 'inputmode="numeric"'],
+  'company.nameEn': ['اسم الشركة بالإنجليزي', 'text', 'dir="ltr"'],
+  dateOfHire: ['تاريخ التعيين', 'date'], serviceEndDate: ['تاريخ انتهاء الخدمة', 'date'],
 };
-/** form = residency | driving، kind = employee | candidate */
-function openOfficialFormModal(form, kind, id) {
-  const spec = OFFICIAL_FORMS[form];
-  const rec = kind === 'employee' ? IDX.employee[id] : IDX.candidate[id];
-  if (!rec) return toast('غير موجود', 'err');
+/** البيانات الناقصة لشخص (موظف / مترشّح) وشركته — بتتعرض كخانات، واللي يتكتب فيها بيتحفظ في مكانه.
+    fields = مفاتيح OFFICIAL_FIELDS (بتاعة الشركة: company.xxx) */
+function missingDataKit(fields, kind, rec) {
   const cid = kind === 'employee' ? empCompanyId(rec) : rec.targetCompanyId;
   const co = cid && IDX.company[cid] && !IDX.company[cid].outOfScope ? IDX.company[cid] : null;
   const get = k => k.startsWith('company.') ? (co || {})[k.slice(8)] : (kind === 'employee' && k === 'civilId' ? rec.id : rec[k]);
   // بيتحفظ لو الخانة ليها مكان عند الشخص/الشركة والمستخدم يقدر يعدّل (غير كده بيتكتب في النموذج بس)
   const savable = k => k.startsWith('company.') ? !!co && can('companies.edit')
     : k in rec && can(kind === 'employee' ? 'employees.edit' : 'recruitment.edit');
-  const missing = spec.fields.filter(k => [null, undefined, ''].includes(get(k)) && !(k.startsWith('company.') && !co));
+  const missing = fields.filter(k => [null, undefined, ''].includes(get(k)) && !(k.startsWith('company.') && !co));
   const input = k => {
     const [l, type = 'text', extra = ''] = OFFICIAL_FIELDS[k];
     const lab = t(l) + (savable(k) ? '' : ` <span class="small muted">(${t('للنموذج بس')})</span>`);
@@ -370,14 +372,41 @@ function openOfficialFormModal(form, kind, id) {
     return `<label>${lab}<input name="${k}" type="${type}" ${extra}></label>`;
   };
   const where = kind === 'employee' ? t('ملف الموظف') : t('بيانات المترشّح');
+  return {
+    cid, co, missing,
+    html: () => missing.length ? `<h4>${t('بيانات ناقصة')} (${missing.length})</h4>${missing.map(input).join('')}` : '',
+    notice: () => missing.length
+      ? `<div class="notice" style="margin-top:10px">💾 ${t('اللي هتكتبه هنا بيتحفظ في')} ${esc(where)}${missing.some(k => k.startsWith('company.')) ? ' ' + t('وبيانات الشركة') : ''}، ${t('وبيطلع في النموذج. اللي تسيبه فاضي بيفضل فاضي في النموذج.')}</div>`
+      : `<div class="notice" style="margin-top:10px">✓ ${t('كل البيانات اللي النموذج بياخدها من النظام موجودة')}</div>`,
+    /** values = قيم الخانات ← بيتحفظوا في مكانهم. بيرجّع {person, company} عشان يتبعتوا للنموذج، أو null لو الحفظ اتمنع */
+    async save(values) {
+      const person = {}, company = {};
+      Object.entries(values).forEach(([k, v]) => { if (v !== null && v !== '') (k.startsWith('company.') ? company : person)[k.replace('company.', '')] = v; });
+      const pSave = Object.fromEntries(Object.entries(person).filter(([k]) => savable(k)));
+      const cSave = Object.fromEntries(Object.entries(company).filter(([k]) => savable('company.' + k)));
+      try {
+        if (Object.keys(pSave).length) {
+          await api('PUT', (kind === 'employee' ? '/api/employees/' : '/api/candidates/') + encodeURIComponent(rec.id),
+            kind === 'employee' ? { id: rec.id, name: rec.name, ...pSave } : { name: rec.name, ...pSave });
+        }
+        if (Object.keys(cSave).length) await api('PUT', '/api/companies/' + encodeURIComponent(cid), cSave);
+        if (Object.keys(pSave).length || Object.keys(cSave).length) { await reload(); toast('تم حفظ البيانات', 'ok'); }
+      } catch (e) { if (e.data && e.data.block) openBlockAlert(e.message); else toast(e.message, 'err'); return null; }
+      return { person, company };
+    },
+  };
+}
+/** form = residency | driving، kind = employee | candidate */
+function openOfficialFormModal(form, kind, id) {
+  const spec = OFFICIAL_FORMS[form];
+  const rec = kind === 'employee' ? IDX.employee[id] : IDX.candidate[id];
+  if (!rec) return toast('غير موجود', 'err');
+  const kit = missingDataKit(spec.fields, kind, rec);
   const m = openModal({
-    title: spec.title + ': ' + esc(rec.name), size: missing.length > 3 ? '' : 'narrow',
+    title: spec.title + ': ' + esc(rec.name), size: kit.missing.length > 3 ? '' : 'narrow',
     body: `<div class="form" id="of-form">
         <label class="full">${t('نوع الإجراء')}<select name="__action">${spec.actions.map(x => opt(x, t(x), x === spec.action)).join('')}</select></label>
-        ${missing.length ? `<h4>${t('بيانات ناقصة')} (${missing.length})</h4>${missing.map(input).join('')}` : ''}</div>
-      ${missing.length
-        ? `<div class="notice" style="margin-top:10px">💾 ${t('اللي هتكتبه هنا بيتحفظ في')} ${esc(where)}${missing.some(k => k.startsWith('company.')) ? ' ' + t('وبيانات الشركة') : ''}، ${t('وبيطلع في النموذج. اللي تسيبه فاضي بيفضل فاضي في النموذج.')}</div>`
-        : `<div class="notice" style="margin-top:10px">✓ ${t('كل البيانات اللي النموذج بياخدها من النظام موجودة')}</div>`}
+        ${kit.html()}</div>${kit.notice()}
       <div class="small muted" style="margin-top:6px">${t('أي خانة تانية فاضية تقدر تكتبها في النموذج نفسه قبل الطباعة.')}</div>`,
     foot: `<button class="btn primary" data-go>📄 ${t('حفظ وعرض النموذج')}</button><span class="spacer"></span><button class="btn" data-close>إلغاء</button>`,
   });
@@ -385,26 +414,51 @@ function openOfficialFormModal(form, kind, id) {
     const b = ev.currentTarget;
     const d = formValues($('#of-form', m.el)), action = d.__action;
     delete d.__action;
-    const person = {}, company = {};
-    Object.entries(d).forEach(([k, v]) => { if (v !== null && v !== '') (k.startsWith('company.') ? company : person)[k.replace('company.', '')] = v; });
-    const pSave = Object.fromEntries(Object.entries(person).filter(([k]) => savable(k)));
-    const cSave = Object.fromEntries(Object.entries(company).filter(([k]) => savable('company.' + k)));
     b.disabled = true;
-    try {
-      if (Object.keys(pSave).length) {
-        await api('PUT', (kind === 'employee' ? '/api/employees/' : '/api/candidates/') + encodeURIComponent(rec.id),
-          kind === 'employee' ? { id: rec.id, name: rec.name, ...pSave } : { name: rec.name, ...pSave });
-      }
-      if (Object.keys(cSave).length) await api('PUT', '/api/companies/' + encodeURIComponent(cid), cSave);
-      if (Object.keys(pSave).length || Object.keys(cSave).length) { await reload(); toast('تم حفظ البيانات', 'ok'); }
-    } catch (e) { b.disabled = false; return e.data && e.data.block ? openBlockAlert(e.message) : toast(e.message, 'err'); }
+    const data = await kit.save(d);
+    if (!data) { b.disabled = false; return; }
     try {
       const res = await fetchBlob(`/api/${kind === 'employee' ? 'employees' : 'candidates'}/${encodeURIComponent(rec.id)}/forms/${form}`,
-        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, person, company }) });
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, ...data }) });
       m.close();
       openPdfPreviewModal(res.blob, res.name, 1);
     } catch (e) { toast(e.message, 'err'); b.disabled = false; }
   };
+}
+
+/* ---------- إقرار مخالصة عمالية نهائية (استلام المستحقات) — forms/clearance.docx بمحرك العقود ---------- */
+const CLEARANCE_FIELDS = ['nameEn', 'nationality', 'dateOfHire', 'serviceEndDate', 'company.nameEn'];
+function openClearanceModal(id) {
+  const e = IDX.employee[id];
+  if (!e) return toast('غير موجود', 'err');
+  const kit = missingDataKit(CLEARANCE_FIELDS, 'employee', e);
+  const m = openModal({
+    title: '🧾 ' + t('إقرار مخالصة عمالية نهائية') + ': ' + esc(e.name), size: kit.missing.length > 3 ? '' : 'narrow',
+    body: `<div class="form" id="cl-form">
+        <label class="full">${t('نوع الإجراء')}<select name="__procedure">${opt('transfer', t('الإلغاء والتحويل خارج القطاع'), true)}${opt('travel', t('الإلغاء النهائي للسفر'), false)}${opt('', t('— من غير تحديد —'), false)}</select></label>
+        <label>${t('تاريخ الإقرار')}<input type="date" name="__date" value="${todayISO()}"></label>
+        <label>${t('المفوّض بالتوقيع')}<select name="__sig">${batchSigOptions(kit.cid)}</select></label>
+        <label class="check" data-p="contract.sign"><input type="checkbox" name="__signFirst"> ✍️ ${t('بتوقيع المفوّض')}</label>
+        <label class="check" data-p="contract.sign"><input type="checkbox" name="__signSecond"> ✍️ ${t('بتوقيع الموظف')}</label>
+        ${kit.html()}</div>${kit.notice()}`,
+    foot: `${STATE.pdfAvailable ? `<button class="btn primary" data-go="pdf">📄 ${t('حفظ وعرض الإقرار')}</button>` : ''}
+      <button class="btn ${STATE.pdfAvailable ? '' : 'primary'}" data-go="docx">⬇️ Word</button>
+      <span class="spacer"></span><button class="btn" data-close>إلغاء</button>`,
+  });
+  $$('[data-go]', m.el).forEach(b => b.onclick = async () => {
+    const d = formValues($('#cl-form', m.el));
+    const opts = { procedure: d.__procedure || '', date: d.__date, sig: d.__sig || '', signFirst: !!d.__signFirst, signSecond: !!d.__signSecond };
+    Object.keys(d).filter(k => k.startsWith('__')).forEach(k => delete d[k]);
+    b.disabled = true;
+    const data = await kit.save(d);
+    if (!data) { b.disabled = false; return; }
+    try {
+      const res = await fetchBlob(`/api/employees/${encodeURIComponent(e.id)}/clearance/${b.dataset.go}`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...opts, ...data }) });
+      if (b.dataset.go === 'pdf') { m.close(); openPdfPreviewModal(res.blob, res.name, 1); }
+      else { downloadBlob(res.blob, res.name); toast('تم التنزيل', 'ok'); b.disabled = false; }
+    } catch (err) { toast(err.message, 'err'); b.disabled = false; }
+  });
 }
 
 /* ---------- المرفقات (بديل Google Drive: التخزين على السيرفر) ---------- */
@@ -484,7 +538,7 @@ function openEmployeeModal(id) {
       ${inp('professionEn', 'المهنة (إنجليزي)', 'text', 'dir="ltr"')}
       ${dt('dateOfBirth', 'تاريخ الميلاد')}
       <label>${t('الجنس')}<select name="gender">${opt('', '—', !e.gender)}${Object.entries(GENDER_LABELS).map(([k, l]) => opt(k, t(l), k === e.gender)).join('')}</select></label>
-      ${inp('placeOfBirth', 'مكان الميلاد')}${dt('dateOfHire', 'تاريخ التعيين')}
+      ${inp('placeOfBirth', 'مكان الميلاد')}${dt('dateOfHire', 'تاريخ التعيين')}${dt('serviceEndDate', 'تاريخ انتهاء الخدمة')}
       ${inp('phone', 'الهاتف')}
       ${personExtraInputs(e)}
       <h4>العمل والراتب</h4>

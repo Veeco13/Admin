@@ -119,6 +119,7 @@ class Employee(Base):
     addressApartment: Mapped[Optional[str]] = col("address_apartment", SHORT)
     homePhone: Mapped[Optional[str]] = col("home_phone", SHORT)
     dateOfHire: Mapped[Optional[date]] = col("date_of_hire", Date)
+    serviceEndDate: Mapped[Optional[date]] = col("service_end_date", Date)      # آخر يوم عمل (إقرار المخالصة)
     salary: Mapped[Optional[float]] = col("salary", Float)
     housingIncluded: Mapped[bool] = col("housing_included", Boolean, default=False)
     housingAmount: Mapped[Optional[float]] = col("housing_amount", Float)

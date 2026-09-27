@@ -145,9 +145,9 @@ def check_signature_image(data):
     return None
 
 
-def apply_signatures(docx_bytes, images):
+def apply_signatures(docx_bytes, images, height_cm=SIG_HEIGHT_CM):
     """images = {"first": مسار صورة أو None، "second": …}. بيحط الصورة مكان العلامة أو يشيل العلامة.
-    بعد صورة الطرف الأول بيشيل سطرين فاضيين من نفس الخانة عشان العقد مايزيدش صفحة."""
+    بعد كل صورة بيشيل لحد سطرين فاضيين من نفس الخانة عشان المستند مايزيدش صفحة."""
     from docx import Document
     from docx.image.image import Image as DocxImage
     from docx.shared import Cm
@@ -164,7 +164,7 @@ def apply_signatures(docx_bytes, images):
                 if not path:
                     continue
                 img = DocxImage.from_file(path)
-                w = SIG_HEIGHT_CM * img.px_width / img.px_height
+                w = height_cm * img.px_width / img.px_height
                 run.add_picture(path, width=Cm(min(w, SIG_MAX_WIDTH_CM)))
                 nxt, removed = p._p.getnext(), 0
                 while nxt is not None and removed < 2 and nxt.tag.endswith("}p") and not "".join(nxt.itertext()).strip() \

@@ -213,7 +213,7 @@ zahed/
 ## 9. أنواع السجلات
 
 **سجل التدقيق:**
-- الموظفين: `employee_add` · `employee_edit` · `employee_delete` · `employee_residency_form` · `employee_driving_form`
+- الموظفين: `employee_add` · `employee_edit` · `employee_delete` · `employee_residency_form` · `employee_driving_form` · `employee_clearance`
 - المترشّحين: `candidate_add` · `candidate_edit` · `candidate_convert` · `candidate_contract` · `candidate_driving_form`
 - الشركات: `company_add` · `company_edit` · `company_delete`
 - السيارات: `vehicle_add` · `vehicle_edit` · `vehicle_delete`
@@ -302,6 +302,13 @@ fill_docx_template()  ← {{ field }} حتى لو متقسّم على أكتر �
   - الترحيل `0009`: الموظف والمترشّح — الرقم الموحد، فصيلة الدم، عنوان السكن (المنطقة / القطعة / الشارع / المنزل / الشقة)، هاتف المنزل، والمترشّح كمان الجنس. الشركة — الرقم الموحد.
   - كلها في نوافذ الموظف والمترشّح والشركة وبطاقاتهم، واستيراد Excel بنفس الأسماء («الجنس» بيقبل ذكر / أنثى / male / female / M / F). ولما المترشّح يتحوّل لموظف بتتنقل معاه (مع تاريخ إصدار الجواز).
 
+### 11.2 إقرار مخالصة عمالية نهائية (استلام المستحقات) — الهيئة العامة للقوى العاملة
+- **الملف:** `forms/clearance.docx` = النموذج الرسمي (عربي/إنجليزي) بحقول المحرك بعد العناوين، والتواريخ الفاضية («00/00/..20») بقت حقول. الحقول بتاخد تنسيق العنوان اللي قبلها. عشان يفضل صفحة واحدة: الهامش السفلي بقى 1.27 سم بدل 2.54، واتشال سطر فاضي واحد من سطرين تحت «أقر بأنني استلمت…».
+- **بيتملى بمحرك العقود** (`_build_contract(..., extra, path)`): الاسم والجنسية والرقم المدني عربي وإنجليزي، الشركة ورقم الملف (نفس منطق العقد: ملف المشروع ← ملف الموظف ← الملف الرئيسي)، الفترة من تاريخ التعيين لتاريخ انتهاء الخدمة (`period_from` / `period_to`)، نوع الإجراء بعلامة ✔ (`proc_transfer` = الإلغاء والتحويل خارج القطاع، `proc_travel` = الإلغاء النهائي للسفر)، تاريخ الإقرار واليوم، والمفوّض بالتوقيع (عربي وإنجليزي).
+- **التوقيعات:** «بتوقيع المفوّض» جنب «التوقيع:» في إقرار صاحب العمل، و«بتوقيع الموظف» جنب «التوقيع أو البصمة:» (`contract.sign`). ارتفاع الصورة هنا 1 سم (`sig_height`) بدل 1.4، وبعدها بيتشال السطر الفاضي — فالإقرار صفحة واحدة بكل الاحتمالات.
+- **من فين:** زرار «🧾 إقرار مخالصة» في بطاقة الموظف (`employees.view`). النافذة: نوع الإجراء، تاريخ الإقرار (النهارده)، المفوّض، التوقيعات، والبيانات الناقصة (الاسم بالإنجليزي، الجنسية، تاريخ التعيين، تاريخ انتهاء الخدمة، اسم الشركة بالإنجليزي) بتتحفظ في مكانها بنفس `missingDataKit` بتاع النماذج الرسمية. النتيجة معاينة PDF أو تنزيل Word.
+- **تاريخ انتهاء الخدمة** (`serviceEndDate`، الترحيل `0010`) في نافذة الموظف وبطاقته واستيراد Excel.
+
 ---
 
 ## 12. الترجمة
@@ -323,6 +330,7 @@ fill_docx_template()  ← {{ field }} حتى لو متقسّم على أكتر �
 | POST | `/api/employees/<id>/gov-stage` | مرحلة المعاملة |
 | POST | `/api/employees/import` | استيراد Excel/CSV |
 | GET / POST | `/api/employees/<id>/files` | المرفقات |
+| POST | `/api/employees/<id>/clearance/<pdf\|docx>` | إقرار مخالصة عمالية نهائية. الجسم `{procedure: transfer\|travel, date, sig, signFirst, signSecond, person, company}` |
 | POST | `/api/employees/<id>/forms/<residency\|driving>`، `/api/candidates/<id>/forms/driving` | النموذج الرسمي PDF متعبّي. الجسم `{action, person, company}` (البيانات اللي اتكتبت في النافذة). الإقامة محتاجة `sensitive.documents` ومرفوضة للكويتيين والخليجيين |
 | POST / PUT / DELETE | `/api/companies`، `/api/projects`، `/api/signatories`، `/api/vehicles`، `/api/cost-centers`، `/api/candidates` | CRUD |
 | POST | `/api/companies/<id>/docs/<kind>` | مستندات الشركة والشعار (`kind=logo`) |
@@ -383,6 +391,7 @@ fill_docx_template()  ← {{ field }} حتى لو متقسّم على أكتر �
 | `0001` | الهيكل الكامل (17 جدول) من غير مفاتيح أجنبية |
 | `0002` | تنظيف المراجع اليتيمة، وبعدين إضافة المفاتيح الأجنبية التسعة |
 | `0008` | `employees`: `gender` (male / female)، `place_of_birth`، `passport_issue_date` — لنموذج الإقامة |
+| `0010` | `employees.service_end_date` — تاريخ انتهاء الخدمة (إقرار المخالصة) |
 | `0009` | `companies.unified_number`؛ `employees` و`candidates`: `unified_number`، `blood_type`، `address_*`، `home_phone`؛ و`candidates.gender` — للنماذج الرسمية |
 
 - **التطبيق تلقائي:** السيرفر بيطبّق التعديلات لوحده كل ما يشتغل (`db.init_db()`).

@@ -626,6 +626,48 @@ def candidate_driving_form(cand_id):
     return _send_pdf(out[0], out[1])
 
 
+# إقرار مخالصة عمالية نهائية (الهيئة العامة للقوى العاملة): forms/clearance.docx بمحرك العقود — نفس الشركة
+# ورقم الملف والمفوّض والتوقيعات. الجسم: {procedure: transfer|travel, date, sig, signFirst, signSecond, person, company}
+CLEARANCE_PATH = os.path.join(BASE_DIR, "forms", "clearance.docx")
+CLEARANCE_PERSON_KEYS = {"nameEn", "nationality", "dateOfHire", "serviceEndDate"}
+
+
+@app.post("/api/employees/<emp_id>/clearance/<fmt>")
+@require("employees.view")
+def employee_clearance(emp_id, fmt):
+    if fmt not in ("pdf", "docx"):
+        abort(404)
+    d = body()
+    _check_sign_args(d)
+    with db.session_scope(commit=False) as s:
+        emp = db.employee_full(s, emp_id)
+        if not emp:
+            return err("الموظف غير موجود", 404)
+        if not emp_ok(s, emp_id):
+            return forbidden(OUT_OF_SCOPE)
+        # اللي اتكتب في نافذة البيانات الناقصة (بيتحفظ من الواجهة، وهنا بيتكتب في الإقرار في كل الأحوال)
+        emp.update({k: v for k, v in (d.get("person") or {}).items() if k in CLEARANCE_PERSON_KEYS and v})
+        proc = d.get("procedure")
+        extra = {"period_from": docx_engine.fmt_date(emp.get("dateOfHire")),
+                 "period_to": docx_engine.fmt_date(emp.get("serviceEndDate")),
+                 "proc_transfer": "✔" if proc == "transfer" else "", "proc_travel": "✔" if proc == "travel" else ""}
+        if (d.get("company") or {}).get("nameEn"):
+            extra["company_name_en"] = d["company"]["nameEn"]
+        args = {"date": d.get("date") or datetime.now().strftime("%Y-%m-%d"), "sig": d.get("sig"),
+                "signFirst": d.get("signFirst"), "signSecond": d.get("signSecond")}
+        _, _, data = _build_contract(s, emp, args, extra=extra, path=CLEARANCE_PATH, sig_height=1.0)   # صفحة واحدة
+    if fmt == "pdf":
+        try:
+            data = contracts.to_pdf(data)
+        except RuntimeError as e:
+            return err(str(e), 501)
+    with db.session_scope() as s:
+        db.log_audit(s, "employee_clearance", f"إقرار مخالصة عمالية ({fmt.upper()}) للموظف: {emp['name']} ({emp_id})", uname())
+    mime = "application/pdf" if fmt == "pdf" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    return send_file(io.BytesIO(data), as_attachment=fmt == "docx", download_name=f"إقرار مخالصة - {emp['name']}.{fmt}",
+                     mimetype=mime)
+
+
 # مرفقات الموظف (بديل Google Drive)
 @app.get("/api/employees/<emp_id>/files")
 @require("employees.view", "sensitive.documents")
@@ -1249,9 +1291,10 @@ def _contract_context(s, emp_id, args, fill=True, tpl=None):
     return _build_contract(s, emp, args, fill, tpl)
 
 
-def _build_contract(s, emp, args, fill=True, tpl=None):
+def _build_contract(s, emp, args, fill=True, tpl=None, extra=None, path=None, sig_height=contracts.SIG_HEIGHT_CM):
     """العقد لأي شخص بشكل الموظف (موظف أو مترشّح).
-    الشركة الافتراضية = الشركة المسجّل عليها، والمفوّض = أول مفوّض فيها (لو المختار مش تبعها بيتجاهل)."""
+    الشركة الافتراضية = الشركة المسجّل عليها، والمفوّض = أول مفوّض فيها (لو المختار مش تبعها بيتجاهل).
+    extra = حقول زيادة، و path = ملف Word تاني بدل قالب العقد (زي إقرار المخالصة) بنفس الحقول والتوقيعات."""
     if args.get("company") and not me().company_ok(args["company"]):
         abort(403, OUT_OF_SCOPE)
     aff = (emp.get("affiliations") or [{}])[0]
@@ -1272,16 +1315,19 @@ def _build_contract(s, emp, args, fill=True, tpl=None):
         emp, company, db.to_dict(sig), project, args.get("date") or None))
     contracts.housing_context(ctx, contracts.housing_included(args.get("housing"), emp))
     contracts.signature_context(ctx)
+    ctx.update(extra or {})
     data = None
     if fill:
-        tpl = tpl or _contract_template(s, args.get("tpl"))
-        data = docx_engine.fill_docx_template(os.path.join(TEMPLATE_DOCS, tpl.filename), ctx)
+        if not path:
+            tpl = tpl or _contract_template(s, args.get("tpl"))
+            path = os.path.join(TEMPLATE_DOCS, tpl.filename)
+        data = docx_engine.fill_docx_template(path, ctx)
         images = {}
         if _truthy(args.get("signFirst")) and sig is not None and sig.civilId:
             images["first"] = _signature_file(s, sig.civilId)
         if _truthy(args.get("signSecond")):
             images["second"] = _signature_file(s, emp["id"])
-        data = contracts.apply_signatures(data, images)
+        data = contracts.apply_signatures(data, images, sig_height)
     ctx["_signatoryCivilId"] = sig.civilId if sig is not None else None
     return emp, ctx, data
 

@@ -181,6 +181,8 @@ window.I18N = {
   'كل البيانات اللي النموذج بياخدها من النظام موجودة': 'Everything the form takes from the system is present',
   'أي خانة تانية فاضية تقدر تكتبها في النموذج نفسه قبل الطباعة.': 'Any other empty box can be typed on the form itself before printing.',
   'حفظ وعرض النموذج': 'Save & show form', 'تم حفظ البيانات': 'Details saved',
+  // إقرار المخالصة
+  'تاريخ انتهاء الخدمة': 'Service end date', 'إقرار مخالصة': 'Clearance', 'إقرار مخالصة عمالية نهائية': 'Labor end-of-service clearance', 'الإلغاء والتحويل خارج القطاع': 'Cancellation and transfer outside the sector', 'الإلغاء النهائي للسفر': 'Final cancellation to leave', '— من غير تحديد —': '— not specified —', 'تاريخ الإقرار': 'Declaration date', 'حفظ وعرض الإقرار': 'Save & show clearance', 'بتوقيع الموظف': 'With employee signature',
   // عقود متعددة: ملف لكل موظف
   'PDF لكل موظف': 'PDF per employee', 'ملف PDF منفصل باسم كل موظف': "A separate PDF named after each employee",
   'تم تنزيل': 'Downloaded', 'ملف': 'files', 'لو المتصفح سأل عن تنزيل ملفات متعددة، اختار «السماح».': 'If the browser asks about downloading multiple files, choose "Allow".',
