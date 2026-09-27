@@ -192,4 +192,10 @@ window.I18N = {
   // عقود متعددة: ملف لكل موظف
   'PDF لكل موظف': 'PDF per employee', 'ملف PDF منفصل باسم كل موظف': "A separate PDF named after each employee",
   'تم تنزيل': 'Downloaded', 'ملف': 'files', 'لو المتصفح سأل عن تنزيل ملفات متعددة، اختار «السماح».': 'If the browser asks about downloading multiple files, choose "Allow".',
+  // تقرير الموظفين: الجنسيات وفترة الانتهاء + مؤشر الحفظ
+  'حتى': 'until', 'ابتداءً من': 'from', 'من تاريخ': 'From date', 'إلى تاريخ': 'To date', 'تاريخ انتهاء': 'Expiry of', 'منتهية': 'Expired',
+  'الشهر القادم': 'Next month', 'مسح الفترة': 'Clear range', 'كل الجنسيات': 'All nationalities', '✓ المحددة فقط': '✓ Selected only',
+  '✕ كل الجنسيات ماعدا المحددة': '✕ All except selected', 'كل الجنسيات ماعدا': 'All nationalities except', 'اختار الجنسيات من القائمة': 'Pick nationalities from the list',
+  'تعذّر الاتصال بالسيرفر — تأكد إن البرنامج شغّال والشبكة متصلة': 'Cannot reach the server — make sure the app is running and the network is connected',
+  'تم الحفظ، لكن تعذّر تحديث الشاشة — اضغط F5': 'Saved, but the screen could not refresh — press F5',
 };

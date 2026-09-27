@@ -263,28 +263,45 @@ function applyNavVisibility() {
 }
 
 /* ---------- API ---------- */
+/* مؤشر «جاري التنفيذ»: شريط أعلى الصفحة طول ما فيه طلب شغّال (بيظهر بعد لحظة عشان الطلبات السريعة ماتعملش وميض) */
+let BUSY = 0;
+function setBusy(d) { BUSY = Math.max(0, BUSY + d); document.body.classList.toggle('busy', BUSY > 0); }
 async function api(method, url, body) {
   const opt = { method, headers: {} };
   if (body instanceof FormData) opt.body = body;
   else if (body !== undefined) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
-  const r = await fetch(url, opt);
-  if (r.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) { const e = new Error(j.error || r.statusText); e.data = j; e.status = r.status; throw e; }
-  return j;
-}
-/** persist(): تنفيذ تعديل على السيرفر ثم إعادة تحميل الحالة وإعادة العرض */
-async function persist(method, url, body, okMsg) {
+  setBusy(1);
   try {
-    const res = await api(method, url, body);
-    await reload();
-    if (okMsg) toast(okMsg, 'ok');
-    return res;
+    const r = await fetch(url, opt);
+    if (r.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { const e = new Error(j.error || r.statusText); e.data = j; e.status = r.status; throw e; }
+    return j;
   } catch (e) {
-    if (e.status === 409 && e.data && e.data.warn) throw e;
-    toast(e.message, 'err');
+    if (e instanceof TypeError) e.message = t('تعذّر الاتصال بالسيرفر — تأكد إن البرنامج شغّال والشبكة متصلة');
     throw e;
-  }
+  } finally { setBusy(-1); }
+}
+/** persist(): تنفيذ تعديل على السيرفر ثم إعادة تحميل الحالة وإعادة العرض.
+ *  الضغط على «حفظ» كذا مرة وهو لسه شغّال مابيبعتش الطلب تاني (نفس الطلب ← نفس النتيجة)، والزرار بيتقفل لحد ما يخلص. */
+const IN_FLIGHT = new Map();
+function persist(method, url, body, okMsg) {
+  const key = body instanceof FormData ? null : `${method} ${url} ${JSON.stringify(body === undefined ? null : body)}`;
+  if (key && IN_FLIGHT.has(key)) return IN_FLIGHT.get(key);
+  const ae = document.activeElement;
+  const btn = ae && ae.tagName === 'BUTTON' && !ae.disabled ? ae : null;
+  if (btn) btn.disabled = true;
+  const run = (async () => {
+    let res;
+    try { res = await api(method, url, body); }
+    catch (e) { if (!(e.status === 409 && e.data && e.data.warn)) toast(e.message, 'err'); throw e; }
+    if (okMsg) toast(okMsg, 'ok');
+    // الحفظ تم خلاص؛ لو تحديث الشاشة فشل مانقولش «فشل الحفظ»
+    try { await reload(); } catch (e) { toast('تم الحفظ، لكن تعذّر تحديث الشاشة — اضغط F5', 'err'); }
+    return res;
+  })().finally(() => { if (key) IN_FLIGHT.delete(key); if (btn) btn.disabled = false; });
+  if (key) IN_FLIGHT.set(key, run);
+  return run;
 }
 async function reload(noRender) {
   STATE = await api('GET', '/api/state');
@@ -420,6 +437,7 @@ const REPORT_CSS = `
   table.rpt td{padding:4px 5px;border:1px solid var(--line);vertical-align:middle;text-align:center}
   table.rpt tr{break-inside:avoid} table.rpt tr.z td{background:var(--zebra)}
   table.rpt td.num,table.rpt th.num{text-align:center;font-variant-numeric:tabular-nums;white-space:nowrap} table.rpt td.idx{color:var(--muted);width:28px}
+  table.rpt td.txt,table.rpt th.txt{text-align:start;padding-inline:8px} table.rpt td.ltr{direction:ltr;text-align:left;padding-inline:8px}
   table.rpt tr.grp td{background:var(--band);font-weight:700;font-size:10.5px;padding:6px;border-top:1.5px solid var(--head);text-align:start}
   table.rpt tr.grp img{height:18px;max-width:40px;object-fit:contain;vertical-align:middle;margin-inline-end:6px}
   table.rpt tr.grp small{color:var(--muted);font-weight:500;margin-inline-start:6px}

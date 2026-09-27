@@ -500,11 +500,15 @@ def renew_employees():
     field, new_date = d.get("field"), db.parse_date(d.get("date"))
     if field not in TRACKED_DATE_LABELS or not new_date:
         return err("حقل أو تاريخ غير صالح")
-    lab, user, n = TRACKED_DATE_LABELS[field], uname(), 0
+    lab, user, n, same = TRACKED_DATE_LABELS[field], uname(), 0, 0
     with db.session_scope() as s:
-        for eid in d.get("ids") or []:
+        for eid in dict.fromkeys(d.get("ids") or []):     # من غير تكرار
             e = s.get(M.Employee, eid)
             if not e or not emp_ok(s, eid):
+                continue
+            # نفس التاريخ متسجّل بالفعل (ضغطة مكررة أو طلب اتبعت مرتين): مانكررش السجل ولا التاريخ
+            if getattr(e, field) == new_date and (not d.get("setRenewedStage") or e.govStage == "renewed"):
+                same += 1
                 continue
             old = db.ser(getattr(e, field))
             setattr(e, field, new_date)
@@ -517,8 +521,9 @@ def renew_employees():
                 db.log_company_history(s, affs[0]["companyId"], "residency_renewed",
                                        f"تجديد إقامة {e.name} حتى {new_date.isoformat()}", user)
             n += 1
-        db.log_audit(s, "employee_edit", f"تجديد {lab} لـ {n} موظف حتى {new_date.isoformat()}", user)
-    return jsonify({"ok": True, "count": n})
+        if n:
+            db.log_audit(s, "employee_edit", f"تجديد {lab} لـ {n} موظف حتى {new_date.isoformat()}", user)
+    return jsonify({"ok": True, "count": n, "unchanged": same})
 
 
 @app.post("/api/employees/<emp_id>/gov-stage")
@@ -531,8 +536,12 @@ def set_gov_stage(emp_id):
             return err("غير موجود", 404)
         if not emp_ok(s, emp_id):
             return forbidden(OUT_OF_SCOPE)
-        db.apply(e, {k: d.get(k) for k in ("govStage", "govStageNote", "govStageResponsible", "govStageStartDate",
-                                           "govTransactionCost") if k in d})
+        keys = [k for k in ("govStage", "govStageNote", "govStageResponsible", "govStageStartDate", "govTransactionCost")
+                if k in d]
+        before = [db.ser(getattr(e, k)) for k in keys]
+        db.apply(e, {k: d.get(k) for k in keys})
+        if [db.ser(getattr(e, k)) for k in keys] == before:
+            return jsonify({"ok": True, "unchanged": True})    # مفيش تغيير (ضغطة مكررة): مانسجّلش حاجة
         e.lastUpdated, e.lastUpdatedBy = db.now(), uname()
         db.push_timeline(s, emp_id, "gov_stage", f"مرحلة المعاملة: {history.value_label('govStage', d.get('govStage')) or '—'}"
                          + (f" — {d.get('govStageNote')}" if d.get("govStageNote") else ""), uname())

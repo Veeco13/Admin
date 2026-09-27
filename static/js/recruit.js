@@ -139,9 +139,9 @@ function printCandidatesReport(rows) {
     f.stage && `${t('المرحلة')}: ${esc(t((recruitStageInfo(f.source || 'outside', f.stage) || recruitStageInfo('internal', f.stage) || {}).label || f.stage))}`,
     f.company && `${t('الشركة المستهدفة')}: ${esc(companyName(f.company))}`, f.q && `${t('بحث')}: «${esc(f.q)}»`].filter(Boolean).join(' · ');
   const active = rows.filter(r => r.c.stage !== 'rejected');
-  const table = `<table class="rpt"><thead><tr><th>#</th><th>${t('الاسم')}</th><th>${t('الجنسية')}</th><th>${t('المهنة')}</th><th>${t('المصدر')}</th><th>${t('المرحلة')}</th><th>${t('الشركة المستهدفة')}</th>
+  const table = `<table class="rpt"><thead><tr><th>#</th><th class="txt">${t('الاسم')}</th><th>${t('الجنسية')}</th><th>${t('المهنة')}</th><th>${t('المصدر')}</th><th>${t('المرحلة')}</th><th>${t('الشركة المستهدفة')}</th>
       ${sal ? `<th class="num">${t('الراتب')} (${t('د.ك')})</th>` : ''}<th>${t('بدل السكن')}</th><th>${t('المهلة')}</th></tr></thead>
-    <tbody>${rows.map((r, i) => `<tr class="${i % 2 ? 'z' : ''}"><td class="idx">${i + 1}</td><td>${esc(r.c.name)}</td><td>${esc(r.c.nationality || '')}</td><td>${esc(r.c.profession || '')}</td>
+    <tbody>${rows.map((r, i) => `<tr class="${i % 2 ? 'z' : ''}"><td class="idx">${i + 1}</td><td class="txt">${esc(r.c.name)}</td><td>${esc(r.c.nationality || '')}</td><td>${esc(r.c.profession || '')}</td>
       <td>${r.c.source === 'internal' ? t('نقل داخلي') : t('من الخارج')}</td><td>${esc(r.st)}</td><td>${esc(companyName(r.c.targetCompanyId))}</td>
       ${sal ? `<td class="num">${r.c.salary ? rptNum(r.c.salary) : ''}</td>` : ''}<td>${r.c.housingAllowance ? '✓' : ''}</td><td>${r.deadline ? datePill(r.deadline) : ''}</td></tr>`).join('')}</tbody>
     ${sal ? `<tfoot><tr><td></td><td colspan="6">${t('إجمالي الرواتب المتفق عليها')} (${active.length})</td><td class="num">${rptNum(sum(active.map(r => r.c.salary)))}</td><td></td><td></td></tr></tfoot>` : ''}</table>`;
