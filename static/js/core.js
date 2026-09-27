@@ -416,11 +416,11 @@ const REPORT_CSS = `
   .rpt-summary div{border:1px solid var(--line);border-top:3px solid var(--head);border-radius:3px;padding:5px 9px}
   .rpt-summary b{display:block;font-size:15px;line-height:1.3} .rpt-summary span{color:var(--muted);font-size:9px}
   table.rpt{width:100%;border-collapse:collapse;font-size:9.8px}
-  table.rpt thead th{background:var(--head);color:#fff;font-weight:600;text-align:start;padding:6px 5px;border:1px solid var(--head);white-space:nowrap}
-  table.rpt td{padding:4px 5px;border:1px solid var(--line);vertical-align:top}
+  table.rpt thead th{background:var(--head);color:#fff;font-weight:600;text-align:center;padding:6px 5px;border:1px solid var(--head);vertical-align:middle}
+  table.rpt td{padding:4px 5px;border:1px solid var(--line);vertical-align:middle;text-align:center}
   table.rpt tr{break-inside:avoid} table.rpt tr.z td{background:var(--zebra)}
-  table.rpt td.num,table.rpt th.num{text-align:end;font-variant-numeric:tabular-nums;white-space:nowrap} table.rpt td.idx{color:var(--muted);text-align:center;width:28px}
-  table.rpt tr.grp td{background:var(--band);font-weight:700;font-size:10.5px;padding:6px;border-top:1.5px solid var(--head)}
+  table.rpt td.num,table.rpt th.num{text-align:center;font-variant-numeric:tabular-nums;white-space:nowrap} table.rpt td.idx{color:var(--muted);width:28px}
+  table.rpt tr.grp td{background:var(--band);font-weight:700;font-size:10.5px;padding:6px;border-top:1.5px solid var(--head);text-align:start}
   table.rpt tr.grp img{height:18px;max-width:40px;object-fit:contain;vertical-align:middle;margin-inline-end:6px}
   table.rpt tr.grp small{color:var(--muted);font-weight:500;margin-inline-start:6px}
   table.rpt tr.sub td{font-weight:600;background:#fbfcfb;border-bottom:1.5px solid var(--line)}
@@ -430,7 +430,8 @@ const REPORT_CSS = `
   .rpt-sign{display:grid;grid-template-columns:repeat(3,1fr);gap:28px;margin-top:30px;break-inside:avoid}
   .rpt-sign div{border-top:1px solid var(--ink);padding-top:4px;text-align:center;font-size:9.5px;color:var(--muted)}
   .rpt-end{text-align:center;color:var(--muted);font-size:8.5px;margin-top:14px;letter-spacing:.3px}
-  @media print{body{background:#fff}.no-print{display:none!important}.sheet{margin:0;padding:0;box-shadow:none;width:auto}}`;
+  @media print{body{background:#fff}.no-print{display:none!important}.sheet,.sheet.land,.sheet.port{margin:0;padding:0;box-shadow:none;width:auto;max-width:100%}
+    table.rpt{width:100%;max-width:100%}}`;
 /** CSS string آمن لـ content: في @page */
 function cssStr(s) { return '"' + String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, ' ') + '"'; }
 /**
