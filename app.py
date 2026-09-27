@@ -1742,5 +1742,8 @@ def api_http_error(e):
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5050))
-    print(f"Lunx {APP_VERSION} [{db.engine.dialect.name}] → http://localhost:{port}")
-    app.run(host=os.environ.get("HOST", "127.0.0.1"), port=port, debug=bool(os.environ.get("DEBUG")))
+    # Update the print statement so it visually reflects your network IP
+    print(f"Lunx {APP_VERSION} [{db.engine.dialect.name}] → http://192.168.1.87:{port}")
+    
+    # Changing the fallback from "127.0.0.1" to "0.0.0.0"
+    app.run(host=os.environ.get("HOST", "0.0.0.0"), port=port, debug=bool(os.environ.get("DEBUG")))
