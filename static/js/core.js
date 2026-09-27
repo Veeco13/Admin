@@ -500,8 +500,16 @@ function empUrgency(e) {
    ALERT CENTER — كل ما ينتهي خلال 90 يوم
    ===================================================================== */
 function trackedAlertItems(maxDays = 90) {
-  const items = [];
-  const push = (o) => { const d = daysUntil(o.date); if (d !== null && d <= maxDays) items.push({ ...o, days: d, tier: tierOf(o.date) }); };
+  const items = [], byKey = {};
+  // نفس الشخص/الشركة/السيارة بنفس التاريخ (زي الإقامة وإذن العمل) ← سطر واحد: "الإقامة + إذن العمل"
+  // what بتتترجم هنا عشان المدمجة مالهاش مفتاح في القاموس، و t() على نص مترجم بترجّعه زي ما هو
+  const push = (o) => {
+    const d = daysUntil(o.date);
+    if (d === null || d > maxDays) return;
+    const key = `${o.kind}|${o.refId}|${o.name}|${o.date}`;
+    if (byKey[key]) { byKey[key].what += ' + ' + t(o.what); return; }
+    items.push(byKey[key] = { ...o, what: t(o.what), days: d, tier: tierOf(o.date) });
+  };
   for (const e of scopedEmployees()) {
     if (e.employmentStatus === 'terminated') continue;
     for (const f of EMP_DATE_FIELDS) {
