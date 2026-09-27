@@ -161,8 +161,10 @@ function openCandidateModal(id) {
       <label>${t('الاسم (إنجليزي)')}<input name="nameEn" value="${v('nameEn')}" dir="ltr"></label>
       <label>${t('الجنسية')}<input name="nationality" value="${v('nationality')}" list="dl-nat2"></label>
       <label>${t('تاريخ الميلاد')}<input type="date" name="dateOfBirth" value="${v('dateOfBirth')}"></label>
+      <label>${t('الجنس')}<select name="gender">${opt('', '—', !c.gender)}${Object.entries(GENDER_LABELS).map(([k, l]) => opt(k, t(l), k === c.gender)).join('')}</select></label>
       <label>${t('المهنة')}<input name="profession" value="${v('profession')}" list="dl-prof2"></label>
       <label>${t('الهاتف')}<input name="phone" value="${v('phone')}" dir="ltr"></label>
+      ${personExtraInputs(c)}
       ${hiddenField('candidate', 'salary') ? '' : `<label>${t('الراتب المتفق عليه (د.ك)')}<input type="number" step="0.001" min="0" name="salary" value="${v('salary')}"></label>`}
       <label class="check"><input type="checkbox" name="housingAllowance" ${c.housingAllowance ? 'checked' : ''}> 🏠 ${t('بدل السكن')}</label>
       <h4>الجواز</h4>
@@ -182,7 +184,7 @@ function openCandidateModal(id) {
       </form>
       <datalist id="dl-nat2">${uniq(STATE.employees.map(x => x.nationality)).map(x => `<option value="${esc(x)}">`).join('')}</datalist>
       <datalist id="dl-prof2">${uniq(STATE.employees.map(x => x.profession)).slice(0, 400).map(x => `<option value="${esc(x)}">`).join('')}</datalist>`,
-    foot: `${!isNew ? '<button class="btn danger write-only" data-p="recruitment.delete" data-del>🗑️ حذف</button><span class="spacer"></span>' : ''}<button class="btn primary write-only" data-p="recruitment.edit" data-save>💾 حفظ</button><button class="btn" data-close>إلغاء</button>`,
+    foot: `${!isNew ? '<button class="btn danger write-only" data-p="recruitment.delete" data-del>🗑️ حذف</button><button class="btn" data-driving>🚗 نموذج رخصة القيادة</button><span class="spacer"></span>' : ''}<button class="btn primary write-only" data-p="recruitment.edit" data-save>💾 حفظ</button><button class="btn" data-close>إلغاء</button>`,
   });
   const form = $('#cand-form', m.el);
   const srcSel = $('[name="source"]', form), stSel = $('#cand-stage', form);
@@ -252,6 +254,13 @@ function openCandidateModal(id) {
     if (!cid) return;
     m.close();
     openCandidateContractModal(cid);
+  };
+  const drv = $('[data-driving]', m.el);
+  if (drv) drv.onclick = async () => {
+    const cid = can('recruitment.edit') ? await save() : id;     // النموذج بيطلع بآخر تعديلات في النافذة
+    if (!cid) return;
+    m.close();
+    openOfficialFormModal('driving', 'candidate', cid);
   };
   const del = $('[data-del]', m.el);
   if (del) del.onclick = async () => { if (await openConfirm(t('حذف المترشّح؟'), { danger: true })) { m.close(); await persist('DELETE', '/api/candidates/' + id, undefined, 'تم الحذف'); } };

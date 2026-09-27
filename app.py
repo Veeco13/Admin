@@ -30,7 +30,7 @@ import importer
 import lunx_restore
 import models as M
 import perms
-import residency_form
+import pdf_forms
 
 APP_VERSION = "v353-flask.4"
 
@@ -562,27 +562,68 @@ def import_employees():
     return jsonify({"ok": True, **stats})
 
 
-# نموذج الإقامة الجديد 2018 (residency_form.py) — PDF متعبّي والخانات قابلة للتعديل قبل الطباعة
-@app.get("/api/employees/<emp_id>/residency-form")
-@require("employees.view", "sensitive.documents")
-def employee_residency_form(emp_id):
-    action = request.args.get("action") or "تجديد"
-    if action not in residency_form.ACTIONS:
-        return err("نوع الإجراء غير معروف")
+# النماذج الرسمية (pdf_forms.py): الإقامة ورخصة القيادة — PDF متعبّي والخانات قابلة للتعديل قبل الطباعة.
+# الجسم: {action, person: {...}, company: {...}} = اللي اتكتب في نافذة البيانات الناقصة. بيتكتب في النموذج حتى لو
+# المستخدم مايقدرش يحفظه (الحفظ في مكانه بيتعمل من الواجهة بالـ PUT العادي بكل فحوصاته قبل الطلب ده).
+def _official_form(form, person, company, who):
+    f = pdf_forms.FORMS[form]
+    d = body()
+    action = d.get("action") or f["actions"][0]
+    if action not in f["actions"]:
+        return None, err("نوع الإجراء غير معروف")
+    p = {k: v for k, v in (d.get("person") or {}).items() if k in pdf_forms.PERSON_KEYS and v not in (None, "")}
+    c = {k: v for k, v in (d.get("company") or {}).items() if k in pdf_forms.COMPANY_KEYS and v not in (None, "")}
+    person = {**person, **p}
+    if who[0] == "employee":
+        person["civilId"] = person["id"]
+    data = pdf_forms.fill(form, person, {**(company or {}), **c}, action)
+    name = f"{f['title']} - {person.get('name')}.pdf"
+    return (data, name, action), None
+
+
+def _send_pdf(data, name):
+    return send_file(io.BytesIO(data), as_attachment=False, download_name=name, mimetype="application/pdf")
+
+
+@app.post("/api/employees/<emp_id>/forms/<form>")
+@require("employees.view")
+def employee_official_form(emp_id, form):
+    if form not in pdf_forms.FORMS:
+        abort(404)
+    if form == "residency" and not me().can("sensitive.documents"):
+        return forbidden("العملية دي غير متاحة")
     with db.session_scope() as s:
         emp = db.employee_full(s, emp_id)
         if not emp:
             return err("الموظف غير موجود", 404)
         if not emp_ok(s, emp_id):
             return forbidden(OUT_OF_SCOPE)
-        if not residency_form.needs_residency(emp.get("nationality")):
+        if form == "residency" and not pdf_forms.needs_residency(emp.get("nationality")):
             return err("المواطنين الكويتيين ومواطني الخليج مالهمش إقامة")
         cid = next((a["companyId"] for a in emp.get("affiliations") or [] if a.get("companyId")), None)
-        company = db.to_dict(s.get(M.Company, cid)) if cid else None
-        data = residency_form.fill(emp, company, action)
-        db.log_audit(s, "employee_residency_form", f"نموذج إقامة ({action}) للموظف: {emp['name']} ({emp_id})", uname())
-    return send_file(io.BytesIO(data), as_attachment=False, download_name=f"نموذج إقامة - {emp['name']}.pdf",
-                     mimetype="application/pdf")
+        out, bad = _official_form(form, emp, db.to_dict(s.get(M.Company, cid)) if cid else None, ("employee", emp_id))
+        if bad:
+            return bad
+        db.log_audit(s, f"employee_{form}_form", f"{pdf_forms.FORMS[form]['title']} ({out[2]}) للموظف: {emp['name']} ({emp_id})",
+                     uname())
+    return _send_pdf(out[0], out[1])
+
+
+@app.post("/api/candidates/<cand_id>/forms/driving")
+@require("recruitment.view")
+def candidate_driving_form(cand_id):
+    with db.session_scope() as s:
+        c = s.get(M.Candidate, cand_id)
+        if not c:
+            return err("المترشّح غير موجود", 404)
+        if not me().record_ok(c.targetCompanyId, db.cost_center_company(s, c.costCenter), c.costCenter):
+            return forbidden(OUT_OF_SCOPE)
+        company = db.to_dict(s.get(M.Company, c.targetCompanyId)) if c.targetCompanyId else None
+        out, bad = _official_form("driving", me().strip("candidate", db.to_dict(c)), company, ("candidate", cand_id))
+        if bad:
+            return bad
+        db.log_audit(s, "candidate_driving_form", f"نموذج رخصة قيادة ({out[2]}) للمترشّح: {c.name}", uname())
+    return _send_pdf(out[0], out[1])
 
 
 # مرفقات الموظف (بديل Google Drive)
@@ -1169,7 +1210,9 @@ def convert_candidate(cand_id):
             nationalityEn=docx_engine.NATIONALITY_EN.get(c.nationality or ""), dateOfBirth=c.dateOfBirth,
             profession=c.profession, phone=c.phone, salary=c.salary, housingIncluded=bool(c.housingAllowance),
             housingAmount=None, passportNo=c.passportNo, passportIssueDate=c.passportIssueDate,
-            passportExp=c.passportExp, costCenter=c.costCenter,
+            passportExp=c.passportExp, costCenter=c.costCenter, gender=c.gender, unifiedNumber=c.unifiedNumber,
+            bloodType=c.bloodType, addressArea=c.addressArea, addressBlock=c.addressBlock, addressStreet=c.addressStreet,
+            addressHouse=c.addressHouse, addressApartment=c.addressApartment, homePhone=c.homePhone,
             employmentStatus="pending_completion", dateOfHire=datetime.now().date(),
             lastUpdated=db.now(), lastUpdatedBy=uname()))
         s.flush()

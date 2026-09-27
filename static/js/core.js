@@ -32,6 +32,22 @@ const GOV_STAGES = [
 /** أنواع الخط الزمني اللي بتظهر في تبويب «التحركات» (history.MOVE_TYPES على السيرفر) */
 const MOVE_ICONS = { baseline: '🏁', create: '🆕', import_add: '📥', transfer: '🔀', project: '📁', cost_center: '💼' };
 const GENDER_LABELS = { male: 'ذكر', female: 'أنثى' };
+const BLOOD_TYPES = ['A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-'];
+/** عنوان السكن (موظف أو مترشّح) في سطر واحد */
+function addressText(p) {
+  return [p.addressArea, p.addressBlock && `${t('قطعة')} ${p.addressBlock}`, p.addressStreet && `${t('شارع')} ${p.addressStreet}`,
+    p.addressHouse && `${t('منزل')} ${p.addressHouse}`, p.addressApartment && `${t('شقة')} ${p.addressApartment}`].filter(Boolean).join('، ');
+}
+/** خانات الموظف/المترشّح المشتركة الجديدة في النماذج: الجنس + الرقم الموحد + فصيلة الدم + العنوان + هاتف المنزل */
+function personExtraInputs(p) {
+  const v = k => esc(p[k] ?? '');
+  const inp = (k, l, extra = '') => `<label>${t(l)}<input name="${k}" value="${v(k)}" ${extra}></label>`;
+  return `<label>${t('الرقم الموحد')}<input name="unifiedNumber" value="${v('unifiedNumber')}" inputmode="numeric" maxlength="9"></label>
+    <label>${t('فصيلة الدم')}<select name="bloodType">${opt('', '—', !p.bloodType)}${BLOOD_TYPES.map(x => opt(x, x, x === p.bloodType)).join('')}</select></label>
+    <h4>${t('عنوان السكن')}</h4>
+    ${inp('addressArea', 'المنطقة')}${inp('addressBlock', 'القطعة')}${inp('addressStreet', 'الشارع')}
+    ${inp('addressHouse', 'المنزل')}${inp('addressApartment', 'الشقة')}${inp('homePhone', 'هاتف المنزل', 'dir="ltr"')}`;
+}
 const EMP_STATUS_LABELS = {
   active:             { ar: 'في الخدمة',       en: 'In Service' },
   warning:            { ar: 'في فترة الإنذار',  en: 'Warning Period' },

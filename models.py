@@ -58,6 +58,7 @@ class Company(Base):
     commercialLicenseNo: Mapped[Optional[str]] = col("commercial_license_no", SHORT)
     commercialLicenseExpiry: Mapped[Optional[date]] = col("commercial_license_expiry", Date)
     licenseCivilNo: Mapped[Optional[str]] = col("license_civil_no", SHORT)
+    unifiedNumber: Mapped[Optional[str]] = col("unified_number", SHORT)        # الرقم الموحد للشركة
     trafficAuthExpiry: Mapped[Optional[date]] = col("traffic_auth_expiry", Date)
     civilAffairsAuthExpiry: Mapped[Optional[date]] = col("civil_affairs_auth_expiry", Date)
     activity: Mapped[Optional[str]] = col("activity", NAME)
@@ -108,6 +109,15 @@ class Employee(Base):
     dateOfBirth: Mapped[Optional[date]] = col("date_of_birth", Date)
     gender: Mapped[Optional[str]] = col("gender", String(10))                  # male | female
     placeOfBirth: Mapped[Optional[str]] = col("place_of_birth", NAME)
+    unifiedNumber: Mapped[Optional[str]] = col("unified_number", SHORT)        # الرقم الموحد (مرجع الداخلية)
+    bloodType: Mapped[Optional[str]] = col("blood_type", String(4))              # A+ … AB-
+    # عنوان السكن + هاتف المنزل (نموذج رخصة القيادة)
+    addressArea: Mapped[Optional[str]] = col("address_area", NAME)
+    addressBlock: Mapped[Optional[str]] = col("address_block", SHORT)
+    addressStreet: Mapped[Optional[str]] = col("address_street", NAME)
+    addressHouse: Mapped[Optional[str]] = col("address_house", SHORT)
+    addressApartment: Mapped[Optional[str]] = col("address_apartment", SHORT)
+    homePhone: Mapped[Optional[str]] = col("home_phone", SHORT)
     dateOfHire: Mapped[Optional[date]] = col("date_of_hire", Date)
     salary: Mapped[Optional[float]] = col("salary", Float)
     housingIncluded: Mapped[bool] = col("housing_included", Boolean, default=False)
@@ -150,6 +160,16 @@ class Candidate(Base):
     dateOfBirth: Mapped[Optional[date]] = col("date_of_birth", Date)
     profession: Mapped[Optional[str]] = col("profession", NAME)
     phone: Mapped[Optional[str]] = col("phone", SHORT)
+    gender: Mapped[Optional[str]] = col("gender", String(10))                  # male | female
+    unifiedNumber: Mapped[Optional[str]] = col("unified_number", SHORT)        # الرقم الموحد (مرجع الداخلية)
+    bloodType: Mapped[Optional[str]] = col("blood_type", String(4))              # A+ … AB-
+    # عنوان السكن + هاتف المنزل (نموذج رخصة القيادة)
+    addressArea: Mapped[Optional[str]] = col("address_area", NAME)
+    addressBlock: Mapped[Optional[str]] = col("address_block", SHORT)
+    addressStreet: Mapped[Optional[str]] = col("address_street", NAME)
+    addressHouse: Mapped[Optional[str]] = col("address_house", SHORT)
+    addressApartment: Mapped[Optional[str]] = col("address_apartment", SHORT)
+    homePhone: Mapped[Optional[str]] = col("home_phone", SHORT)
     salary: Mapped[Optional[float]] = col("salary", Float)
     housingAllowance: Mapped[bool] = col("housing_allowance", Boolean, default=False)
     source: Mapped[Optional[str]] = col("source", String(20), default="outside")

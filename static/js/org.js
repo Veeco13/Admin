@@ -27,6 +27,7 @@ function renderCompanies() {
       <div class="kv small">
         <div><span>${t('رقم الرخصة التجارية')}</span>${esc(c.commercialLicenseNo || '—')}</div>
         <div><span>${t('الرقم المدني للرخصة')}</span>${esc(c.licenseCivilNo || '—')}</div>
+        <div><span>${t('الرقم الموحد')}</span>${esc(c.unifiedNumber || '—')}</div>
         ${COMPANY_DOC_KINDS.map(k => {
           const d = c.docs && c.docs[k.key];
           return `<div><span>${esc(t(k.label))}</span>${datePill(c[k.exp])}
@@ -88,6 +89,7 @@ function openCompanyModal(id) {
       <label>${t('رقم الملف الرئيسي')}<input name="mainFileNumber" value="${v('mainFileNumber')}"></label>
       <label>${t('رقم الرخصة التجارية')}<input name="commercialLicenseNo" value="${v('commercialLicenseNo')}"></label>
       <label>${t('الرقم المدني للرخصة')}<input name="licenseCivilNo" value="${v('licenseCivilNo')}"></label>
+      <label>${t('الرقم الموحد')}<input name="unifiedNumber" value="${v('unifiedNumber')}" inputmode="numeric"></label>
       <label>${t('انتهاء الرخصة التجارية')}<input type="date" name="commercialLicenseExpiry" value="${v('commercialLicenseExpiry')}"></label>
       <label>${t('انتهاء تفويض المرور')}<input type="date" name="trafficAuthExpiry" value="${v('trafficAuthExpiry')}"></label>
       <label>${t('انتهاء تفويض الشؤون المدنية')}<input type="date" name="civilAffairsAuthExpiry" value="${v('civilAffairsAuthExpiry')}"></label>

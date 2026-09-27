@@ -44,6 +44,10 @@ HEADER_MAP = {
     "مكان الميلاد": "placeOfBirth", "placeofbirth": "placeOfBirth", "place of birth": "placeOfBirth",
     "تاريخ إصدار الجواز": "passportIssueDate", "تاريخ اصدار الجواز": "passportIssueDate",
     "passportissuedate": "passportIssueDate",
+    "الرقم الموحد": "unifiedNumber", "unifiednumber": "unifiedNumber",
+    "فصيلة الدم": "bloodType", "bloodtype": "bloodType", "blood type": "bloodType",
+    "المنطقة": "addressArea", "القطعة": "addressBlock", "الشارع": "addressStreet", "المنزل": "addressHouse",
+    "الشقة": "addressApartment", "هاتف المنزل": "homePhone", "homephone": "homePhone",
     "تاريخ التعيين": "dateOfHire", "تاريخ البدء": "dateOfHire", "start_date": "dateOfHire", "dateofhire": "dateOfHire",
     # أخرى
     "الراتب": "salary", "salary": "salary",
@@ -206,6 +210,8 @@ def import_dataframe_with_headers(s, df, user, stats, cache):
                 rec["salary"] = None
         if rec.get("gender"):
             rec["gender"] = norm_gender(rec["gender"])
+        if rec.get("bloodType"):
+            rec["bloodType"] = rec["bloodType"].replace(" ", "").upper()
         upsert_employee(s, rec, user, stats, cache)
     return True
 
