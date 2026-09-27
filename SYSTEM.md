@@ -96,6 +96,7 @@ zahed/
 | `js/contract.js` | CONTRACT GENERATOR، COMPANY LOG / AUDIT LOG | `renderContractView`، `buildContractHtml`، `renderCompanyLog` |
 | `js/recruit.js` | RECRUITMENT، CANDIDATES REPORT + MODAL | `recruitStagesForSource`، `recruitStageInfo`، `migrateRecruitStages`، `renderRecruitFunnelCard`، `renderRecruitment`، `renderCandidatesReportModal`، `printCandidatesReport`، `openCandidateModal`، `convertCandidateToEmployee` |
 | `models.py` / `db.py` / `db_transfer.py` | DATABASE (SQLAlchemy) | الموديلات، `session_scope`، `init_db`، `to_dict`، `apply`، `coerce`، `dump_state`، `export_tables`، `import_tables`، `transfer` |
+| `residency_form.py` | نموذج الإقامة الجديد 2018 (PDF) | `prepare_base`، `values_for`، `fill`، `needs_residency`، `governorate_of` |
 | `docx_engine.py` | DOCX TEMPLATE ENGINE ⚠️ | `resolve_contract_template`، `fill_docx_template`، `docx_to_html`، `docx_to_pdf`، `replace_literals` |
 
 > ⚠️ **محرك العقود** (`docx_engine.py`) **مُجمَّد**، وممنوع تعديله إلا بطلب صريح.
@@ -212,7 +213,7 @@ zahed/
 ## 9. أنواع السجلات
 
 **سجل التدقيق:**
-- الموظفين: `employee_add` · `employee_edit` · `employee_delete`
+- الموظفين: `employee_add` · `employee_edit` · `employee_delete` · `employee_residency_form`
 - المترشّحين: `candidate_add` · `candidate_edit` · `candidate_convert` · `candidate_contract`
 - الشركات: `company_add` · `company_edit` · `company_delete`
 - السيارات: `vehicle_add` · `vehicle_edit` · `vehicle_delete`
@@ -283,6 +284,17 @@ fill_docx_template()  ← {{ field }} حتى لو متقسّم على أكتر �
   - **صلاحيات الرفع والعرض:** توقيع المفوّض (`companies.edit` للرفع، و`companies.view` أو `contract.view` للعرض، في شركة من النطاق). توقيع الموظف (`employees.edit` + `sensitive.documents` للرفع، و`employees.view` + `sensitive.documents` للعرض، والموظف في النطاق).
 - **الصلاحيات:** العقود (فردي ومتعدد) محتاجة `contract.view` و`employees.view` و`sensitive.salary`، وكل موظف لازم يكون في نطاق المستخدم. **والعقود بالتوقيعات** محتاجة كمان `contract.sign`، ودي اتضافت لدوري «محرر» و«موارد بشرية».
 
+### 11.1 نموذج الإقامة الجديد 2018 (وزارة الداخلية)
+- **الملف:** `forms/residency_2018.pdf` = النموذج الرسمي (Moi Immigration form) فاضي: من غير تشفير ومن غير القيم التجريبية اللي كانت فيه، و`NeedAppearances` شغال. اتعمل مرة واحدة بـ `residency_form.prepare_base(الأصل)` (فك التشفير محتاج مكتبة `cryptography` وقتها بس، والسيرفر مش محتاجها).
+- **من فين:** زرار «🪪 نموذج الإقامة» في بطاقة الموظف (للي معاه `sensitive.documents`، ومش ظاهر للكويتيين والخليجيين: `NO_RESIDENCY`). النافذة بتختار «نوع الإجراء» (الافتراضي «تجديد») وبتقول إيه اللي ناقص في بيانات الموظف، وبعدين معاينة PDF فيها طباعة وتنزيل.
+- **بيتملى تلقائي:**
+  - الرأس: «إقامة» · «عمل أهلي» · «18 عمل أهلي» · نوع الإجراء · المحافظة من إدارة العمل بتاعة الشركة (`governorate_of`).
+  - القادم / المقيم: الرقم المدني، الاسم عربي وإنجليزي، تاريخ الميلاد، الجنس، مكان الميلاد، رقم الجواز وتاريخ إصداره وانتهائه، نوع الجواز «عادي»، الجنسية، العلاقة «عمل»، المهنة.
+  - صاحب العمل (الشركة المسجّل عليها): «الرقم المدني» = الرقم المدني للرخصة (`licenseCivilNo`)، الاسم، الجنسية «الكويت - 1»، والمحافظة.
+- **القوائم:** القيمة بتتطابق مع قائمة النموذج بالاسم (من غير الكود ومن غير «ال»، و`NATIONALITY_ALIASES` للأسماء المختلفة زي «بنغلاديش» ← «بنجلاديش - 145»). كل جنسيات الموظفين الحاليين متطابقة.
+- **الباقي فاضي** (رقم المرجع، عنوان الشركة والإيميل والهاتف، بيانات المتنازل، والمرافقين): الخانات بتفضل قابلة للكتابة، فبتتكتب في المتصفح قبل الطباعة. النص العربي بيرسمه المتصفح نفسه (`/AP` بيتشال من الخانات المتعبّية) فبيطلع متوصّل.
+- **بيانات الموظف الجديدة:** الجنس ومكان الميلاد وتاريخ إصدار الجواز (الترحيل `0008`) في نافذة الموظف وبطاقته واستيراد Excel («الجنس» بيقبل ذكر / أنثى / male / female / M / F)، وتاريخ إصدار الجواز بيتنقل من المترشّح لما يتحوّل لموظف.
+
 ---
 
 ## 12. الترجمة
@@ -304,6 +316,7 @@ fill_docx_template()  ← {{ field }} حتى لو متقسّم على أكتر �
 | POST | `/api/employees/<id>/gov-stage` | مرحلة المعاملة |
 | POST | `/api/employees/import` | استيراد Excel/CSV |
 | GET / POST | `/api/employees/<id>/files` | المرفقات |
+| GET | `/api/employees/<id>/residency-form?action=تجديد` | نموذج الإقامة PDF متعبّي (`employees.view` + `sensitive.documents`). مرفوض للكويتيين والخليجيين |
 | POST / PUT / DELETE | `/api/companies`، `/api/projects`، `/api/signatories`، `/api/vehicles`، `/api/cost-centers`، `/api/candidates` | CRUD |
 | POST | `/api/companies/<id>/docs/<kind>` | مستندات الشركة والشعار (`kind=logo`) |
 | POST | `/api/signatory-docs/<civilId>` | بطاقة المفوّض |
@@ -362,6 +375,7 @@ fill_docx_template()  ← {{ field }} حتى لو متقسّم على أكتر �
 |---|---|
 | `0001` | الهيكل الكامل (17 جدول) من غير مفاتيح أجنبية |
 | `0002` | تنظيف المراجع اليتيمة، وبعدين إضافة المفاتيح الأجنبية التسعة |
+| `0008` | `employees`: `gender` (male / female)، `place_of_birth`، `passport_issue_date` — لنموذج الإقامة |
 
 - **التطبيق تلقائي:** السيرفر بيطبّق التعديلات لوحده كل ما يشتغل (`db.init_db()`).
 - **حسب حالة القاعدة:**

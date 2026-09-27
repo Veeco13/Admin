@@ -30,6 +30,7 @@ import importer
 import lunx_restore
 import models as M
 import perms
+import residency_form
 
 APP_VERSION = "v353-flask.4"
 
@@ -559,6 +560,29 @@ def import_employees():
     except Exception as e:
         return err(f"خطأ في قراءة الملف: {e}")
     return jsonify({"ok": True, **stats})
+
+
+# نموذج الإقامة الجديد 2018 (residency_form.py) — PDF متعبّي والخانات قابلة للتعديل قبل الطباعة
+@app.get("/api/employees/<emp_id>/residency-form")
+@require("employees.view", "sensitive.documents")
+def employee_residency_form(emp_id):
+    action = request.args.get("action") or "تجديد"
+    if action not in residency_form.ACTIONS:
+        return err("نوع الإجراء غير معروف")
+    with db.session_scope() as s:
+        emp = db.employee_full(s, emp_id)
+        if not emp:
+            return err("الموظف غير موجود", 404)
+        if not emp_ok(s, emp_id):
+            return forbidden(OUT_OF_SCOPE)
+        if not residency_form.needs_residency(emp.get("nationality")):
+            return err("المواطنين الكويتيين ومواطني الخليج مالهمش إقامة")
+        cid = next((a["companyId"] for a in emp.get("affiliations") or [] if a.get("companyId")), None)
+        company = db.to_dict(s.get(M.Company, cid)) if cid else None
+        data = residency_form.fill(emp, company, action)
+        db.log_audit(s, "employee_residency_form", f"نموذج إقامة ({action}) للموظف: {emp['name']} ({emp_id})", uname())
+    return send_file(io.BytesIO(data), as_attachment=False, download_name=f"نموذج إقامة - {emp['name']}.pdf",
+                     mimetype="application/pdf")
 
 
 # مرفقات الموظف (بديل Google Drive)
@@ -1144,7 +1168,8 @@ def convert_candidate(cand_id):
             id=civil, name=c.name, nameEn=c.nameEn, nationality=c.nationality,
             nationalityEn=docx_engine.NATIONALITY_EN.get(c.nationality or ""), dateOfBirth=c.dateOfBirth,
             profession=c.profession, phone=c.phone, salary=c.salary, housingIncluded=bool(c.housingAllowance),
-            housingAmount=None, passportNo=c.passportNo, passportExp=c.passportExp, costCenter=c.costCenter,
+            housingAmount=None, passportNo=c.passportNo, passportIssueDate=c.passportIssueDate,
+            passportExp=c.passportExp, costCenter=c.costCenter,
             employmentStatus="pending_completion", dateOfHire=datetime.now().date(),
             lastUpdated=db.now(), lastUpdatedBy=uname()))
         s.flush()

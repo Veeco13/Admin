@@ -164,6 +164,14 @@ window.I18N = {
   'بتوقيع المفوّض': 'With signatory signature', 'إضافة بند بدل السكن (البند الثالث عشر)': 'Add housing allowance clause (Clause 13)',
   'تم التنزيل': 'Downloaded',
   'توقيعات المفوّضين والموظفين': 'Signatory & employee signatures',
+  // نموذج الإقامة الجديد 2018
+  'الجنس': 'Sex', 'ذكر': 'Male', 'أنثى': 'Female', 'مكان الميلاد': 'Place of birth', 'نموذج الإقامة': 'Residency form',
+  'نوع الإجراء': 'Transaction type', 'إصدار': 'Issue', 'تعديل بيانات': 'Update details', 'نقل كفالة': 'Sponsorship transfer',
+  'نقل معلومات': 'Transfer information', 'عرض النموذج': 'Show form', 'تعديل بيانات الموظف': 'Edit employee details',
+  'الرقم المدني للرخصة (الشركة)': 'License civil no. (company)',
+  'مش موجود في بيانات الموظف، وهيطلع فاضي في النموذج (تقدر تكتبه فيه قبل الطباعة)': 'Missing from the employee record and blank on the form (you can type it in before printing)',
+  'كل بيانات الموظف اللي النموذج محتاجها موجودة': 'All employee details the form needs are present',
+  'رقم المرجع وعنوان الشركة والإيميل بيتكتبوا في النموذج نفسه.': 'Reference no., company address and email are typed on the form itself.',
   // عقود متعددة: ملف لكل موظف
   'PDF لكل موظف': 'PDF per employee', 'ملف PDF منفصل باسم كل موظف': "A separate PDF named after each employee",
   'تم تنزيل': 'Downloaded', 'ملف': 'files', 'لو المتصفح سأل عن تنزيل ملفات متعددة، اختار «السماح».': 'If the browser asks about downloading multiple files, choose "Allow".',

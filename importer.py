@@ -40,6 +40,10 @@ HEADER_MAP = {
     "انتهاء الجواز": "passportExp", "passportexp": "passportExp",
     "انتهاء البطاقة الصحية": "healthCardExp", "healthcardexp": "healthCardExp",
     "تاريخ الميلاد": "dateOfBirth", "dateofbirth": "dateOfBirth",
+    "الجنس": "gender", "gender": "gender", "sex": "gender",
+    "مكان الميلاد": "placeOfBirth", "placeofbirth": "placeOfBirth", "place of birth": "placeOfBirth",
+    "تاريخ إصدار الجواز": "passportIssueDate", "تاريخ اصدار الجواز": "passportIssueDate",
+    "passportissuedate": "passportIssueDate",
     "تاريخ التعيين": "dateOfHire", "تاريخ البدء": "dateOfHire", "start_date": "dateOfHire", "dateofhire": "dateOfHire",
     # أخرى
     "الراتب": "salary", "salary": "salary",
@@ -52,7 +56,7 @@ HEADER_MAP = {
     "حالة التحويل": "transferNote", "ملاحظات": "notes", "notes": "notes",
 }
 
-DATE_FIELDS = {"workPermitIssue", "workPermitExp", "residencyExp", "passportExp", "healthCardExp",
+DATE_FIELDS = {"workPermitIssue", "workPermitExp", "residencyExp", "passportIssueDate", "passportExp", "healthCardExp",
                "dateOfBirth", "dateOfHire", "drivingLicenseExp"}
 
 
@@ -72,6 +76,13 @@ def norm_date(v):
         except ValueError:
             pass
     return None
+
+
+def norm_gender(v):
+    """ذكر / أنثى / male / female / M / F ← male | female (وأي حاجة تانية ← None فمابتتكتبش)."""
+    s = (v or "").strip().lower().replace("أ", "ا")
+    return {"ذكر": "male", "male": "male", "m": "male", "انثى": "female", "انثي": "female",
+            "female": "female", "f": "female"}.get(s)
 
 
 def clean(v):
@@ -193,6 +204,8 @@ def import_dataframe_with_headers(s, df, user, stats, cache):
                 rec["salary"] = float(rec["salary"])
             except ValueError:
                 rec["salary"] = None
+        if rec.get("gender"):
+            rec["gender"] = norm_gender(rec["gender"])
         upsert_employee(s, rec, user, stats, cache)
     return True
 

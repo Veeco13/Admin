@@ -106,6 +106,8 @@ class Employee(Base):
     profession: Mapped[Optional[str]] = col("profession", NAME)
     professionEn: Mapped[Optional[str]] = col("profession_en", NAME)
     dateOfBirth: Mapped[Optional[date]] = col("date_of_birth", Date)
+    gender: Mapped[Optional[str]] = col("gender", String(10))                  # male | female
+    placeOfBirth: Mapped[Optional[str]] = col("place_of_birth", NAME)
     dateOfHire: Mapped[Optional[date]] = col("date_of_hire", Date)
     salary: Mapped[Optional[float]] = col("salary", Float)
     housingIncluded: Mapped[bool] = col("housing_included", Boolean, default=False)
@@ -116,6 +118,7 @@ class Employee(Base):
     workPermitExp: Mapped[Optional[date]] = col("work_permit_exp", Date)
     workPermitIssue: Mapped[Optional[date]] = col("work_permit_issue", Date)
     passportNo: Mapped[Optional[str]] = col("passport_no", SHORT, index=True)
+    passportIssueDate: Mapped[Optional[date]] = col("passport_issue_date", Date)
     passportExp: Mapped[Optional[date]] = col("passport_exp", Date)
     healthCardExp: Mapped[Optional[date]] = col("health_card_exp", Date)
     isDriver: Mapped[bool] = col("is_driver", Boolean, default=False)

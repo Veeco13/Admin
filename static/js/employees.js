@@ -252,7 +252,8 @@ async function openProfileCard(id, tab = 'info') {
       </div>
       <div data-pane="info" ${tab !== 'info' ? 'hidden' : ''}><div class="kv">
         ${field('الرقم المدني', `<b class="num">${esc(e.id)}</b>`)}${field('الجنسية', esc(e.nationality))}${field('المهنة', esc(e.profession) + (e.professionEn ? `<div class="small muted">${esc(e.professionEn)}</div>` : ''))}
-        ${field('تاريخ الميلاد', fmtDate(e.dateOfBirth))}${field('تاريخ التعيين', fmtDate(e.dateOfHire))}${can('sensitive.salary') ? field('الراتب', fmtMoney(e.salary)) : ''}
+        ${field('تاريخ الميلاد', fmtDate(e.dateOfBirth))}${field('الجنس', esc(t(GENDER_LABELS[e.gender] || '')))}${field('مكان الميلاد', esc(e.placeOfBirth))}
+        ${field('تاريخ إصدار الجواز', fmtDate(e.passportIssueDate))}${field('تاريخ التعيين', fmtDate(e.dateOfHire))}${can('sensitive.salary') ? field('الراتب', fmtMoney(e.salary)) : ''}
         ${field('بدل السكن', e.housingIncluded ? (e.housingAmount ? fmtMoney(e.housingAmount) : t('مشمول')) : t('غير مشمول'))}
         ${field('نوع العقد', esc(e.contractType))}${field('رقم الملف', esc(e.fileNo))}${field('مركز التكلفة', esc(e.costCenter))}
         ${field('مكان العمل الفعلي', esc(e.actualWorkplace))}${field('الهاتف', esc(e.phone))}${can('sensitive.bank') ? field('البنك', esc(e.bank) + (e.iban ? `<div class="small muted">${esc(e.iban)}</div>` : '')) : ''}
@@ -289,6 +290,7 @@ async function openProfileCard(id, tab = 'info') {
     foot: `<button class="btn primary write-only" data-p="employees.edit" data-a="edit">✏️ تعديل</button>
       <button class="btn write-only" data-p="employees.edit" data-a="stage">🏛️ مرحلة المعاملة</button>
       <button class="btn" data-p="contract.view employees.view sensitive.salary" data-a="contract">📄 عقد العمل</button>
+      ${empNeedsResidency(e) ? '<button class="btn" data-p="sensitive.documents" data-a="residency">🪪 نموذج الإقامة</button>' : ''}
       <button class="btn" data-a="print">🖨️ طباعة</button>
       <span class="spacer"></span>
       <button class="btn danger write-only" data-p="employees.delete" data-a="delete">🗑️ حذف</button>`,
@@ -307,6 +309,7 @@ async function openProfileCard(id, tab = 'info') {
     else if (a === 'stage') { m.close(); openGovStageModal(e.id); }
     else if (a === 'signature') { m.close(); openSignatureModal(e.id, e.name, canAll('employees.edit sensitive.documents')); }
     else if (a === 'contract') { m.close(); VIEW_ARGS = { emp: e.id }; setView('contract'); }
+    else if (a === 'residency') openResidencyFormModal(e.id);
     else if (a === 'print') printHtml(e.name, `<h1>${esc(e.name)}</h1><div class="muted">${esc(e.nameEn || '')} · ${esc(e.id)}</div>` + $('[data-pane="info"]', m.el).innerHTML + $('[data-pane="docs"]', m.el).innerHTML);
     else if (a === 'delete') {
       if (await openConfirm(`${t('حذف الموظف')} «${esc(e.name)}» ${t('نهائيًا؟')}`, { danger: true, okLabel: t('حذف') })) {
@@ -314,6 +317,42 @@ async function openProfileCard(id, tab = 'info') {
       }
     }
   });
+}
+
+/* ---------- نموذج الإقامة الجديد 2018 (residency_form.py على السيرفر) ---------- */
+// مواطنين الكويت والخليج مالهمش إقامة (نفس residency_form.NO_RESIDENCY)
+const NO_RESIDENCY_NATIONALITIES = ['الكويت', 'كويتي', 'معاملة كويتية', 'السعودية', 'الامارات', 'قطر', 'البحرين', 'عمان', 'سلطنة عمان'];
+const RESIDENCY_ACTIONS = ['إصدار', 'إضافة', 'إلغاء', 'تجديد', 'تعديل بيانات', 'حذف', 'نقل كفالة', 'نقل معلومات'];
+function empNeedsResidency(e) { return !NO_RESIDENCY_NATIONALITIES.map(norm).includes(norm(e.nationality)); }
+function openResidencyFormModal(id) {
+  const e = IDX.employee[id];
+  const co = IDX.company[empCompanyId(e)] || {};
+  // اللي النموذج بياخده من النظام ومش موجود ← بيطلع فاضي ويتكتب في النموذج قبل الطباعة
+  const need = [['nameEn', 'الاسم (إنجليزي)'], ['dateOfBirth', 'تاريخ الميلاد'], ['gender', 'الجنس'], ['placeOfBirth', 'مكان الميلاد'],
+    ['passportNo', 'رقم الجواز'], ['passportIssueDate', 'تاريخ إصدار الجواز'], ['passportExp', 'انتهاء الجواز'], ['profession', 'المهنة']]
+    .filter(([k]) => !e[k]).map(([, l]) => t(l));
+  if (!co.licenseCivilNo) need.push(t('الرقم المدني للرخصة (الشركة)'));
+  const m = openModal({
+    title: '🪪 ' + t('نموذج الإقامة') + ': ' + esc(e.name), size: 'narrow',
+    body: `<div class="form" style="grid-template-columns:1fr">
+        <label>${t('نوع الإجراء')}<select id="rf-action">${RESIDENCY_ACTIONS.map(x => opt(x, t(x), x === 'تجديد')).join('')}</select></label></div>
+      ${need.length ? `<div class="notice warn" style="margin-top:10px">${t('مش موجود في بيانات الموظف، وهيطلع فاضي في النموذج (تقدر تكتبه فيه قبل الطباعة)')}: ${need.map(esc).join('، ')}</div>`
+        : `<div class="notice" style="margin-top:10px">✓ ${t('كل بيانات الموظف اللي النموذج محتاجها موجودة')}</div>`}
+      <div class="small muted" style="margin-top:6px">${t('رقم المرجع وعنوان الشركة والإيميل بيتكتبوا في النموذج نفسه.')}</div>`,
+    foot: `<button class="btn primary" data-go>📄 ${t('عرض النموذج')}</button>
+      <button class="btn write-only" data-p="employees.edit" data-edit>✏️ ${t('تعديل بيانات الموظف')}</button>
+      <span class="spacer"></span><button class="btn" data-close>إلغاء</button>`,
+  });
+  $('[data-edit]', m.el).onclick = () => { closeAllModals(); openEmployeeModal(e.id); };
+  $('[data-go]', m.el).onclick = async (ev) => {
+    const b = ev.currentTarget;
+    b.disabled = true;
+    try {
+      const res = await fetchBlob(`/api/employees/${encodeURIComponent(e.id)}/residency-form?action=${encodeURIComponent($('#rf-action', m.el).value)}`);
+      m.close();
+      openPdfPreviewModal(res.blob, res.name, 1);
+    } catch (err) { toast(err.message, 'err'); b.disabled = false; }
+  };
 }
 
 /* ---------- المرفقات (بديل Google Drive: التخزين على السيرفر) ---------- */
@@ -391,7 +430,9 @@ function openEmployeeModal(id) {
       ${inp('nationalityEn', 'الجنسية (إنجليزي)', 'text', 'dir="ltr"')}
       <label>${t('المهنة')}<input name="profession" value="${v('profession')}" list="dl-prof"></label>
       ${inp('professionEn', 'المهنة (إنجليزي)', 'text', 'dir="ltr"')}
-      ${dt('dateOfBirth', 'تاريخ الميلاد')}${dt('dateOfHire', 'تاريخ التعيين')}
+      ${dt('dateOfBirth', 'تاريخ الميلاد')}
+      <label>${t('الجنس')}<select name="gender">${opt('', '—', !e.gender)}${Object.entries(GENDER_LABELS).map(([k, l]) => opt(k, t(l), k === e.gender)).join('')}</select></label>
+      ${inp('placeOfBirth', 'مكان الميلاد')}${dt('dateOfHire', 'تاريخ التعيين')}
       ${inp('phone', 'الهاتف')}
       <h4>العمل والراتب</h4>
       <label>${t('الحالة الوظيفية')}<select name="employmentStatus">${Object.entries(EMP_STATUS_LABELS).map(([k, s]) => opt(k, LANG === 'en' ? s.en : s.ar, k === (e.employmentStatus || 'active'))).join('')}</select></label>
@@ -406,7 +447,7 @@ function openEmployeeModal(id) {
       <div class="full" id="aff-box" style="grid-column:1/-1">${renderAffRows(e.affiliations || [])}</div>
       <h4>المستندات</h4>
       ${dt('residencyExp', 'انتهاء الإقامة')}${dt('workPermitIssue', 'إصدار إذن العمل')}${dt('workPermitExp', 'انتهاء إذن العمل')}
-      ${inp('passportNo', 'رقم الجواز', 'text', 'dir="ltr"')}${dt('passportExp', 'انتهاء الجواز')}${dt('healthCardExp', 'انتهاء البطاقة الصحية')}
+      ${inp('passportNo', 'رقم الجواز', 'text', 'dir="ltr"')}${dt('passportIssueDate', 'تاريخ إصدار الجواز')}${dt('passportExp', 'انتهاء الجواز')}${dt('healthCardExp', 'انتهاء البطاقة الصحية')}
       <label class="check"><input type="checkbox" name="isDriver" ${e.isDriver ? 'checked' : ''}> 🚚 ${t('سائق')}</label>
       ${dt('drivingLicenseExp', 'انتهاء رخصة القيادة')}
       <h4>المعاملة الحكومية</h4>
