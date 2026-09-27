@@ -660,7 +660,7 @@ function renderAlertBar() {
   const week = items.filter(i => i.days >= 0 && i.days <= 7).length;
   const stuck = scopedEmployees().filter(e => e.govStageNote && e.employmentStatus !== 'terminated').length;
   let html = '';
-  if (expired || week || stuck) {
+  if ((expired || week || stuck) && VIEW !== 'dashboard') {   // الرئيسية فيها «محتاج إجراء»
     const parts = [];
     if (expired) parts.push(`⛔ ${expired} ${t('تاريخ منتهي')}`);
     if (week) parts.push(`⏰ ${week} ${t('ينتهي خلال 7 أيام')}`);

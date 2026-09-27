@@ -46,7 +46,7 @@ window.I18N = {
   'عقد العمل ': 'Employment contract', 'موافقة الكفيل': 'Sponsor approval', 'نقل أو إصدار إذن العمل': 'Transfer / issue work permit',
   'تجديد البطاقة المدنية': 'Civil ID renewal', 'مرفوض': 'Rejected',
   // الصفحة الرئيسية
-  'ملخص الموارد البشرية والعمليات الحكومية': 'HR & government operations summary', 'تقويم التجديدات': 'Renewal calendar', 'الهيكل التنظيمي': 'Org chart',
+  'عرض الكل': 'View all', 'ملخص الموارد البشرية والعمليات الحكومية': 'HR & government operations summary', 'تقويم التجديدات': 'Renewal calendar', 'الهيكل التنظيمي': 'Org chart',
   'إجمالي الموظفين': 'Total employees', 'مستندات منتهية': 'Expired documents', 'تنتهي خلال 30 يوم': 'Expiring in 30 days',
   'حالة المستندات': 'Document status', 'مراحل المعاملات الحكومية': 'Government transaction stages', 'الموظفين حسب الشركة': 'Employees by company',
   'إجمالي الرواتب الشهرية': 'Total monthly payroll', 'أكثر الجنسيات': 'Top nationalities', 'آخر العمليات': 'Recent activity',
@@ -183,6 +183,8 @@ window.I18N = {
   'حفظ وعرض النموذج': 'Save & show form', 'تم حفظ البيانات': 'Details saved',
   // إقرار المخالصة
   'تاريخ انتهاء الخدمة': 'Service end date', 'إقرار مخالصة': 'Clearance', 'إقرار مخالصة عمالية نهائية': 'Labor end-of-service clearance', 'الإلغاء والتحويل خارج القطاع': 'Cancellation and transfer outside the sector', 'الإلغاء النهائي للسفر': 'Final cancellation to leave', '— من غير تحديد —': '— not specified —', 'تاريخ الإقرار': 'Declaration date', 'حفظ وعرض الإقرار': 'Save & show clearance', 'بتوقيع الموظف': 'With employee signature',
+  // الصفحة الرئيسية
+  'أخرى': 'Other', 'أكتر البيانات الناقصة': 'Most missing details', 'اكتمال بيانات الموظفين': 'Employee data completeness', 'التوزيع': 'Breakdown', 'الجنسيات': 'Nationalities', 'السجل كامل': 'Full log', 'المعاملات الحكومية': 'Government transactions', 'بياناتهم كاملة': 'have complete details', 'جدول': 'Table', 'جنسية': 'nationalities', 'خلال 7 أيام': 'Within 7 days', 'رسم': 'Chart', 'فتح مركز التنبيهات': 'Open alert center', 'كل مستنداتها سارية': 'All documents valid', 'لا يوجد': 'None', 'مترشّح نشط': 'active candidates', 'متوسط الاكتمال': 'Average completeness', 'متوسط الراتب': 'Average salary', 'محتاج إجراء': 'Needs action', 'مستند بينتهي خلال 30 يوم': 'documents expiring within 30 days', 'مستند منتهي أو هينتهي خلال 30 يوم': 'documents expired or expiring within 30 days', 'معاملات عليها ملاحظة تعطّل': 'Transactions with a blocking note', 'موظف في الخدمة': 'employees in service', 'موظف في معاملة': 'employees in a transaction',
   // عقود متعددة: ملف لكل موظف
   'PDF لكل موظف': 'PDF per employee', 'ملف PDF منفصل باسم كل موظف': "A separate PDF named after each employee",
   'تم تنزيل': 'Downloaded', 'ملف': 'files', 'لو المتصفح سأل عن تنزيل ملفات متعددة، اختار «السماح».': 'If the browser asks about downloading multiple files, choose "Allow".',

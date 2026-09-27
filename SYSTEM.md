@@ -90,7 +90,7 @@ zahed/
 | الملف | القسم | أهم الدوال |
 |---|---|---|
 | `js/core.js` | CORE / STATE، THEME، VIEW PERMISSIONS، UI LANGUAGE، BACKUP، UI STATE، DRAFT AUTOSAVE، DOCUMENT COMPLETENESS، ALERT CENTER، GLOBAL SEARCH، NAV / RENDER | `reload`، `persist`، `t`، `translateDomText`، `toggleTheme`، `loadViewPerms`، `applyNavVisibility`، `trackedAlertItems`، `renderAlertCenterPanel`، `runGlobalSearch`، `empDocCompleteness`، `empUrgency`، `tierOf`، `datePill`، `saveDraft`، `attachDraftAutosave`، `daysSinceLastBackup`، `openConfirm`، `openBlockAlert`، `initCapabilities` |
-| `js/dashboard.js` | DASHBOARD، RENEWAL CALENDAR، ORG CHART | `renderDashboard`، `collectAllTrackedDates`، `renderRenewalCalendarModal`، `renderOrgChartModal` |
+| `js/dashboard.js` | DASHBOARD، RENEWAL CALENDAR، ORG CHART | `renderDashboard`، `dbCard`، `dbBars`، `bindVizTips`، `openStuckListModal`، `collectAllTrackedDates`، `renderRenewalCalendarModal`، `renderOrgChartModal` |
 | `js/employees.js` | EMPLOYEES VIEW، EMPLOYEE MODAL، DUPLICATE PREVENTION، BULK ASSIGN، المرفقات | `filteredEmployees`، `renderEmployees`، `openProfileCard`، `handleImportCsv`، `exportEmployeesCsv`، `printEmployeeReport`، `openEmployeeModal`، `renderAffRows`، `collectAffRows`، `findDuplicateCivilId`، `findDuplicatePassport`، `findDuplicateNameNationality`، `saveEmployee`، `openBulkAssignModal`، `openBulkRenewModal`، `openQuickRenewModal`، `openGovStageModal`، `loadDriveFiles`، `uploadFileForEmployee` |
 | `js/org.js` | COMPANIES & PROJECTS، VEHICLES، COST CENTERS | `renderCompanies`، `openCompanyModal`، `openProjectModal`، `openSignatoryModal`، `openTrafficAuthModal`، `openCivilAffairsAuthModal`، `openCivilIdDocModal`، `renderVehicles`، `openVehicleModal`، `renderCostCenters`، `openCostCenterModal` |
 | `js/contract.js` | CONTRACT GENERATOR، COMPANY LOG / AUDIT LOG | `renderContractView`، `buildContractHtml`، `renderCompanyLog` |
@@ -115,6 +115,12 @@ zahed/
 | `contract` | عقد العمل | `renderContractView` |
 | `recruitment` | الاستقدام والتوظيف | `renderRecruitment` |
 | `companylog` | السجل التاريخي والتدقيق | `renderCompanyLog` |
+
+**الصفحة الرئيسية (`renderDashboard`، أنماطها `.db-*` في `app.css`):** شبكة 12 عمود.
+- **الصف الأول:** «محتاج إجراء» — رقم واحد كبير (منتهي + هينتهي خلال 30 يوم) مقسّم (منتهي / خلال 7 أيام / خلال 30 يوم ← مركز التنبيهات بالفلتر) ومعاه المعاملات اللي عليها ملاحظة تعطّل (قائمة). وجنبه مؤشرات: في الخدمة، قيد الاستكمال، المترشّحين، الشركات، السيارات، وإجمالي الرواتب (`sensitive.salary`). المؤشر بيختفي لو الشاشة بتاعته مش مسموحة.
+- **الصف التاني:** حالة المستندات (عمود مقسّم بألوان المستويات لكل مستند + «محتاج إجراء»، ومفتاح ألوان، وزرار «جدول») وجنبها أقرب 6 تنبيهات.
+- **الباقي كروت متساوية:** المعاملات الحكومية، الموظفين حسب الشركة، اكتمال البيانات (متوسط `empDocCompleteness` وأكتر الناقص)، الاستقدام (المراحل اللي فيها مترشّحين بس)، الجنسيات (أول 6 + «أخرى»)، وآخر العمليات.
+- **الرسوم:** لون واحد لكل رسم (ألوان المستويات للمستندات بس)، أعمدة رفيعة وخط الأساس ناحية البداية والقيمة عند الطرف، والتفاصيل في تلميح بالماوس أو بالكيبورد (`data-tip`). كل صف بيفتح القائمة المفلترة بتاعته. شريط التنبيه العلوي مابيظهرش في الرئيسية لأن «محتاج إجراء» بيقول نفس الكلام.
 
 **الشريط العلوي:** البحث الشامل (Ctrl+K)، مركز التنبيهات 🔔، الوضع الداكن/الفاتح، العربي/الإنجليزي، وقائمة المستخدم. القائمة فيها: اسم المستخدم ووظيفته، والنسخ الاحتياطي (للي مسموح له)، والاستعادة والمستخدمين والصلاحيات (للمدير بس)، وإعدادات العرض، وتغيير الباسورد، وتسجيل الخروج.
 
