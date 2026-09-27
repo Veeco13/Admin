@@ -7,6 +7,7 @@ Flask + SQLAlchemy. الواجهة صفحة واحدة (SPA) في static/ ، و�
 تشغيل:  python app.py   ثم افتح http://localhost:5050
 نوع قاعدة البيانات: متغير البيئة LUNX_DATABASE_URL (الافتراضي SQLite: lunx.db)
 """
+import base64
 import io
 import json
 import os
@@ -1387,7 +1388,8 @@ def contract_batch_check():
 @app.post("/api/contract/batch")
 @require("contract.view", "employees.view", "sensitive.salary")
 def contract_batch():
-    """كذا عقد: format=pdf ← ملف PDF واحد بكل العقود بالترتيب، format=zip ← ملفات Word في ZIP."""
+    """كذا عقد: format=pdf ← ملف PDF واحد بكل العقود بالترتيب، format=zip ← ملفات Word في ZIP،
+    format=files ← PDF منفصل لكل موظف باسمه (JSON: الاسم + المحتوى base64، والواجهة بتنزّلهم ملف ملف)."""
     d, ids = _batch_args()
     fmt = d.get("format") or "pdf"
     named = []
@@ -1409,17 +1411,24 @@ def contract_batch():
         if signs:
             chosen += " — بتوقيع: " + " و".join(signs)
     stamp = datetime.now().strftime("%Y-%m-%d")
+    files = None
     if fmt == "zip":
         out, name, mime = contracts.zip_docs(named), f"عقود عمل ({len(named)}) - {stamp}.zip", "application/zip"
     else:
         try:
-            out = contracts.merge_pdfs(contracts.to_pdfs([x for _, x in named]))
+            pdfs = contracts.to_pdfs([x for _, x in named])
         except RuntimeError as e:
             return err(str(e), 501)
-        name, mime = f"عقود عمل ({len(named)}) - {stamp}.pdf", "application/pdf"
+        if fmt == "files":
+            files = [{"name": n[:-len(".docx")] + ".pdf", "data": base64.b64encode(p).decode("ascii")}
+                     for (n, _), p in zip(named, pdfs)]
+        else:
+            out, name, mime = contracts.merge_pdfs(pdfs), f"عقود عمل ({len(named)}) - {stamp}.pdf", "application/pdf"
+    kind = {"zip": "Word", "files": "PDF — ملف لكل موظف"}.get(fmt, "PDF")
     with db.session_scope() as s:
-        db.log_audit(s, "contract_batch", f"إنشاء {len(named)} عقد عمل ({'PDF' if fmt != 'zip' else 'Word'}) — قالب: {tpl.name}{chosen}",
-                     uname())
+        db.log_audit(s, "contract_batch", f"إنشاء {len(named)} عقد عمل ({kind}) — قالب: {tpl.name}{chosen}", uname())
+    if files is not None:
+        return jsonify({"files": files})
     return send_file(io.BytesIO(out), as_attachment=d.get("dl", True), download_name=name, mimetype=mime)
 
 

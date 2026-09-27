@@ -178,6 +178,7 @@ function openBatchContractModal(preselected = []) {
       <div id="bc-msg" style="margin-top:8px"></div>`,
     foot: `<button class="btn primary" data-go="preview">👁️ ${t('معاينة PDF')}</button>
       <button class="btn" data-go="pdf">⬇️ ${t('تنزيل PDF')}</button>
+      <button class="btn" data-go="files" title="${esc(t('ملف PDF منفصل باسم كل موظف'))}">⬇️ ${t('PDF لكل موظف')}</button>
       <button class="btn" data-go="zip">⬇️ ${t('Word (ZIP)')}</button>
       <span class="spacer"></span><button class="btn" data-close>إغلاق</button>`,
   });
@@ -268,6 +269,17 @@ function openBatchContractModal(preselected = []) {
       }
       const secs = Math.max(5, Math.round(p.emps.length * (chk.engine === 'word' ? 1.1 : 0.7)));
       msg(`<div class="notice">⏳ ${t('جاري تجهيز')} ${p.emps.length} ${t('عقد')}… ${t('حوالي')} ${secs} ${t('ثانية')}</div>`);
+      if (go === 'files') {
+        // ملف منفصل باسم كل موظف. أول مرة المتصفح ممكن يسأل «السماح بتنزيل ملفات متعددة»
+        const r = await api('POST', '/api/contract/batch', { ...p, format: 'files' });
+        for (const [i, f] of r.files.entries()) {
+          msg(`<div class="notice">⬇️ ${i + 1} / ${r.files.length}: ${esc(f.name)}</div>`);
+          downloadBlob(new Blob([Uint8Array.from(atob(f.data), c => c.charCodeAt(0))], { type: 'application/pdf' }), f.name);
+          await new Promise(ok => setTimeout(ok, 350));      // المتصفح بيتجاهل التنزيلات المتلاحقة بسرعة
+        }
+        msg(`<div class="notice">✓ ${t('تم تنزيل')} ${r.files.length} ${t('ملف')}. ${t('لو المتصفح سأل عن تنزيل ملفات متعددة، اختار «السماح».')}</div>`);
+        return;
+      }
       const res = await postForBlob('/api/contract/batch', { ...p, format: go === 'zip' ? 'zip' : 'pdf', dl: go !== 'preview' });
       msg('');
       if (go === 'preview') openPdfPreviewModal(res.blob, res.name, p.emps.length);

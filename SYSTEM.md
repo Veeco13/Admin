@@ -267,7 +267,7 @@ fill_docx_template()  ← {{ field }} حتى لو متقسّم على أكتر �
   - **المفوّض بالتوقيع:** الافتراضي هو أول مفوّض في شركة كل عقد، أو أي مفوّض تختاره حتى لو من شركة تانية (حرية اختيار). مفوّضين الشركة المختارة بيظهروا الأول، والشخص نفسه مابيتكررش. لو المفوّض المختار مش مسجّل في شركة العقد (بالرقم المدني)، الفحص بينبّه قبل التجهيز.
   - **المستخدم المحصور:** مايقدرش يختار شركة أو مفوّض برّه نطاقه.
   - **قبل التجهيز:** `/api/contract/batch/check` بيعرض الناقص.
-  - **النتيجة:** معاينة PDF أو طباعة أو تنزيل، أو ZIP فيه ملفات Word.
+  - **النتيجة:** معاينة PDF أو طباعة أو تنزيل ملف واحد، أو **«PDF لكل موظف»** (ملف منفصل باسم كل موظف: «عقد عمل - الاسم - الرقم المدني.pdf»، بيتحوّلوا كلهم في جلسة واحدة وبيتنزّلوا ورا بعض، والمتصفح ممكن يسأل مرة «السماح بتنزيل ملفات متعددة»)، أو ZIP فيه ملفات Word بنفس الأسماء.
   - **الحد:** `LUNX_CONTRACT_BATCH_MAX` (الافتراضي 300)، وكل دفعة بتتسجل في سجل التدقيق.
 - **بند بدل السكن (البند الثالث عشر، اختياري):** الجملة بقت حقل `{{housing_clause}}` / `{{housing_clause_en}}` في القالب.
   - النص: «يتضمن الأجر الشهري المنصوص عليه في البند الرابع من هذا العقد بدل سكن.» / «The monthly remuneration provided for in Clause Four of this contract includes a housing allowance.»
@@ -310,7 +310,7 @@ fill_docx_template()  ← {{ field }} حتى لو متقسّم على أكتر �
 | POST | `/api/candidates/<id>/convert` | تحويل لموظف |
 | GET | `/api/candidates/<id>/contract/preview`، `/docx`، `/pdf` | عقد عمل المترشّح (مرحلة «عقد العمل» بس). البارامترات: `tpl`، `sig`، `date`، `housing`، `signFirst`، `professionEn`، `nationalityEn`. Word/PDF بيترفضوا لو فيه أي نقص |
 | GET | `/api/contract/preview`، `/docx`، `/pdf` | العقود. البارامترات: `emp`، `tpl`، `company`، `sig`، `date`، `salary`. `pdf` من غير `dl=1` = معاينة |
-| POST | `/api/contract/batch`، `/api/contract/batch/check` | عقود متعددة: `{emps, tpl, date, useHireDate, company, sig, housing, signFirst, signSecond, format: pdf\|zip, dl}` |
+| POST | `/api/contract/batch`، `/api/contract/batch/check` | عقود متعددة: `{emps, tpl, date, useHireDate, company, sig, housing, signFirst, signSecond, format: pdf\|zip\|files, dl}`. `files` ← JSON `{files: [{name, data (base64)}]}` |
 | POST / DELETE | `/api/signatures/<civilId>`، GET `/files/signature/<civilId>` | صورة التوقيع (PNG/JPG أقل من 3MB) |
 | POST / DELETE | `/api/templates[/<id>]`، `/api/templates/<id>/default` | القوالب |
 | GET / POST | `/api/backup`، `/api/restore` | النسخ الاحتياطي (JSON لكل الجداول) |
