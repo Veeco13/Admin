@@ -155,4 +155,12 @@ window.I18N = {
   'كلمة المرور الحالية': 'Current password', 'كلمة المرور الجديدة': 'New password', 'تم تغيير كلمة المرور': 'Password changed',
   'اسم المستخدم': 'Username', 'الاسم الظاهر': 'Display name', 'الصلاحية': 'Role', 'كلمة مرور جديدة': 'New password', 'إضافة مستخدم': 'Add user',
   'كلمة المرور': 'Password', 'حذف المستخدم؟': 'Delete user?',
+  // عقد عمل المترشّح
+  'طباعة عقد العمل': 'Print employment contract', 'بيانات العقد كاملة': 'Contract details are complete',
+  'أدخل الرقم المدني للمترشّح عشان تعمل العقد.': "Enter the candidate's civil ID to create the contract.",
+  'لازم تكمّل البيانات دي عشان تعمل عقد العمل': 'Complete these details to create the employment contract',
+  'لازم تكمّل البيانات دي الأول': 'Complete these details first', 'معاينة وطباعة PDF': 'Preview & print PDF',
+  'تعديل بيانات المترشّح': 'Edit candidate details', 'اسم المفوّض بالإنجليزي': 'Signatory name (English)',
+  'بتوقيع المفوّض': 'With signatory signature', 'إضافة بند بدل السكن (البند الثالث عشر)': 'Add housing allowance clause (Clause 13)',
+  'تم التنزيل': 'Downloaded',
 };

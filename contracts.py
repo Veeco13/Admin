@@ -10,6 +10,7 @@ Lunx — العقود: تحويل PDF (عقد واحد أو كذا عقد في �
 import io
 import os
 import pathlib
+import re
 import subprocess
 import tempfile
 import threading
@@ -189,6 +190,40 @@ REQUIRED_FIELDS = [
 
 def missing_fields(ctx):
     return [label for key, label in REQUIRED_FIELDS if not str(ctx.get(key) or "").strip()]
+
+
+# اسم كل حقل للمستخدم (للنواقص). الحقول المشتقة بتاخد اسم أصلها (اليوم ← تاريخ العقد)
+FIELD_LABELS = {
+    "employee_name": "الاسم", "employee_name_en": "الاسم بالإنجليزي", "civil_id": "الرقم المدني",
+    "nationality": "الجنسية", "nationality_en": "الجنسية بالإنجليزي", "profession": "المهنة",
+    "profession_en": "المهنة بالإنجليزي", "salary": "الراتب", "housing_amount": "مبلغ بدل السكن",
+    "start_date": "تاريخ العقد", "day_name": "تاريخ العقد", "day_name_en": "تاريخ العقد", "passport_no": "رقم الجواز",
+    "residency_exp": "انتهاء الإقامة", "file_number": "رقم الملف", "company_name": "الشركة",
+    "company_name_en": "اسم الشركة بالإنجليزي", "labor_office": "إدارة العمل", "labor_office_en": "إدارة العمل",
+    "project_name": "المشروع", "auth_name": "المفوّض بالتوقيع", "auth_name_en": "اسم المفوّض بالإنجليزي",
+    "auth_civil_id": "الرقم المدني للمفوّض",
+}
+_TEMPLATE_FIELDS = {}
+
+
+def template_fields(path):
+    """الحقول {{ … }} اللي القالب بيستخدمها فعلًا (النص والهيدر والفوتر)."""
+    key = (path, os.path.getmtime(path))
+    if key not in _TEMPLATE_FIELDS:
+        with zipfile.ZipFile(path) as z:
+            text = "".join(re.sub(r"<[^>]+>", "", z.read(n).decode("utf-8")) for n in z.namelist()
+                           if re.fullmatch(r"word/(document|header\d*|footer\d*)\.xml", n))
+        _TEMPLATE_FIELDS[key] = set(re.findall(r"\{\{\s*(\w+)\s*\}\}", text))
+    return _TEMPLATE_FIELDS[key]
+
+
+def missing_in_template(ctx, fields):
+    """الحقول الأساسية الفاضية + أي حقل تاني القالب بيستخدمه وفاضي (من غير تكرار)."""
+    out = missing_fields(ctx)
+    for key, label in FIELD_LABELS.items():
+        if key in fields and not str(ctx.get(key) or "").strip() and label not in out:
+            out.append(label)
+    return out
 
 
 # ---------------------------------------------------------------------------

@@ -158,7 +158,7 @@ zahed/
 نفس اللي في Lunx (موجودة في `js/core.js`):
 - `GOV_STAGES`: 7 مراحل.
 - `EMP_STATUS_LABELS`: 4 حالات.
-- `RECRUIT_STAGES_OUTSIDE`: 9 مراحل.
+- `RECRUIT_STAGES_OUTSIDE`: 10 مراحل («عقد العمل» بين تصديق الخارجية وإصدار إذن العمل).
 - `RECRUIT_STAGES_INTERNAL`: 7 مراحل.
 - `rejected`: مرحلة الرفض.
 - `tierOf`: مستويات الخطورة `expired` / `d30` / `d60` / `d90` / `ok` / `none`.
@@ -173,6 +173,14 @@ zahed/
 - بتظهر نافذة تأكيد، وبعدها `POST /api/candidates/<id>/convert`.
 - بيتعمل موظف بحالة `pending_completion`. بدل السكن بيتنقل كـ `included` بس، والمبلغ بيفضل `null`.
 - المترشّح بيتشال، وبيتسجّل `candidate_convert` في سجل التدقيق.
+
+### 8.1.1 عقد عمل المترشّح (مرحلة «عقد العمل»)
+- المرحلة `employment_contract` موجودة في النقل الداخلي (أول مرحلة) والاستقدام من الخارج (قبل «إصدار إذن العمل»).
+- أول ما تختارها في نافذة المترشّح بيظهر صندوق «📄 عقد العمل»، وبيقول الناقص وإنت بتكتب. وفيه أيقونة 📄 في صف المترشّح في الجدول. الاتنين بيظهروا بس للي معاه `contract.view` + `sensitive.salary`، وفي المرحلة دي بس.
+- **أي نقص = ممنوع:** زرار «طباعة عقد العمل» مابيفتحش العقد لو ناقص الرقم المدني («أدخل الرقم المدني للمترشّح عشان تعمل العقد») أو الاسم أو الاسم بالإنجليزي أو الجنسية أو المهنة أو الراتب أو الشركة المستهدفة. لو كامل، بيحفظ تعديلات النافذة الأول وبعدين يفتح نافذة العقد.
+- **نافذة العقد (`openCandidateContractModal`):** نفس القوالب. الطرف الأول = الشركة المستهدفة، والمفوّض = أولهم فيها أو اللي تختاره، وتاريخ العقد الافتراضي النهارده، وبند السكن من «بدل السكن». الاسم والراتب من بيانات المترشّح بس. المهنة/الجنسية بالإنجليزي بتظهر خانتهم لو القاموس ماعرفهمش. أي حقل القالب بيستخدمه وفاضي (`contracts.missing_in_template`) بيقفل Word/PDF، والسيرفر بيرفض كمان.
+- تاريخ العقد مابيتحفظش على المترشّح، ومالوش علاقة بتاريخ التعيين.
+- كل تنزيل Word/PDF بيتسجّل `candidate_contract` في سجل التدقيق.
 
 ### 8.2 منع التكرار (في الواجهة والسيرفر)
 
@@ -203,7 +211,7 @@ zahed/
 
 **سجل التدقيق:**
 - الموظفين: `employee_add` · `employee_edit` · `employee_delete`
-- المترشّحين: `candidate_add` · `candidate_edit` · `candidate_convert`
+- المترشّحين: `candidate_add` · `candidate_edit` · `candidate_convert` · `candidate_contract`
 - الشركات: `company_add` · `company_edit` · `company_delete`
 - السيارات: `vehicle_add` · `vehicle_edit` · `vehicle_delete`
 - النسخ الاحتياطي: `backup_restore`
@@ -297,6 +305,7 @@ fill_docx_template()  ← {{ field }} حتى لو متقسّم على أكتر �
 | POST | `/api/companies/<id>/docs/<kind>` | مستندات الشركة والشعار (`kind=logo`) |
 | POST | `/api/signatory-docs/<civilId>` | بطاقة المفوّض |
 | POST | `/api/candidates/<id>/convert` | تحويل لموظف |
+| GET | `/api/candidates/<id>/contract/preview`، `/docx`، `/pdf` | عقد عمل المترشّح (مرحلة «عقد العمل» بس). البارامترات: `tpl`، `sig`، `date`، `housing`، `signFirst`، `professionEn`، `nationalityEn`. Word/PDF بيترفضوا لو فيه أي نقص |
 | GET | `/api/contract/preview`، `/docx`، `/pdf` | العقود. البارامترات: `emp`، `tpl`، `company`، `sig`، `date`، `salary`. `pdf` من غير `dl=1` = معاينة |
 | POST | `/api/contract/batch`، `/api/contract/batch/check` | عقود متعددة: `{emps, tpl, date, useHireDate, company, sig, housing, signFirst, signSecond, format: pdf\|zip, dl}` |
 | POST / DELETE | `/api/signatures/<civilId>`، GET `/files/signature/<civilId>` | صورة التوقيع (PNG/JPG أقل من 3MB) |

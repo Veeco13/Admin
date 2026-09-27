@@ -42,6 +42,7 @@ const RECRUIT_STAGES_OUTSIDE = [
   { id: 'work_visa',             label: 'إصدار تأشيرة العمل' },
   { id: 'medical_exam',          label: 'الفحص الطبي ونتيجته' },
   { id: 'foreign_ministry_auth', label: 'تصديق الأوراق من الخارجية' },
+  { id: 'employment_contract',   label: 'عقد العمل' },
   { id: 'work_license',          label: 'إصدار إذن العمل' },
   { id: 'health_insurance',      label: 'إصدار الضمان الصحي' },
   { id: 'residency_issue',       label: 'إصدار الإقامة' },

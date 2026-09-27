@@ -1155,12 +1155,19 @@ def _contract_template(s, tpl_id):
 
 
 def _contract_context(s, emp_id, args, fill=True, tpl=None):
-    """(الموظف، الحقول، ملف Word أو None) لعقد موظف. args: company, sig, date, salary, …
-    الشركة الافتراضية = الشركة المسجّل عليها، والمفوّض = أول مفوّض فيها (لو المختار مش تبعها بيتجاهل)."""
+    """(الموظف، الحقول، ملف Word أو None) لعقد موظف. args: company, sig, date, salary, …"""
     emp = db.employee_full(s, emp_id)
     if not emp:
         abort(404, "الموظف غير موجود")
-    if not emp_ok(s, emp["id"]) or (args.get("company") and not me().company_ok(args["company"])):
+    if not emp_ok(s, emp["id"]):
+        abort(403, OUT_OF_SCOPE)
+    return _build_contract(s, emp, args, fill, tpl)
+
+
+def _build_contract(s, emp, args, fill=True, tpl=None):
+    """العقد لأي شخص بشكل الموظف (موظف أو مترشّح).
+    الشركة الافتراضية = الشركة المسجّل عليها، والمفوّض = أول مفوّض فيها (لو المختار مش تبعها بيتجاهل)."""
+    if args.get("company") and not me().company_ok(args["company"]):
         abort(403, OUT_OF_SCOPE)
     aff = (emp.get("affiliations") or [{}])[0]
     cid = args.get("company") or aff.get("companyId") or ""
@@ -1242,6 +1249,64 @@ def contract_pdf():
         return err(str(e), 501)
     return send_file(io.BytesIO(pdf), as_attachment=request.args.get("dl") == "1",
                      download_name=f"عقد عمل - {emp['name']}.pdf", mimetype="application/pdf")
+
+
+# --- عقد عمل لمترشّح (مرحلة «عقد العمل» في الاستقدام) ---
+CANDIDATE_CONTRACT_STAGE = "employment_contract"
+CANDIDATE_CONTRACT_ARGS = ("tpl", "sig", "date", "housing", "signFirst", "signSecond", "professionEn", "nationalityEn")
+
+
+def _candidate_contract(s, cand_id, args, fill=True):
+    """(المترشّح، الحقول، ملف Word أو None، النواقص). الطرف الأول = الشركة المستهدفة، والراتب والاسم من بيانات
+    المترشّح نفسه (مفيش تعديل عليهم من هنا). النواقص = أي حقل في القالب فاضي + الحقول الأساسية."""
+    c = s.get(M.Candidate, cand_id)
+    if not c:
+        abort(404, "المترشّح غير موجود")
+    if not me().record_ok(c.targetCompanyId, db.cost_center_company(s, c.costCenter), c.costCenter):
+        abort(403, OUT_OF_SCOPE)
+    if c.stage != CANDIDATE_CONTRACT_STAGE:
+        abort(400, "عقد العمل بيتطبع لما المترشّح يكون في مرحلة «عقد العمل»")
+    person = {"id": (c.civilId or "").strip(), "name": c.name, "nameEn": c.nameEn, "nationality": c.nationality,
+              "profession": c.profession, "salary": c.salary, "housingIncluded": bool(c.housingAllowance),
+              "passportNo": c.passportNo, "affiliations": [{"companyId": c.targetCompanyId, "projectId": None}]}
+    args = {k: v for k, v in args.items() if k in CANDIDATE_CONTRACT_ARGS}
+    tpl = _contract_template(s, args.get("tpl"))
+    _, ctx, data = _build_contract(s, person, args, fill, tpl)
+    fields = contracts.template_fields(os.path.join(TEMPLATE_DOCS, tpl.filename))
+    return c, ctx, data, contracts.missing_in_template(ctx, fields)
+
+
+@app.get("/api/candidates/<cand_id>/contract/preview")
+@require("contract.view", "recruitment.view", "sensitive.salary")
+def candidate_contract_preview(cand_id):
+    _check_sign_args(request.args)
+    with db.session_scope(commit=False) as s:
+        _, ctx, data, missing = _candidate_contract(s, cand_id, request.args)
+    return jsonify({"html": docx_engine.docx_to_html(data), "fields": ctx, "missing": missing})
+
+
+@app.get("/api/candidates/<cand_id>/contract/<fmt>")
+@require("contract.view", "recruitment.view", "sensitive.salary")
+def candidate_contract_file(cand_id, fmt):
+    """Word أو PDF — ممنوع لو فيه أي بيان ناقص في العقد."""
+    if fmt not in ("docx", "pdf"):
+        abort(404)
+    _check_sign_args(request.args)
+    with db.session_scope(commit=False) as s:
+        c, _, data, missing = _candidate_contract(s, cand_id, request.args)
+        name = c.name
+    if missing:
+        return err("لازم تكمّل البيانات دي الأول: " + "، ".join(missing))
+    if fmt == "pdf":
+        try:
+            data = contracts.to_pdf(data)
+        except RuntimeError as e:
+            return err(str(e), 501)
+    with db.session_scope() as s:
+        db.log_audit(s, "candidate_contract", f"إصدار عقد عمل ({fmt.upper()}) للمترشّح: {name}", uname())
+    mime = "application/pdf" if fmt == "pdf" else \
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    return send_file(io.BytesIO(data), as_attachment=True, download_name=f"عقد عمل - {name}.{fmt}", mimetype=mime)
 
 
 # --- عقود كتير مرة واحدة ---

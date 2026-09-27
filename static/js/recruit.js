@@ -19,6 +19,18 @@ function migrateRecruitStages(c) {
   if (!recruitStageInfo(c.source || 'outside', c.stage)) c.stage = recruitStagesForSource(c.source || 'outside')[0].id;
   return c;
 }
+/* ---------- عقد العمل (بيظهر في مرحلة «عقد العمل» بس) ---------- */
+const CANDIDATE_CONTRACT_STAGE = 'employment_contract';
+// بيانات المترشّح اللي العقد محتاجها — الباقي (الشركة بالإنجليزي، المفوّض، …) بيتفحص في نافذة العقد
+const CANDIDATE_CONTRACT_FIELDS = [['civilId', 'الرقم المدني'], ['name', 'الاسم'], ['nameEn', 'الاسم بالإنجليزي'], ['nationality', 'الجنسية'],
+  ['profession', 'المهنة'], ['salary', 'الراتب'], ['targetCompanyId', 'الشركة المستهدفة']];
+function canCandidateContract() { return canAll('contract.view sensitive.salary'); }
+function candidateContractMissing(d) { return CANDIDATE_CONTRACT_FIELDS.filter(([k]) => d[k] === null || d[k] === undefined || d[k] === '').map(([, l]) => l); }
+function candidateContractBlockMsg(miss) {
+  return (miss.includes('الرقم المدني') ? t('أدخل الرقم المدني للمترشّح عشان تعمل العقد.') + ' ' : '')
+    + t('لازم تكمّل البيانات دي عشان تعمل عقد العمل') + ': ' + miss.map(t).join('، ');
+}
+
 function candidateDeadline(c) {
   // مهلة 60 يوم من تاريخ الدخول (استقدام من الخارج)
   if (c.source === 'internal' || !c.entryDate) return null;
@@ -72,7 +84,7 @@ function renderRecruitment() {
       const dl = candidateDeadline(c);
       return `<tr class="clickable" data-id="${c.id}"><td><b>${esc(c.name)}</b>${c.nameEn ? `<div class="small muted">${esc(c.nameEn)}</div>` : ''}</td><td>${esc(c.nationality || '')}</td><td>${esc(c.profession || '')}</td>
         <td><span class="chip">${c.source === 'internal' ? t('نقل داخلي') : t('من الخارج')}</span></td>
-        <td>${st ? `<span class="chip ${st.final ? 'on' : ''}" style="${st.rejected ? 'background:var(--red-soft);color:var(--red)' : ''}">${esc(t(st.label))}</span>${!st.rejected ? `<div class="progress" style="width:90px;margin-top:3px"><i style="width:${100 * idx / steps}%"></i></div>` : ''}` : '—'}</td>
+        <td>${st ? `<span class="chip ${st.final ? 'on' : ''}" style="${st.rejected ? 'background:var(--red-soft);color:var(--red)' : ''}">${esc(t(st.label))}</span>${c.stage === CANDIDATE_CONTRACT_STAGE && canCandidateContract() ? ` <button class="btn sm ghost" data-contract="${c.id}" title="${esc(t('طباعة عقد العمل'))}">📄</button>` : ''}${!st.rejected ? `<div class="progress" style="width:90px;margin-top:3px"><i style="width:${100 * idx / steps}%"></i></div>` : ''}` : '—'}</td>
         <td>${esc(companyName(c.targetCompanyId))}</td><td class="num" data-p="sensitive.salary">${c.salary ? fmtMoney(c.salary) : '—'}${c.housingAllowance ? ' 🏠' : ''}</td><td class="num small">${fmtDate(c.appliedDate)}</td>
         <td>${c.source === 'internal' ? datePill(c.oldSponsorResidencyExp) : (dl ? datePill(dl) : datePill(c.visaExp))}</td></tr>`;
     }).join('') || `<tr><td colspan="9" class="empty">${t('لا يوجد مترشّحين')}</td></tr>`}</tbody></table></div>`;
@@ -86,6 +98,12 @@ function renderRecruitment() {
   $('#c-add').onclick = () => openCandidateModal(null);
   $('#c-report').onclick = renderCandidatesReportModal;
   $$('tr[data-id]', viewRoot()).forEach(tr => tr.onclick = () => openCandidateModal(tr.dataset.id));
+  $$('[data-contract]', viewRoot()).forEach(b => b.onclick = (ev) => {
+    ev.stopPropagation();
+    const c = IDX.candidate[b.dataset.contract], miss = candidateContractMissing(c || {});
+    if (miss.length) return openBlockAlert(candidateContractBlockMsg(miss));
+    openCandidateContractModal(b.dataset.contract);
+  });
 }
 
 /* ---------- تقرير المترشّحين ---------- */
@@ -132,6 +150,9 @@ function openCandidateModal(id) {
       <h4>المصدر والمرحلة</h4>
       <label>${t('المصدر')}<select name="source">${opt('outside', t('استقدام من الخارج'), c.source !== 'internal')}${opt('internal', t('نقل داخلي'), c.source === 'internal')}</select></label>
       <label>${t('مرحلة الإجراءات')}<select name="stage" id="cand-stage"></select></label>
+      <div class="notice" id="cand-contract" style="grid-column:1/-1" hidden>
+        <div class="row"><b>📄 ${t('عقد العمل')}</b><span class="spacer"></span><button type="button" class="btn primary sm" id="cand-contract-go">🖨️ ${t('طباعة عقد العمل')}</button></div>
+        <div class="small" id="cand-contract-miss" style="margin-top:4px"></div></div>
       <label>${t('تاريخ التقديم')}<input type="date" name="appliedDate" value="${v('appliedDate')}"></label>
       <label>${t('الشركة المستهدفة')}<select name="targetCompanyId">${companyOptions(c.targetCompanyId)}</select></label>
       <label>${t('مركز التكلفة')}<select name="costCenter">${costCenterOptions(c.costCenter)}</select></label>
@@ -171,7 +192,20 @@ function openCandidateModal(id) {
     stSel.innerHTML = recruitStagesForSource(src).filter(s => s.id !== 'all_completed' || can('employees.edit') || s.id === cur).map((s, i) => opt(s.id, `${s.rejected ? '' : (i + 1) + '. '}${t(s.label)}`, s.id === cur)).join('');
     $$('[data-src]', form).forEach(el => el.hidden = el.dataset.src !== src);
     updDeadline();
+    syncContract();
   };
+  // صندوق عقد العمل: بيظهر أول ما تختار المرحلة، وبيقول الناقص وإنت بتكتب
+  const contractBox = $('#cand-contract', form);
+  const syncContract = () => {
+    contractBox.hidden = !(canCandidateContract() && stSel.value === CANDIDATE_CONTRACT_STAGE);
+    if (contractBox.hidden) return;
+    const miss = candidateContractMissing(formValues(form));
+    $('#cand-contract-miss', form).innerHTML = miss.length
+      ? `<span style="color:var(--red)">⚠️ ${esc(candidateContractBlockMsg(miss))}</span>`
+      : `<span style="color:var(--green)">✓ ${t('بيانات العقد كاملة')}</span>`;
+  };
+  stSel.onchange = syncContract;
+  form.addEventListener('input', syncContract);
   const updDeadline = () => {
     const ed = $('[name="entryDate"]', form).value;
     $('#deadline-box', form).innerHTML = ed ? `${t('آخر موعد لإنهاء الإجراءات')}: ${datePill(addDays(ed, 60))} <span class="muted">${esc(daysText(daysUntil(addDays(ed, 60))))}</span>` : '';
@@ -182,7 +216,8 @@ function openCandidateModal(id) {
   const dd = $('#drop-draft', m.el); if (dd) dd.onclick = () => { clearDraft('candidate'); m.close(); openCandidateModal(null); };
   if (isNew) attachDraftAutosave('candidate', form, () => formValues(form));
 
-  $('[data-save]', m.el).onclick = async () => {
+  // الحفظ ← رقم المترشّح، أو قيمة فاضية لو اتمنع (والتحويل لموظف بيقفل النافذة بنفسه)
+  const save = async () => {
     const d = formValues(form);
     if (!d.name) return openBlockAlert(t('الاسم مطلوب'));
     // منع التكرار (القسم 8.2): كله منع عند إضافة مترشّح
@@ -204,10 +239,19 @@ function openCandidateModal(id) {
       return;
     }
     try {
-      await persist(id ? 'PUT' : 'POST', id ? '/api/candidates/' + id : '/api/candidates', d, 'تم الحفظ');
+      const res = await persist(id ? 'PUT' : 'POST', id ? '/api/candidates/' + id : '/api/candidates', d, 'تم الحفظ');
       if (isNew) clearDraft('candidate');
-      m.close();
+      return id || res.id;
     } catch (e) { if (e.data && e.data.block) openBlockAlert(e.message); }
+  };
+  $('[data-save]', m.el).onclick = async () => { if (await save()) m.close(); };
+  $('#cand-contract-go', form).onclick = async () => {
+    const miss = candidateContractMissing(formValues(form));
+    if (miss.length) return openBlockAlert(candidateContractBlockMsg(miss));
+    const cid = can('recruitment.edit') ? await save() : id;     // العقد بيطلع بآخر تعديلات في النافذة
+    if (!cid) return;
+    m.close();
+    openCandidateContractModal(cid);
   };
   const del = $('[data-del]', m.el);
   if (del) del.onclick = async () => { if (await openConfirm(t('حذف المترشّح؟'), { danger: true })) { m.close(); await persist('DELETE', '/api/candidates/' + id, undefined, 'تم الحذف'); } };

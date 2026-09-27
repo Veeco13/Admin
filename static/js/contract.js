@@ -15,6 +15,8 @@ const CONTRACT_FIELDS_HELP = [
 ];
 let CONTRACT = { emp: '', tpl: '', company: '', sig: '', date: '', salary: '', housing: '1', signFirst: '', signSecond: '' };
 let CONTRACT_PREVIEW = 'pdf';          // pdf | quick
+/** طباعة المعاينة السريعة (HTML) لما مفيش PDF */
+const CONTRACT_PRINT_CSS = `<style>td{width:50%;vertical-align:top;padding:8px}p{margin:0 0 3px}body{font-family:"Times New Roman",serif;line-height:1.7}@page{size:A4 portrait}</style>`;
 
 function contractQuery(extra = {}) {
   const p = new URLSearchParams();
@@ -98,7 +100,7 @@ function renderContractView() {
   $('#c-print').onclick = () => {
     const fr = $('#c-pdf-frame');
     if (fr) { try { fr.contentWindow.focus(); fr.contentWindow.print(); return; } catch (_) { window.open(fr.src, '_blank'); return; } }
-    printHtml(t('عقد عمل'), `<style>td{width:50%;vertical-align:top;padding:8px}p{margin:0 0 3px}body{font-family:"Times New Roman",serif;line-height:1.7}@page{size:A4 portrait}</style>` + $('#c-preview').innerHTML);
+    printHtml(t('عقد عمل'), CONTRACT_PRINT_CSS + $('#c-preview').innerHTML);
   };
   $('#t-upload').onclick = openTemplateUploadModal;
   $$('[data-tdef]').forEach(b => b.onclick = () => persist('POST', `/api/templates/${b.dataset.tdef}/default`, {}, 'تم'));
@@ -120,8 +122,11 @@ async function buildContractHtml(showHtml = true) {
 /* =====================================================================
    عقود متعددة — اختيار موظفين ← ملف PDF واحد (معاينة / طباعة / تنزيل)
    ===================================================================== */
-async function postForBlob(url, body) {
-  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+function postForBlob(url, body) {
+  return fetchBlob(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+}
+async function fetchBlob(url, init) {
+  const r = await fetch(url, init);
   if (r.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
   if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || r.statusText); }
   const cd = r.headers.get('Content-Disposition') || '';
@@ -289,6 +294,79 @@ function openPdfPreviewModal(blob, name, n) {
     const fr = $('iframe', m.el);
     try { fr.contentWindow.focus(); fr.contentWindow.print(); } catch (_) { window.open(url, '_blank'); }
   };
+}
+
+/* =====================================================================
+   عقد عمل لمترشّح (مرحلة «عقد العمل» في الاستقدام)
+   نفس القوالب، والطرف الأول = الشركة المستهدفة. أي بيان ناقص ← ممنوع (والسيرفر بيمنع كمان).
+   ===================================================================== */
+function openCandidateContractModal(cid) {
+  const c = IDX.candidate[cid];
+  if (!c) return toast('المترشّح غير موجود', 'err');
+  const defTpl = STATE.templates.find(x => x.isDefault) || STATE.templates[0];
+  const base = `/api/candidates/${encodeURIComponent(cid)}/contract/`;
+  const m = openModal({
+    title: '📄 ' + t('عقد العمل') + ': ' + esc(c.name), size: 'wide',
+    body: `<div class="contract-layout">
+      <div class="form" id="cc-form" style="grid-template-columns:1fr">
+        <label>${t('القالب')}<select name="tpl">${STATE.templates.map(x => opt(x.id, (x.isDefault ? '★ ' : '') + x.name, defTpl && x.id === defTpl.id)).join('')}</select></label>
+        <label>${t('الشركة (الطرف الأول)')}<input value="${esc(companyName(c.targetCompanyId) || '—')}" disabled></label>
+        <label>${t('المفوّض بالتوقيع')}<select name="sig">${batchSigOptions(c.targetCompanyId)}</select></label>
+        <label>${t('تاريخ العقد')}<input type="date" name="date" value="${todayISO()}"></label>
+        <label class="check"><input type="checkbox" name="housing" ${c.housingAllowance ? 'checked' : ''}> ${t('إضافة بند بدل السكن (البند الثالث عشر)')}</label>
+        <label data-en="profession_en" hidden>${t('المهنة بالإنجليزي')}<input name="professionEn" dir="ltr"></label>
+        <label data-en="nationality_en" hidden>${t('الجنسية بالإنجليزي')}<input name="nationalityEn" dir="ltr"></label>
+        <label class="check" data-p="contract.sign"><input type="checkbox" name="signFirst"> ✍️ ${t('بتوقيع المفوّض')}</label>
+      </div>
+      <div><div id="cc-warn"></div><div class="contract-paper" id="cc-preview" dir="rtl"><div class="empty">${t('جاري تجهيز المعاينة…')}</div></div></div>
+    </div>`,
+    foot: `${STATE.pdfAvailable
+        ? `<button class="btn primary" data-go="pdf" disabled>🖨️ ${t('معاينة وطباعة PDF')}</button>`
+        : `<button class="btn primary" data-go="print" disabled>🖨️ ${t('طباعة')}</button>`}
+      <button class="btn" data-go="docx" disabled>⬇️ Word</button>
+      <button class="btn write-only" data-p="recruitment.edit" data-edit>✏️ ${t('تعديل بيانات المترشّح')}</button>
+      <span class="spacer"></span><button class="btn" data-close>إغلاق</button>`,
+  });
+  const form = $('#cc-form', m.el);
+  const query = () => {
+    const d = formValues(form), p = new URLSearchParams({ housing: d.housing ? '1' : '0' });
+    ['tpl', 'sig', 'date', 'professionEn', 'nationalityEn'].forEach(k => { if (d[k]) p.set(k, d[k]); });
+    if (d.signFirst) p.set('signFirst', '1');
+    return p.toString();
+  };
+  let missing = ['…'];
+  const refresh = async () => {
+    const q = query();
+    try {
+      const r = await api('GET', base + 'preview?' + q);
+      if (q !== query()) return;                     // اتغيّر اختيار والطلب ده قديم
+      $('#cc-preview', m.el).innerHTML = r.html;
+      missing = r.missing || [];
+      // المترشّح مالوش خانة للمهنة/الجنسية بالإنجليزي ← تتكتب هنا لو القاموس ماعرفهاش
+      $$('[data-en]', form).forEach(l => { if (!r.fields[l.dataset.en]) l.hidden = false; });
+      $('#cc-warn', m.el).innerHTML = missing.length
+        ? `<div class="notice err" style="margin-bottom:10px">⛔ ${t('لازم تكمّل البيانات دي الأول')}: ${missing.map(x => esc(t(x))).join('، ')}</div>` : '';
+    } catch (e) {
+      missing = [e.message];
+      $('#cc-preview', m.el).innerHTML = `<div class="notice err">${esc(e.message)}</div>`;
+    }
+    $$('[data-go]', m.el).forEach(b => { b.disabled = !!missing.length; });
+  };
+  form.addEventListener('change', refresh);
+  refresh();
+  $$('[data-go]', m.el).forEach(b => b.onclick = async () => {
+    if (missing.length) return;
+    const go = b.dataset.go;
+    if (go === 'print') return printHtml(t('عقد عمل'), CONTRACT_PRINT_CSS + $('#cc-preview', m.el).innerHTML);
+    b.disabled = true;
+    try {
+      const res = await fetchBlob(base + go + '?' + query());
+      if (go === 'pdf') openPdfPreviewModal(res.blob, res.name, 1);
+      else { downloadBlob(res.blob, res.name); toast('تم التنزيل', 'ok'); }
+    } catch (e) { toast(e.message, 'err'); }
+    b.disabled = !!missing.length;
+  });
+  $('[data-edit]', m.el).onclick = () => { m.close(); openCandidateModal(cid); };
 }
 
 function openTemplateUploadModal() {
