@@ -18,6 +18,17 @@ let CONTRACT_PREVIEW = 'pdf';          // pdf | quick
 /** طباعة المعاينة السريعة (HTML) لما مفيش PDF */
 const CONTRACT_PRINT_CSS = `<style>td{width:50%;vertical-align:top;padding:8px}p{margin:0 0 3px}body{font-family:"Times New Roman",serif;line-height:1.7}@page{size:A4 portrait}</style>`;
 
+/** القالب فيه مكان توقيع المفوّض/الموظف؟ (من السيرفر) — خيار التوقيع بيظهر بس لو فيه */
+function templateSigns(id) {
+  const x = IDX.template[id] || {};
+  return { first: !!x.signFirst, second: !!x.signSecond };
+}
+/** عقود متعددة / عقد المترشّح: خيارات التوقيع ([data-sign]) حسب القالب المختار، والمخفي بيتشال علامته */
+function syncTemplateSigns(root, tplId) {
+  const s = templateSigns(tplId);
+  $$('[data-sign]', root).forEach(l => { l.hidden = !s[l.dataset.sign]; if (l.hidden) $('input', l).checked = false; });
+}
+
 function contractQuery(extra = {}) {
   const p = new URLSearchParams();
   Object.entries(Object.assign({}, CONTRACT, extra)).forEach(([k, v]) => { if (v) p.set(k, v); });
@@ -36,6 +47,9 @@ function renderContractView() {
   const empList = scopedEmployees().filter(x => x.employmentStatus !== 'terminated');
   const selSig = CONTRACT.sig ? sigs.find(s => s.id === CONTRACT.sig) : (coId && IDX.company[coId] ? (IDX.company[coId].signatories || [])[0] : null);
   const pdfMode = STATE.pdfAvailable && CONTRACT_PREVIEW === 'pdf';
+  const signs = templateSigns(CONTRACT.tpl);
+  if (!signs.first) CONTRACT.signFirst = '';
+  if (!signs.second) CONTRACT.signSecond = '';
 
   viewRoot().innerHTML = `<div class="page-head"><div><h1>عقد العمل</h1><div class="sub">${t('ملف Word أو PDF بنفس تنسيق القالب')}</div></div>
       <div class="actions"><button class="btn primary" id="c-batch">📚 ${t('عقود متعددة (PDF واحد)')}</button></div></div>
@@ -50,9 +64,9 @@ function renderContractView() {
           <label>${t('تاريخ العقد')}<input type="date" id="c-date" value="${esc(CONTRACT.date || (e && e.dateOfHire) || '')}"></label>
           <label>${t('الراتب في العقد (اختياري)')}<input type="number" step="0.001" id="c-salary" placeholder="${e && e.salary ? esc(e.salary) : ''}" value="${esc(CONTRACT.salary)}"></label>
           <label class="check"><input type="checkbox" id="c-housing" ${CONTRACT.housing !== '0' ? 'checked' : ''}> ${t('إضافة بند بدل السكن (البند الثالث عشر)')}</label>
-          <label class="check" data-p="contract.sign"><input type="checkbox" id="c-sign1" ${CONTRACT.signFirst ? 'checked' : ''}> ✍️ ${t('بتوقيع المفوّض')}
+          <label class="check" data-p="contract.sign" ${signs.first ? '' : 'hidden'}><input type="checkbox" id="c-sign1" ${CONTRACT.signFirst ? 'checked' : ''}> ✍️ ${t('بتوقيع المفوّض')}
             ${selSig ? (hasSignature(selSig.civilId) ? '<span class="small" style="color:var(--green,#1f7a4d)">✓</span>' : `<span class="small" style="color:var(--orange)">(${t('مفيش توقيع مرفوع')})</span>`) : ''}</label>
-          <label class="check" data-p="contract.sign"><input type="checkbox" id="c-sign2" ${CONTRACT.signSecond ? 'checked' : ''}> ✍️ ${t('بتوقيع الموظف')}
+          <label class="check" data-p="contract.sign" ${signs.second ? '' : 'hidden'}><input type="checkbox" id="c-sign2" ${CONTRACT.signSecond ? 'checked' : ''}> ✍️ ${t('بتوقيع الموظف')}
             ${e ? (hasSignature(e.id) ? '<span class="small" style="color:var(--green,#1f7a4d)">✓</span>' : `<span class="small" style="color:var(--orange)">(${t('مفيش توقيع مرفوع')})</span>`) : ''}</label>
         </div>
         <div id="c-warn"></div>
@@ -147,8 +161,8 @@ function openBatchContractModal(preselected = []) {
         <label>${t('المفوّض بالتوقيع')}<select name="sig">${batchSigOptions('')}</select></label>
         <label>${t('بند بدل السكن (البند الثالث عشر)')}<select name="housing">${opt('1', t('يُضاف لكل العقود'), true)}${opt('0', t('لا يُضاف («لايوجد»)'), false)}${opt('auto', t('حسب «بدل السكن مشمول» عند كل موظف'), false)}</select></label>
         <label>${t('تاريخ العقد')}<input type="date" name="date" value="${todayISO()}"></label>
-        <label class="check" data-p="contract.sign"><input type="checkbox" name="signFirst"> ✍️ ${t('بتوقيع المفوّض (المرفوع)')}</label>
-        <label class="check" data-p="contract.sign"><input type="checkbox" name="signSecond"> ✍️ ${t('بتوقيع الموظف (المرفوع)')}</label>
+        <label class="check" data-p="contract.sign" data-sign="first"><input type="checkbox" name="signFirst"> ✍️ ${t('بتوقيع المفوّض (المرفوع)')}</label>
+        <label class="check" data-p="contract.sign" data-sign="second"><input type="checkbox" name="signSecond"> ✍️ ${t('بتوقيع الموظف (المرفوع)')}</label>
         <label class="check"><input type="checkbox" name="useHireDate"> ${t('استخدم تاريخ تعيين كل موظف (واللي مالوش ← التاريخ ده)')}</label>
       </div>
       <div class="small muted" id="bc-hint" style="margin:6px 0"></div>
@@ -189,6 +203,9 @@ function openBatchContractModal(preselected = []) {
   };
   sigSel.onchange = hint;
   hint();
+  const tplSel = $('[name=tpl]', el);
+  tplSel.onchange = () => syncTemplateSigns(el, tplSel.value);
+  syncTemplateSigns(el, tplSel.value);
   const visible = () => scopedEmployees().filter(e => {
     if (F.status === 'active_only' && e.employmentStatus === 'terminated') return false;
     if (F.company && !empInCompany(e, F.company)) return false;
@@ -316,7 +333,7 @@ function openCandidateContractModal(cid) {
         <label class="check"><input type="checkbox" name="housing" ${c.housingAllowance ? 'checked' : ''}> ${t('إضافة بند بدل السكن (البند الثالث عشر)')}</label>
         <label data-en="profession_en" hidden>${t('المهنة بالإنجليزي')}<input name="professionEn" dir="ltr"></label>
         <label data-en="nationality_en" hidden>${t('الجنسية بالإنجليزي')}<input name="nationalityEn" dir="ltr"></label>
-        <label class="check" data-p="contract.sign"><input type="checkbox" name="signFirst"> ✍️ ${t('بتوقيع المفوّض')}</label>
+        <label class="check" data-p="contract.sign" data-sign="first"><input type="checkbox" name="signFirst"> ✍️ ${t('بتوقيع المفوّض')}</label>
       </div>
       <div><div id="cc-warn"></div><div class="contract-paper" id="cc-preview" dir="rtl"><div class="empty">${t('جاري تجهيز المعاينة…')}</div></div></div>
     </div>`,
@@ -352,6 +369,9 @@ function openCandidateContractModal(cid) {
     }
     $$('[data-go]', m.el).forEach(b => { b.disabled = !!missing.length; });
   };
+  const tplSel = $('[name=tpl]', form);
+  tplSel.addEventListener('change', () => syncTemplateSigns(form, tplSel.value));   // قبل refresh عشان العلامة المخفية ماتتبعتش
+  syncTemplateSigns(form, tplSel.value);
   form.addEventListener('change', refresh);
   refresh();
   $$('[data-go]', m.el).forEach(b => b.onclick = async () => {

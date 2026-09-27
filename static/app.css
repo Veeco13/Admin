@@ -1,4 +1,5 @@
 /* Lunx — الأنماط: متغيرات الألوان، الوضع الداكن/الفاتح، RTL، الطباعة */
+[hidden] { display: none !important; }   /* hidden يكسب دايمًا (حتى على .form label اللي عليها display:flex) */
 :root {
   --bg: #f4f6f5;
   --surface: #ffffff;

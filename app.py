@@ -39,11 +39,19 @@ UPLOADS = db.data_path("uploads")
 for sub in ("", "employees", "companies", "signatories", "signatures", "logos", "imports"):
     os.makedirs(os.path.join(UPLOADS, sub), exist_ok=True)
 os.makedirs(TEMPLATE_DOCS, exist_ok=True)
+RETIRED_TEMPLATES = ("contract_template.docx", "contract_template_v2.docx")
 if os.path.abspath(TEMPLATE_DOCS) != os.path.abspath(BUILTIN_TEMPLATES) and os.path.isdir(BUILTIN_TEMPLATES):
+    import filecmp
     import shutil
+    # القوالب اللي جاية مع الكود بتتحدّث لو اتغيّرت (القوالب المرفوعة من الشاشة ليها أسماء تانية)
     for _fn in os.listdir(BUILTIN_TEMPLATES):
-        if _fn.endswith(".docx") and not os.path.exists(os.path.join(TEMPLATE_DOCS, _fn)):
+        _dst = os.path.join(TEMPLATE_DOCS, _fn)
+        if _fn.endswith(".docx") and (not os.path.exists(_dst)
+                                      or not filecmp.cmp(os.path.join(BUILTIN_TEMPLATES, _fn), _dst, shallow=False)):
             shutil.copy2(os.path.join(BUILTIN_TEMPLATES, _fn), TEMPLATE_DOCS)
+    for _fn in RETIRED_TEMPLATES:
+        if os.path.exists(os.path.join(TEMPLATE_DOCS, _fn)):
+            os.remove(os.path.join(TEMPLATE_DOCS, _fn))
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("LUNX_MAX_UPLOAD_MB", "25")) * 1024 * 1024
@@ -80,8 +88,6 @@ def bootstrap():
                          roleId="admin", allCompanies=True, active=True, createdAt=db.now()))
         defaults = [
             ("contract_reference.docx", "عقد عمل — القطاع الأهلي (العقد المرجعي)", True),
-            ("contract_template_v2.docx", "عقد حكومي — بدل سكن (الشركة والمفوّض تلقائي)", False),
-            ("contract_template.docx", "القالب الافتراضي (عقد حكومي) — النسخة القديمة", False),
         ]
         for fn, name, is_def in defaults:
             if os.path.exists(os.path.join(TEMPLATE_DOCS, fn)) and \
@@ -89,6 +95,12 @@ def bootstrap():
                 if is_def:
                     s.query(M.Template).update({"isDefault": False})
                 s.add(M.Template(id=db.new_id("tpl"), name=name, filename=fn, isDefault=is_def, createdAt=db.now()))
+        # القوالب الحكومية القديمة اتشالت (العقد المرجعي بقى القالب الوحيد)
+        s.query(M.Template).filter(M.Template.filename.in_(RETIRED_TEMPLATES)).delete(synchronize_session=False)
+        if not s.scalar(select(M.Template).where(M.Template.isDefault.is_(True))):
+            first = s.scalar(select(M.Template).order_by(M.Template.createdAt))
+            if first:
+                first.isDefault = True
 
 
 bootstrap()
@@ -246,6 +258,10 @@ def api_state():
     u = me()
     with db.session_scope(commit=False) as s:
         state = db.dump_state(s, u)
+    for t in state.get("templates", []):     # خيارات التوقيع بتظهر بس لو القالب فيه مكانها
+        path = os.path.join(TEMPLATE_DOCS, t["filename"])
+        fields = contracts.template_fields(path) if os.path.exists(path) else set()
+        t["signFirst"], t["signSecond"] = "sig_first_party" in fields, "sig_second_party" in fields
     state["me"] = u.to_api()
     state["version"] = APP_VERSION
     state["pdfAvailable"] = bool(contracts.backend())
