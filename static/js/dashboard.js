@@ -88,7 +88,7 @@ function renderDashboard() {
     { ico: '👥', l: 'في الخدمة', v: count('active'), sub: `${t('من')} ${emps.length} ${t('موظف')} · ${count('terminated')} ${t('منتهي خدمته')}`, go: () => goEmployees({ status: 'active' }) },
     { ico: '🧩', l: 'قيد الاستكمال', v: count('pending_completion'), sub: `${t('في فترة الإنذار')}: ${count('warning')}`, go: () => goEmployees({ status: 'pending_completion' }) },
     viewAllowed('recruitment') && { ico: '🧭', l: 'المترشّحين', v: cands.length, sub: `${t('من الخارج')} ${cands.filter(c => c.source !== 'internal').length} · ${t('نقل داخلي')} ${cands.filter(c => c.source === 'internal').length}`, go: () => setView('recruitment') },
-    viewAllowed('companies') && { ico: '🏢', l: 'الشركات', v: scopedCompanies().length, sub: `${STATE.projects.filter(p => companyInScope(p.companyId)).length} ${t('مشروع')}`, go: () => setView('companies') },
+    can('companies.view') && { ico: '🏢', l: 'الشركات', v: scopedCompanies().length, sub: `${STATE.projects.filter(p => companyInScope(p.companyId)).length} ${t('مشروع')}`, go: () => setView('companies') },
     viewAllowed('vehicles') && { ico: '🚗', l: 'السيارات', v: STATE.vehicles.length, sub: vehDue ? `${vehDue} ${t('مستند بينتهي خلال 30 يوم')}` : t('كل مستنداتها سارية'), go: () => setView('vehicles') },
     can('sensitive.salary') && { ico: '💰', l: 'إجمالي الرواتب الشهرية', v: fmtMoney(payroll), sub: paid ? `${t('متوسط الراتب')} ${fmtMoney(Math.round(payroll / paid))}` : '', go: () => goEmployees({}) },
   ].filter(Boolean);

@@ -1,5 +1,5 @@
 /* =====================================================================
-   COMPANIES & PROJECTS — مركز إدارة الشركات والمشاريع
+   COMPANIES — مركز إدارة الشركات (الشركات | المشاريع | مراكز التكلفة)
    ===================================================================== */
 'use strict';
 
@@ -9,71 +9,175 @@ const COMPANY_DOC_KINDS = [
   { key: 'civilAffairs', label: 'تفويض الشؤون المدنية', exp: 'civilAffairsAuthExpiry' },
 ];
 
+/* ---------- مركز إدارة الشركات: تبويبات الشركات | المشاريع | مراكز التكلفة ---------- */
+const CO_TABS = [
+  { id: 'companies', label: 'الشركات', ico: '🏢', perm: 'companies.view' },
+  { id: 'projects', label: 'المشاريع', ico: '📁', perm: 'companies.view' },
+  { id: 'costcenters', label: 'مراكز التكلفة', ico: '💼', perm: 'costcenters.view' },
+];
+const CO_TIER_RANK = { expired: 0, d30: 1, d60: 2, d90: 3 };
+let CO_DETAIL = null;          // نافذة تفاصيل الشركة المفتوحة: {id, tab, m} — بتتحدّث بعد أي حفظ
+
+/** تنبيهات الشركة: مستنداتها وبطاقات مفوّضيها ومشاريعها (نفس مصدر مركز التنبيهات)، الأقرب الأول */
+function companyAlerts(cid) {
+  return trackedAlertItems().filter(i => (i.kind === 'company' || i.kind === 'project') && i.refId === cid);
+}
+/** سطر الحالة في كارت الشركة */
+function companyStatusLine(c, alerts) {
+  if (alerts.length) {
+    const w = alerts[0];
+    const what = w.kind === 'project' ? `${t('المشروع')} ${w.name}` : (w.name !== companyName(c.id) ? `${t(w.what)} (${w.name})` : t(w.what));
+    return `<div class="co-status"><i class="db-dot" style="background:${DB_TIER_COLORS[w.tier]}"></i><span>${esc(what)}: ${esc(daysText(w.days))}</span>${alerts.length > 1 ? `<b>+${alerts.length - 1}</b>` : ''}</div>`;
+  }
+  const missing = COMPANY_DOC_KINDS.filter(k => !c[k.exp]).map(k => t(k.label));
+  return missing.length ? `<div class="co-status muted"><i class="db-dot" style="background:${DB_TIER_COLORS.none}"></i><span>${t('من غير تاريخ')}: ${esc(missing.join(LANG === 'en' ? ', ' : '، '))}</span></div>`
+    : `<div class="co-status"><i class="db-dot" style="background:var(--green)"></i><span>${t('كل المستندات سارية')}</span></div>`;
+}
+
 function renderCompanies() {
-  const focus = VIEW_ARGS.focusCompany;
+  const tabs = CO_TABS.filter(x => can(x.perm));
+  if (!tabs.some(x => x.id === UI.co.tab)) UI.co.tab = tabs.length ? tabs[0].id : 'companies';
+  const focus = VIEW_ARGS.focusCompany, focusTab = VIEW_ARGS.focusTab;
+  if (focus) { UI.co.tab = 'companies'; VIEW_ARGS = {}; }
+  const tab = UI.co.tab;
+  const counts = [can('companies.view') && `${scopedCompanies().length} ${t('شركة')}`, can('companies.view') && `${scopedProjects().length} ${t('مشروع')}`,
+    can('costcenters.view') && `${STATE.costCenters.length} ${t('مركز تكلفة')}`].filter(Boolean).join(' · ');
+  const actions = {
+    companies: `<button class="btn primary write-only" data-p="companies.edit scope.all" id="co-add">➕ إضافة شركة</button><button class="btn" id="co-org">🏗️ الهيكل التنظيمي</button>`,
+    projects: `<button class="btn primary write-only" data-p="companies.edit" id="pr-add">➕ إضافة مشروع</button>`,
+    costcenters: `<button class="btn primary write-only" data-p="costcenters.edit" id="cc-add">➕ إضافة مركز تكلفة</button>`,
+  }[tab];
+  viewRoot().innerHTML = `<div class="page-head"><div><h1>مركز إدارة الشركات</h1><div class="sub">${counts}</div></div><div class="actions">${actions}</div></div>
+    ${tabs.length > 1 ? `<div class="tabs co-tabs">${tabs.map(x => `<button data-cotab="${x.id}" class="${x.id === tab ? 'active' : ''}">${x.ico} ${esc(t(x.label))}</button>`).join('')}</div>` : ''}
+    <div id="co-body"></div>`;
+  $$('[data-cotab]').forEach(b => b.onclick = () => { UI.co.tab = b.dataset.cotab; saveUiStateToLocalStorage(); render(); });
+  if (tab === 'projects') renderProjectsTab($('#co-body'));
+  else if (tab === 'costcenters') renderCostCentersTab($('#co-body'));
+  else renderCompaniesTab($('#co-body'));
+  // نافذة التفاصيل: من البحث / التنبيهات، أو بتتحدّث بعد أي حفظ وهي مفتوحة
+  if (focus) openCompanyDetails(focus, focusTab);
+  else if (CO_DETAIL) fillCompanyDetails();
+}
+
+function renderCompaniesTab(root) {
   const emps = STATE.employees.filter(e => e.employmentStatus !== 'terminated');
-  const cards = scopedCompanies().map(c => {
-    const ce = emps.filter(e => (e.affiliations || []).some(a => a.companyId === c.id));
-    const projs = STATE.projects.filter(p => p.companyId === c.id);
-    return `<div class="card" id="co-${c.id}" style="${focus === c.id ? 'outline:2px solid var(--primary)' : ''}">
-      <div class="row" style="align-items:flex-start">
-        ${c.logoUrl ? `<img src="${esc(c.logoUrl)}" alt="" style="width:48px;height:48px;object-fit:contain;border-radius:8px;background:#fff">` : `<div class="avatar" style="width:48px;height:48px;font-size:16px">🏢</div>`}
-        <div style="flex:1;min-width:0"><h3 style="margin:0">${esc(c.nameAr)}</h3><div class="muted small" dir="ltr" style="text-align:start">${esc(c.nameEn || '')}</div>
-          <div class="row small" style="margin-top:4px"><span class="chip">👥 ${ce.length} ${t('موظف')}</span><span class="chip">📁 ${projs.length} ${t('مشروع')}</span>
-          ${c.mainFileNumber ? `<span class="chip">${t('رقم الملف')}: ${esc(c.mainFileNumber)}</span>` : ''}${c.laborOffice ? `<span class="chip">${esc(c.laborOffice)}</span>` : ''}</div></div>
-        <div class="actions"><button class="btn sm" data-emps="${c.id}">👥</button><button class="btn sm write-only" data-p="companies.edit" data-edit="${c.id}">✏️</button><button class="btn sm danger write-only" data-p="companies.delete scope.all" data-del="${c.id}">🗑️</button></div>
-      </div>
-      <hr class="sep">
-      <div class="kv small">
-        <div><span>${t('رقم الرخصة التجارية')}</span>${esc(c.commercialLicenseNo || '—')}</div>
-        <div><span>${t('الرقم المدني للرخصة')}</span>${esc(c.licenseCivilNo || '—')}</div>
-        <div><span>${t('الرقم الموحد')}</span>${esc(c.unifiedNumber || '—')}</div>
-        ${COMPANY_DOC_KINDS.map(k => {
-          const d = c.docs && c.docs[k.key];
-          return `<div><span>${esc(t(k.label))}</span>${datePill(c[k.exp])}
-            <div class="row" style="margin-top:3px">${d ? `<a class="btn sm" href="${esc(d.url)}" target="_blank" title="${esc(d.name)}">📄 ${t('عرض')}</a>` : ''}
-            <button class="btn sm write-only" data-p="companies.edit" data-doc="${c.id}|${k.key}">${d ? '♻️' : '📎 ' + t('رفع')}</button></div></div>`;
-        }).join('')}
-      </div>
-      <h4 style="margin:12px 0 6px">✍️ ${t('المفوّضين بالتوقيع')} <button class="btn sm write-only" data-p="companies.edit" data-sig-add="${c.id}">➕</button></h4>
-      ${(c.signatories || []).map(s => {
-        const sd = s.civilId && STATE.signatoryDocs[s.civilId];
-        return `<div class="row small" style="padding:4px 0;border-bottom:1px dashed var(--border)"><b>${esc(s.nameAr)}</b><span class="muted">${esc(s.nameEn || '')}</span><span class="num">${esc(s.civilId || '')}</span>
-          <span class="spacer"></span>${sd ? `${datePill(sd.expiryDate)} ${sd.url && sd.name ? `<a class="btn sm" href="${esc(sd.url)}" target="_blank">🪪</a>` : ''}` : ''}
+  // الترتيب: الأقرب ينتهي ← اللي ناقصه تواريخ ← الباقي بالاسم
+  const rank = x => x.alerts.length ? CO_TIER_RANK[x.alerts[0].tier] : COMPANY_DOC_KINDS.some(k => !x.c[k.exp]) ? 4 : 5;
+  const list = scopedCompanies().map(c => ({ c, alerts: companyAlerts(c.id) }))
+    .sort((a, b) => (rank(a) - rank(b))
+      || ((a.alerts[0] || {}).days ?? 1e9) - ((b.alerts[0] || {}).days ?? 1e9) || companyName(a.c.id).localeCompare(companyName(b.c.id), 'ar'));
+  root.innerHTML = list.length ? `<div class="co-grid">${list.map(({ c, alerts }) => {
+    const n = emps.filter(e => (e.affiliations || []).some(a => a.companyId === c.id)).length;
+    return `<div class="card co-card ${alerts.length && CO_TIER_RANK[alerts[0].tier] <= 1 ? 'hot' : ''}" data-open="${c.id}" tabindex="0" role="button">
+      <div class="co-card-h">${c.logoUrl ? `<img src="${esc(c.logoUrl)}" alt="" class="co-logo">` : '<div class="co-logo">🏢</div>'}
+        <div class="co-card-t"><b>${esc(c.nameAr)}</b><span dir="ltr">${esc(c.nameEn || '')}</span></div></div>
+      <div class="co-stats"><span>👥 <b>${n}</b> ${t('موظف')}</span><span>📁 <b>${STATE.projects.filter(p => p.companyId === c.id).length}</b> ${t('مشروع')}</span><span>✍️ <b>${(c.signatories || []).length}</b> ${t('مفوّض')}</span></div>
+      ${companyStatusLine(c, alerts)}</div>`;
+  }).join('')}</div>` : `<div class="empty">${t('لا توجد شركات')}</div>`;
+  $$('[data-open]', root).forEach(el => {
+    el.onclick = () => openCompanyDetails(el.dataset.open);
+    el.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); } };
+  });
+  const add = $('#co-add'); if (add) add.onclick = () => openCompanyModal(null);
+  const org = $('#co-org'); if (org) org.onclick = renderOrgChartModal;
+}
+
+/* ---------- نافذة تفاصيل الشركة: البيانات والمستندات | المفوّضين | المشاريع ---------- */
+function openCompanyDetails(cid, tab = 'info') {
+  if (!IDX.company[cid]) return toast('الشركة غير موجودة', 'err');
+  if (CO_DETAIL) CO_DETAIL.m.close();
+  const m = openModal({ title: '', size: 'wide', body: '<div id="cod-body"></div>', foot: '<div id="cod-foot" class="row" style="flex:1"></div>', onClose: () => { CO_DETAIL = null; } });
+  CO_DETAIL = { id: cid, tab: tab || 'info', m };
+  fillCompanyDetails();
+}
+function fillCompanyDetails() {
+  const { id, tab, m } = CO_DETAIL;
+  const c = IDX.company[id];
+  if (!c || !document.body.contains(m.el)) { if (CO_DETAIL) CO_DETAIL.m.close(); return; }
+  const emps = STATE.employees.filter(e => e.employmentStatus !== 'terminated' && (e.affiliations || []).some(a => a.companyId === id));
+  const projs = STATE.projects.filter(p => p.companyId === id);
+  const sigs = c.signatories || [];
+  const kv = (l, v) => `<div><span>${esc(t(l))}</span>${v ? esc(v) : '<span class="muted">—</span>'}</div>`;
+  $('.modal-head h2', m.el).innerHTML = `🏢 ${esc(c.nameAr)}`;
+  const panes = {
+    info: `<div class="kv">${kv('الاسم (إنجليزي)', c.nameEn)}${kv('مجال النشاط', c.activity)}${kv('إدارة العمل', c.laborOffice)}${kv('رقم الملف الرئيسي', c.mainFileNumber)}
+        ${kv('رقم الرخصة التجارية', c.commercialLicenseNo)}${kv('الرقم المدني للرخصة', c.licenseCivilNo)}${kv('الرقم الموحد', c.unifiedNumber)}</div>
+      <h4>${t('المستندات')}</h4>
+      <table class="data"><thead><tr><th>${t('المستند')}</th><th>${t('الانتهاء')}</th><th>${t('المتبقي')}</th><th>${t('الملف')}</th></tr></thead><tbody>
+      ${COMPANY_DOC_KINDS.map(k => { const d = c.docs && c.docs[k.key]; return `<tr><td>${esc(t(k.label))}</td><td>${datePill(c[k.exp])}</td><td class="small muted">${c[k.exp] ? esc(daysText(daysUntil(c[k.exp]))) : ''}</td>
+        <td class="row">${d ? `<a class="btn sm" href="${esc(d.url)}" target="_blank" title="${esc(d.name)}">📄 ${t('عرض')}</a>` : ''}<button class="btn sm write-only" data-p="companies.edit" data-doc="${k.key}">${d ? '♻️ ' + t('تغيير') : '📎 ' + t('رفع')}</button></td></tr>`; }).join('')}
+      </tbody></table>`,
+    sigs: `<div class="row" style="margin-bottom:8px"><span class="spacer"></span><button class="btn sm write-only" data-p="companies.edit" data-sig-add>➕ ${t('إضافة مفوّض')}</button></div>
+      ${sigs.length ? `<table class="data"><thead><tr><th>${t('الاسم')}</th><th>${t('الرقم المدني')}</th><th>${t('انتهاء البطاقة')}</th><th></th></tr></thead><tbody>
+      ${sigs.map(s => { const sd = s.civilId && STATE.signatoryDocs[s.civilId]; return `<tr><td><b>${esc(s.nameAr)}</b><div class="small muted" dir="ltr" style="text-align:start">${esc(s.nameEn || '')}</div></td>
+        <td class="num">${esc(s.civilId || '')}</td><td>${sd ? datePill(sd.expiryDate) : '<span class="muted">—</span>'}</td>
+        <td class="row">${sd && sd.url && sd.name ? `<a class="btn sm" href="${esc(sd.url)}" target="_blank" title="${t('عرض البطاقة')}">🪪</a>` : ''}
           <button class="btn sm write-only" data-p="companies.edit" data-sig-doc="${esc(s.civilId || '')}">🪪 ${t('البطاقة')}</button>
           <button class="btn sm" data-sig-sign="${esc(s.civilId || '')}" data-sig-name="${esc(s.nameAr)}">${hasSignature(s.civilId) ? '✍️ ✓' : '✍️'} ${t('التوقيع')}</button>
-          <button class="btn sm write-only" data-p="companies.edit" data-sig-edit="${s.id}">✏️</button><button class="btn sm danger write-only" data-p="companies.delete" data-sig-del="${s.id}">✕</button></div>`;
-      }).join('') || `<div class="muted small">—</div>`}
-      <h4 style="margin:12px 0 6px">📁 ${t('المشاريع')} <button class="btn sm write-only" data-p="companies.edit" data-proj-add="${c.id}">➕</button></h4>
-      ${projs.length ? `<table class="data"><thead><tr><th>${t('المشروع')}</th><th>${t('رقم الملف')}</th><th>${t('إدارة العمل')}</th><th>${t('الانتهاء')}</th><th>${t('الموظفين')}</th><th></th></tr></thead><tbody>
-        ${projs.map(p => `<tr><td>${esc(projectName(p.id))}</td><td class="num">${esc(p.fileNumber || '')}</td><td>${esc(p.laborOffice || '')}</td><td>${datePill(p.expiryDate)}</td>
-          <td><a href="#" data-proj-emps="${p.id}">${ce.filter(e => (e.affiliations || []).some(a => a.projectId === p.id)).length}</a></td>
-          <td class="row"><button class="btn sm write-only" data-p="companies.edit" data-proj-edit="${p.id}">✏️</button><button class="btn sm danger write-only" data-p="companies.delete" data-proj-del="${p.id}">✕</button></td></tr>`).join('')}
-      </tbody></table>` : '<div class="muted small">—</div>'}
-    </div>`;
-  }).join('');
-  viewRoot().innerHTML = `<div class="page-head"><div><h1>مركز إدارة الشركات والمشاريع</h1><div class="sub">${scopedCompanies().length} ${t('شركة')} · ${scopedProjects().length} ${t('مشروع')}</div></div>
-    <div class="actions"><button class="btn primary write-only" data-p="companies.edit scope.all" id="co-add">➕ إضافة شركة</button><button class="btn" id="co-org">🏗️ الهيكل التنظيمي</button></div></div>
-    <div class="grid two">${cards || '<div class="empty">لا توجد شركات</div>'}</div>`;
-  const R = viewRoot();
-  $('#co-add').onclick = () => openCompanyModal(null);
-  $('#co-org').onclick = renderOrgChartModal;
-  $$('[data-edit]', R).forEach(b => b.onclick = () => openCompanyModal(b.dataset.edit));
-  $$('[data-emps]', R).forEach(b => b.onclick = () => goEmployees({ company: b.dataset.emps }));
-  $$('[data-proj-emps]', R).forEach(b => b.onclick = (e) => { e.preventDefault(); const p = IDX.project[b.dataset.projEmps]; goEmployees({ company: p.companyId, project: p.id }); });
-  $$('[data-del]', R).forEach(b => b.onclick = async () => {
-    if (await openConfirm(t('حذف الشركة وكل مشاريعها ومفوّضيها؟'), { danger: true, okLabel: t('حذف') })) await persist('DELETE', '/api/companies/' + b.dataset.del, undefined, 'تم الحذف');
-  });
-  $$('[data-doc]', R).forEach(b => b.onclick = () => { const [cid, kind] = b.dataset.doc.split('|'); openCompanyDocModal(cid, kind); });
-  $$('[data-sig-add]', R).forEach(b => b.onclick = () => openSignatoryModal(b.dataset.sigAdd, null));
-  $$('[data-sig-edit]', R).forEach(b => b.onclick = () => { const s = STATE.companies.flatMap(c => c.signatories).find(x => x.id === b.dataset.sigEdit); openSignatoryModal(s.companyId, s); });
-  $$('[data-sig-del]', R).forEach(b => b.onclick = async () => { if (await openConfirm(t('حذف المفوّض؟'), { danger: true })) await persist('DELETE', '/api/signatories/' + b.dataset.sigDel, undefined, 'تم الحذف'); });
-  $$('[data-sig-doc]', R).forEach(b => b.onclick = () => openCivilIdDocModal(b.dataset.sigDoc));
-  $$('[data-sig-sign]', R).forEach(b => b.onclick = () => openSignatureModal(b.dataset.sigSign, b.dataset.sigName, can('companies.edit')));
-  $$('[data-proj-add]', R).forEach(b => b.onclick = () => openProjectModal(b.dataset.projAdd, null));
-  $$('[data-proj-edit]', R).forEach(b => b.onclick = () => { const p = IDX.project[b.dataset.projEdit]; openProjectModal(p.companyId, p); });
-  $$('[data-proj-del]', R).forEach(b => b.onclick = async () => { if (await openConfirm(t('حذف المشروع؟ (الموظفين هيفضلوا في الشركة بدون مشروع)'), { danger: true })) await persist('DELETE', '/api/projects/' + b.dataset.projDel, undefined, 'تم الحذف'); });
-  if (focus) setTimeout(() => { const el = $('#co-' + focus); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 50);
+          <button class="btn sm write-only" data-p="companies.edit" data-sig-edit="${s.id}">✏️</button><button class="btn sm danger write-only" data-p="companies.delete" data-sig-del="${s.id}">✕</button></td></tr>`; }).join('')}
+      </tbody></table>` : `<div class="empty">${t('مفيش مفوّضين')}</div>`}`,
+    projects: `<div class="row" style="margin-bottom:8px"><span class="spacer"></span><button class="btn sm write-only" data-p="companies.edit" data-proj-add>➕ ${t('إضافة مشروع')}</button></div>
+      ${projectsTable(projs, false)}`,
+  };
+  const status = companyStatusLine(c, companyAlerts(id));
+  $('#cod-body', m.el).innerHTML = `<div class="co-detail-h">${c.logoUrl ? `<img src="${esc(c.logoUrl)}" alt="" class="co-logo">` : '<div class="co-logo">🏢</div>'}
+      <div style="flex:1;min-width:0"><div class="muted small" dir="ltr" style="text-align:start">${esc(c.nameEn || '')}</div>
+        <div class="co-stats"><span>👥 <b>${emps.length}</b> ${t('موظف')}</span>${c.mainFileNumber ? `<span>${t('رقم الملف')}: <b>${esc(c.mainFileNumber)}</b></span>` : ''}${c.laborOffice ? `<span>${esc(c.laborOffice)}</span>` : ''}</div>${status}</div></div>
+    <div class="tabs" style="margin-top:12px">
+      ${[['info', 'البيانات والمستندات'], ['sigs', `${t('المفوّضين بالتوقيع')} (${sigs.length})`], ['projects', `${t('المشاريع')} (${projs.length})`]]
+        .map(([k, l]) => `<button data-codtab="${k}" class="${k === tab ? 'active' : ''}">${esc(t(l))}</button>`).join('')}</div>
+    <div class="co-pane">${panes[tab] || panes.info}</div>`;
+  $('#cod-foot', m.el).innerHTML = `<button class="btn primary write-only" data-p="companies.edit" data-co-edit>✏️ ${t('تعديل بيانات الشركة')}</button>
+    <button class="btn" data-co-emps>👥 ${t('الموظفين')} (${emps.length})</button><span class="spacer"></span>
+    <button class="btn danger write-only" data-p="companies.delete scope.all" data-co-del>🗑️ ${t('حذف')}</button><button class="btn" data-close-cod>${t('إغلاق')}</button>`;
+  translateDomText(m.el);
+  const E = m.el;
+  $$('[data-codtab]', E).forEach(b => b.onclick = () => { CO_DETAIL.tab = b.dataset.codtab; fillCompanyDetails(); });
+  $('[data-close-cod]', E).onclick = () => m.close();
+  $('[data-co-edit]', E).onclick = () => openCompanyModal(id);
+  $('[data-co-emps]', E).onclick = () => { m.close(); goEmployees({ company: id }); };
+  $('[data-co-del]', E).onclick = async () => {
+    if (await openConfirm(t('حذف الشركة وكل مشاريعها ومفوّضيها؟'), { danger: true, okLabel: t('حذف') })) { m.close(); await persist('DELETE', '/api/companies/' + id, undefined, 'تم الحذف'); }
+  };
+  $$('[data-doc]', E).forEach(b => b.onclick = () => openCompanyDocModal(id, b.dataset.doc));
+  const sa = $('[data-sig-add]', E); if (sa) sa.onclick = () => openSignatoryModal(id, null);
+  $$('[data-sig-edit]', E).forEach(b => b.onclick = () => openSignatoryModal(id, sigs.find(x => x.id === b.dataset.sigEdit)));
+  $$('[data-sig-del]', E).forEach(b => b.onclick = async () => { if (await openConfirm(t('حذف المفوّض؟'), { danger: true })) await persist('DELETE', '/api/signatories/' + b.dataset.sigDel, undefined, 'تم الحذف'); });
+  $$('[data-sig-doc]', E).forEach(b => b.onclick = () => openCivilIdDocModal(b.dataset.sigDoc));
+  $$('[data-sig-sign]', E).forEach(b => b.onclick = () => openSignatureModal(b.dataset.sigSign, b.dataset.sigName, can('companies.edit')));
+  const pa = $('[data-proj-add]', E); if (pa) pa.onclick = () => openProjectModal(id, null);
+  bindProjectsTable(E, () => m.close());
+}
+
+/* ---------- المشاريع: جدول واحد (في تبويب المشاريع وفي تفاصيل الشركة) ---------- */
+function projectsTable(projs, withCompany) {
+  const emps = STATE.employees.filter(e => e.employmentStatus !== 'terminated');
+  if (!projs.length) return `<div class="empty">${t('لا توجد مشاريع')}</div>`;
+  return `<div class="table-wrap"><table class="data"><thead><tr><th>${t('المشروع')}</th>${withCompany ? `<th>${t('الشركة')}</th>` : ''}<th>${t('رقم الملف')}</th><th>${t('إدارة العمل')}</th><th>${t('الانتهاء')}</th><th>${t('الموظفين')}</th><th></th></tr></thead><tbody>
+    ${projs.map(p => `<tr><td><b>${esc(projectName(p.id))}</b></td>${withCompany ? `<td><a href="#" data-proj-co="${p.companyId}">${esc(companyName(p.companyId))}</a></td>` : ''}
+      <td class="num">${esc(p.fileNumber || '')}</td><td>${esc(p.laborOffice || '')}</td><td>${datePill(p.expiryDate)}</td>
+      <td><a href="#" data-proj-emps="${p.id}">${emps.filter(e => (e.affiliations || []).some(a => a.projectId === p.id)).length}</a></td>
+      <td class="row"><button class="btn sm write-only" data-p="companies.edit" data-proj-edit="${p.id}">✏️</button><button class="btn sm danger write-only" data-p="companies.delete" data-proj-del="${p.id}">✕</button></td></tr>`).join('')}
+    </tbody></table></div>`;
+}
+function bindProjectsTable(root, beforeLeave = () => {}) {
+  $$('[data-proj-emps]', root).forEach(b => b.onclick = (e) => { e.preventDefault(); const p = IDX.project[b.dataset.projEmps]; beforeLeave(); goEmployees({ company: p.companyId, project: p.id }); });
+  $$('[data-proj-co]', root).forEach(b => b.onclick = (e) => { e.preventDefault(); openCompanyDetails(b.dataset.projCo, 'projects'); });
+  $$('[data-proj-edit]', root).forEach(b => b.onclick = () => { const p = IDX.project[b.dataset.projEdit]; openProjectModal(p.companyId, p); });
+  $$('[data-proj-del]', root).forEach(b => b.onclick = async () => { if (await openConfirm(t('حذف المشروع؟ (الموظفين هيفضلوا في الشركة بدون مشروع)'), { danger: true })) await persist('DELETE', '/api/projects/' + b.dataset.projDel, undefined, 'تم الحذف'); });
+}
+function renderProjectsTab(root) {
+  const f = UI.co, q = norm(f.projQ);
+  const list = scopedProjects().filter(p => (!f.projCompany || p.companyId === f.projCompany)
+      && (!q || [p.nameAr, p.nameEn, p.fileNumber, p.laborOffice].some(v => norm(v).includes(q))))
+    .sort((a, b) => companyName(a.companyId).localeCompare(companyName(b.companyId), 'ar') || projectName(a.id).localeCompare(projectName(b.id), 'ar'));
+  root.innerHTML = `<div class="filters"><input type="search" id="pr-q" placeholder="${esc(t('بحث بالاسم أو رقم الملف…'))}" value="${esc(f.projQ)}">
+      <select id="pr-co">${companyOptions(f.projCompany, '— كل الشركات —')}</select></div>${projectsTable(list, true)}`;
+  const upd = p => { Object.assign(UI.co, p); saveUiStateToLocalStorage(); render(); };
+  $('#pr-q').addEventListener('input', debounce(e => { UI.co.projQ = e.target.value; render(); const i = $('#pr-q'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 250));
+  $('#pr-co').onchange = e => upd({ projCompany: e.target.value });
+  const add = $('#pr-add'); if (add) add.onclick = () => openProjectModal(f.projCompany || '', null);
+  bindProjectsTable(root);
 }
 
 function openCompanyModal(id) {
@@ -235,25 +339,23 @@ function openVehicleModal(id) {
 /* =====================================================================
    COST CENTERS — مراكز التكلفة
    ===================================================================== */
-function renderCostCenters() {
+function renderCostCentersTab(root) {
   const emps = scopedEmployees().filter(e => e.employmentStatus !== 'terminated');
   const rows = STATE.costCenters.map(c => {
     const ce = emps.filter(e => e.costCenter === c.name);
     return { c, n: ce.length, sal: sum(ce.map(e => e.salary)), gov: sum(ce.map(e => e.govTransactionCost)) };
   });
   const unassigned = emps.filter(e => !e.costCenter);
-  viewRoot().innerHTML = `<div class="page-head"><div><h1>مراكز التكلفة</h1><div class="sub">${STATE.costCenters.length} ${t('مركز')}</div></div>
-    <div class="actions"><button class="btn primary write-only" data-p="costcenters.edit" id="cc-add">➕ إضافة مركز تكلفة</button></div></div>
-    <div class="table-wrap"><table class="data"><thead><tr><th>${t('الاسم')}</th><th>${t('الاسم (إنجليزي)')}</th><th>${t('الشركة الفعلية')}</th><th>${t('الموظفين')}</th><th data-p="sensitive.salary">${t('إجمالي الرواتب')}</th><th data-p="sensitive.salary">${t('تكلفة المعاملات')}</th><th></th></tr></thead><tbody>
+  root.innerHTML = `<div class="table-wrap"><table class="data"><thead><tr><th>${t('الاسم')}</th><th>${t('الاسم (إنجليزي)')}</th><th>${t('الشركة الفعلية')}</th><th>${t('الموظفين')}</th><th data-p="sensitive.salary">${t('إجمالي الرواتب')}</th><th data-p="sensitive.salary">${t('تكلفة المعاملات')}</th><th></th></tr></thead><tbody>
     ${rows.map(r => `<tr><td><b>${esc(r.c.name)}</b></td><td>${esc(r.c.nameEn || '')}</td><td>${r.c.companyId ? esc(companyName(r.c.companyId) || '—') : `<span class="muted">${t('غير محددة')}</span>`}</td><td><a href="#" data-go="${esc(r.c.name)}">${r.n}</a></td><td class="num" data-p="sensitive.salary">${fmtMoney(r.sal)}</td><td class="num" data-p="sensitive.salary">${fmtMoney(r.gov)}</td>
       <td class="row"><button class="btn sm write-only" data-p="costcenters.edit" data-edit="${r.c.id}">✏️</button><button class="btn sm danger write-only" data-p="costcenters.delete" data-del="${r.c.id}">✕</button></td></tr>`).join('')}
     <tr><td class="muted">${t('بدون مركز تكلفة')}</td><td></td><td></td><td>${unassigned.length}</td><td class="num" data-p="sensitive.salary">${fmtMoney(sum(unassigned.map(e => e.salary)))}</td><td data-p="sensitive.salary"></td><td></td></tr>
     </tbody></table></div>
     <p class="small muted">${t('لتعيين مركز تكلفة لمجموعة موظفين: حددهم في شاشة الموظفين ثم «تعيين جماعي».')}</p>`;
-  $('#cc-add').onclick = () => openCostCenterModal(null);
-  $$('[data-edit]', viewRoot()).forEach(b => b.onclick = () => openCostCenterModal(STATE.costCenters.find(c => c.id === b.dataset.edit)));
-  $$('[data-del]', viewRoot()).forEach(b => b.onclick = async () => { if (await openConfirm(t('حذف مركز التكلفة؟'), { danger: true })) await persist('DELETE', '/api/cost-centers/' + b.dataset.del, undefined, 'تم الحذف'); });
-  $$('[data-go]', viewRoot()).forEach(a => a.onclick = (e) => { e.preventDefault(); goEmployees({ costCenter: a.dataset.go }); });
+  const add = $('#cc-add'); if (add) add.onclick = () => openCostCenterModal(null);
+  $$('[data-edit]', root).forEach(b => b.onclick = () => openCostCenterModal(STATE.costCenters.find(c => c.id === b.dataset.edit)));
+  $$('[data-del]', root).forEach(b => b.onclick = async () => { if (await openConfirm(t('حذف مركز التكلفة؟'), { danger: true })) await persist('DELETE', '/api/cost-centers/' + b.dataset.del, undefined, 'تم الحذف'); });
+  $$('[data-go]', root).forEach(a => a.onclick = (e) => { e.preventDefault(); goEmployees({ costCenter: a.dataset.go }); });
 }
 function openCostCenterModal(c) {
   c = c || {};

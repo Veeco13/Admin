@@ -92,7 +92,7 @@ zahed/
 | `js/core.js` | CORE / STATE، THEME، VIEW PERMISSIONS، UI LANGUAGE، BACKUP، UI STATE، DRAFT AUTOSAVE، DOCUMENT COMPLETENESS، ALERT CENTER، GLOBAL SEARCH، NAV / RENDER | `reload`، `persist`، `t`، `translateDomText`، `toggleTheme`، `loadViewPerms`، `applyNavVisibility`، `trackedAlertItems`، `renderAlertCenterPanel`، `runGlobalSearch`، `empDocCompleteness`، `empUrgency`، `tierOf`، `datePill`، `saveDraft`، `attachDraftAutosave`، `daysSinceLastBackup`، `openConfirm`، `openBlockAlert`، `initCapabilities` |
 | `js/dashboard.js` | DASHBOARD، RENEWAL CALENDAR، ORG CHART | `renderDashboard`، `dbCard`، `dbBars`، `bindVizTips`، `openStuckListModal`، `collectAllTrackedDates`، `renderRenewalCalendarModal`، `renderOrgChartModal` |
 | `js/employees.js` | EMPLOYEES VIEW، EMPLOYEE MODAL، DUPLICATE PREVENTION، BULK ASSIGN، المرفقات | `filteredEmployees`، `renderEmployees`، `openProfileCard`، `handleImportCsv`، `exportEmployeesCsv`، `printEmployeeReport`، `openEmployeeModal`، `renderAffRows`، `collectAffRows`، `findDuplicateCivilId`، `findDuplicatePassport`، `findDuplicateNameNationality`، `saveEmployee`، `openBulkAssignModal`، `openBulkRenewModal`، `openQuickRenewModal`، `openGovStageModal`، `loadDriveFiles`، `uploadFileForEmployee` |
-| `js/org.js` | COMPANIES & PROJECTS، VEHICLES، COST CENTERS | `renderCompanies`، `openCompanyModal`، `openProjectModal`، `openSignatoryModal`، `openTrafficAuthModal`، `openCivilAffairsAuthModal`، `openCivilIdDocModal`، `renderVehicles`، `openVehicleModal`، `renderCostCenters`، `openCostCenterModal` |
+| `js/org.js` | COMPANIES (الشركات + المشاريع + مراكز التكلفة)، VEHICLES | `renderCompanies`، `renderCompaniesTab`، `companyAlerts`، `openCompanyDetails`، `fillCompanyDetails`، `renderProjectsTab`، `projectsTable`، `renderCostCentersTab`، `openCompanyModal`، `openProjectModal`، `openSignatoryModal`، `openTrafficAuthModal`، `openCivilAffairsAuthModal`، `openCivilIdDocModal`، `renderVehicles`، `openVehicleModal`، `openCostCenterModal` |
 | `js/contract.js` | CONTRACT GENERATOR، COMPANY LOG / AUDIT LOG | `renderContractView`، `buildContractHtml`، `renderCompanyLog` |
 | `js/recruit.js` | RECRUITMENT، CANDIDATES REPORT + MODAL | `recruitStagesForSource`، `recruitStageInfo`، `migrateRecruitStages`، `renderRecruitFunnelCard`، `renderRecruitment`، `renderCandidatesReportModal`، `printCandidatesReport`، `openCandidateModal`، `convertCandidateToEmployee` |
 | `models.py` / `db.py` / `db_transfer.py` | DATABASE (SQLAlchemy) | الموديلات، `session_scope`، `init_db`، `to_dict`، `apply`، `coerce`، `dump_state`، `export_tables`، `import_tables`، `transfer` |
@@ -109,9 +109,8 @@ zahed/
 |---|---|---|
 | `dashboard` | الصفحة الرئيسية | `renderDashboard` |
 | `employees` | مركز إدارة الإقامات والموظفين | `renderEmployees` |
-| `companies` | مركز إدارة الشركات والمشاريع | `renderCompanies` |
+| `companies` | مركز إدارة الشركات (تبويبات: الشركات، المشاريع، مراكز التكلفة) | `renderCompanies` |
 | `vehicles` | مركز إدارة السيارات | `renderVehicles` |
-| `costcenters` | مراكز التكلفة | `renderCostCenters` |
 | `contract` | عقد العمل | `renderContractView` |
 | `recruitment` | الاستقدام والتوظيف | `renderRecruitment` |
 | `companylog` | السجل التاريخي والتدقيق | `renderCompanyLog` |
@@ -121,6 +120,12 @@ zahed/
 - **الصف التاني:** حالة المستندات (عمود مقسّم بألوان المستويات لكل مستند + «محتاج إجراء»، ومفتاح ألوان، وزرار «جدول») وجنبها أقرب 6 تنبيهات.
 - **الباقي كروت متساوية:** المعاملات الحكومية، الموظفين حسب الشركة، اكتمال البيانات (متوسط `empDocCompleteness` وأكتر الناقص)، الاستقدام (المراحل اللي فيها مترشّحين بس)، الجنسيات (أول 6 + «أخرى»)، وآخر العمليات.
 - **الرسوم:** لون واحد لكل رسم (ألوان المستويات للمستندات بس)، أعمدة رفيعة وخط الأساس ناحية البداية والقيمة عند الطرف، والتفاصيل في تلميح بالماوس أو بالكيبورد (`data-tip`). كل صف بيفتح القائمة المفلترة بتاعته. شريط التنبيه العلوي مابيظهرش في الرئيسية لأن «محتاج إجراء» بيقول نفس الكلام.
+
+**مركز إدارة الشركات (`renderCompanies`، أنماطها `.co-*`):** بند واحد في القائمة («الشركات») فيه كل حاجة تخص الشركات. بيظهر للي معاه `companies.view` أو `costcenters.view` (`VIEW_PERM` بيقبل «أ|ب»)، وكل تبويب حسب صلاحيته. التبويب المختار في `UI.co.tab`، والشاشة القديمة `costcenters` بتتحوّل لتبويبها.
+- **الشركات:** كروت مختصرة (الشعار، الاسم، الموظفين / المشاريع / المفوّضين، وسطر حالة واحد: أقرب تنبيه من `companyAlerts` — نفس مصدر مركز التنبيهات — أو «من غير تاريخ» أو «كل المستندات سارية»). الترتيب: الأقرب ينتهي، وبعدين اللي ناقصه تواريخ، وبعدين الباقي. المنتهي أو خلال 30 يوم عليه خط أحمر.
+- **تفاصيل الشركة (`openCompanyDetails`):** نافذة بتبويبات: البيانات والمستندات، المفوّضين بالتوقيع، المشاريع، وفيها التعديل والحذف والموظفين. بتتحدّث لوحدها بعد أي حفظ وهي مفتوحة (`CO_DETAIL`). البحث الشامل ومركز التنبيهات بيفتحوها على طول (`focusCompany` / `focusTab`).
+- **المشاريع:** جدول واحد لكل المشاريع بعمود الشركة، وبحث وفلتر بالشركة.
+- **مراكز التكلفة:** نفس الجدول القديم (`renderCostCentersTab`).
 
 **الشريط العلوي:** البحث الشامل (Ctrl+K)، مركز التنبيهات 🔔، الوضع الداكن/الفاتح، العربي/الإنجليزي، وقائمة المستخدم. القائمة فيها: اسم المستخدم ووظيفته، والنسخ الاحتياطي (للي مسموح له)، والاستعادة والمستخدمين والصلاحيات (للمدير بس)، وإعدادات العرض، وتغيير الباسورد، وتسجيل الخروج.
 

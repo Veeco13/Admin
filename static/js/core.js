@@ -11,9 +11,8 @@ let VIEW_ARGS = {};        // وسائط تُمرَّر عند الانتقال 
 const VIEWS = [
   { id: 'dashboard',   label: 'الصفحة الرئيسية',        ico: '🏠', render: () => renderDashboard() },
   { id: 'employees',   label: 'الإقامات والموظفين',      ico: '👥', render: () => renderEmployees() },
-  { id: 'companies',   label: 'الشركات والمشاريع',       ico: '🏢', render: () => renderCompanies() },
+  { id: 'companies',   label: 'الشركات',                ico: '🏢', render: () => renderCompanies() },   // + المشاريع ومراكز التكلفة
   { id: 'vehicles',    label: 'السيارات',               ico: '🚗', render: () => renderVehicles() },
-  { id: 'costcenters', label: 'مراكز التكلفة',           ico: '💼', render: () => renderCostCenters() },
   { id: 'contract',    label: 'عقد العمل',              ico: '📄', render: () => renderContractView() },
   { id: 'recruitment', label: 'الاستقدام والتوظيف',      ico: '🧭', render: () => renderRecruitment() },
   { id: 'companylog',  label: 'السجل التاريخي والتدقيق', ico: '🗂️', render: () => renderCompanyLog() },
@@ -179,7 +178,7 @@ const PERM_KEYS = [
   'contract.view', 'contract.edit', 'companylog.view',
   'sensitive.salary', 'sensitive.bank', 'sensitive.documents', 'system.import', 'system.backup', 'contract.sign', 'scope.all', 'admin',
 ];
-const VIEW_PERM = { employees: 'employees.view', companies: 'companies.view', vehicles: 'vehicles.view', costcenters: 'costcenters.view',
+const VIEW_PERM = { employees: 'employees.view', companies: 'companies.view|costcenters.view', vehicles: 'vehicles.view',
   contract: 'contract.view employees.view sensitive.salary', recruitment: 'recruitment.view', companylog: 'companylog.view' };
 function can(key) {
   const m = STATE && STATE.me;
@@ -191,7 +190,8 @@ function can(key) {
 function canAll(keys) { return keys.split(/\s+/).every(can); }
 /** حقل حساس مخفي عن المستخدم الحالي؟ kind = employee | candidate */
 function hiddenField(kind, f) { return !!(STATE && STATE.me && ((STATE.me.hiddenFields || {})[kind] || []).includes(f)); }
-function viewAllowed(id) { return !VIEW_PERM[id] || canAll(VIEW_PERM[id]); }
+/** VIEW_PERM: «أ ب» = الاتنين، «أ|ب» = أي واحد فيهم */
+function viewAllowed(id) { return !VIEW_PERM[id] || VIEW_PERM[id].split('|').some(canAll); }
 function applyPermStyles() {
   let st = document.getElementById('perm-style');
   if (!st) { st = document.createElement('style'); st.id = 'perm-style'; document.head.appendChild(st); }
@@ -474,6 +474,7 @@ let UI = Object.assign({
   cand: { q: '', source: '', stage: '', company: '' },
   log: { tab: 'history', company: '', category: '', q: '' },
   vehicles: { q: '' },
+  co: { tab: '', projQ: '', projCompany: '' },
 }, lsJson('mv_uiState', {}));
 const saveUiStateToLocalStorage = debounce(() => lsSet('mv_uiState', JSON.stringify(UI)), 300);
 
@@ -563,7 +564,7 @@ function trackedAlertItems(maxDays = 90) {
 function openAlertTarget(it) {
   closeSidePanel();
   if (it.kind === 'employee') openProfileCard(it.refId);
-  else if (it.kind === 'company' || it.kind === 'project') { VIEW_ARGS = { focusCompany: it.refId }; setView('companies'); }
+  else if (it.kind === 'company' || it.kind === 'project') setView('companies', { focusCompany: it.refId, focusTab: it.kind === 'project' ? 'projects' : 'info' });
   else if (it.kind === 'vehicle') { setView('vehicles'); setTimeout(() => openVehicleModal(it.refId), 50); }
   else if (it.kind === 'candidate') { setView('recruitment'); setTimeout(() => openCandidateModal(it.refId), 50); }
 }
@@ -610,9 +611,9 @@ function runGlobalSearch(q) {
   for (const c of STATE.candidates) if ([c.name, c.nameEn, c.passportNo, c.civilId, c.phone].some(v => norm(v).includes(n)))
     add('المترشّحين', c.name, c.passportNo || '', () => { setView('recruitment'); setTimeout(() => openCandidateModal(c.id), 50); });
   for (const c of scopedCompanies()) if ([c.nameAr, c.nameEn, c.mainFileNumber, c.commercialLicenseNo].some(v => norm(v).includes(n)))
-    add('الشركات', companyName(c.id), c.mainFileNumber || '', () => { VIEW_ARGS = { focusCompany: c.id }; setView('companies'); });
+    add('الشركات', companyName(c.id), c.mainFileNumber || '', () => setView('companies', { focusCompany: c.id }));
   for (const p of scopedProjects()) if ([p.nameAr, p.nameEn, p.fileNumber].some(v => norm(v).includes(n)))
-    add('المشاريع', projectName(p.id), companyName(p.companyId), () => { VIEW_ARGS = { focusCompany: p.companyId }; setView('companies'); });
+    add('المشاريع', projectName(p.id), companyName(p.companyId), () => setView('companies', { focusCompany: p.companyId, focusTab: 'projects' }));
   for (const v of STATE.vehicles) if ([v.plate, v.model].some(x => norm(x).includes(n)))
     add('السيارات', v.plate, v.model || '', () => { setView('vehicles'); setTimeout(() => openVehicleModal(v.id), 50); });
   return res;
@@ -682,6 +683,7 @@ function bindAlertBar() {
 }
 function render() {
   if (!STATE) return;
+  if (VIEW === 'costcenters') { VIEW = 'companies'; UI.co.tab = 'costcenters'; }   // مراكز التكلفة بقت تبويب جوه الشركات
   renderNav();
   const v = VIEWS.find(x => x.id === VIEW) || VIEWS[0];
   const c = $('#content');
