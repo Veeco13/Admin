@@ -41,8 +41,10 @@ function custodyTotals(c) {
   const ls = c.lines || [], people = custodyPersons(c);
   const spent = sum(ls.filter(l => l.done).map(custodyLineAmount));
   const received = ['disbursed', 'closed'].includes(c.status) ? (c.disbursedAmount || 0) : 0;
+  const closed = people.filter(p => p.lines.every(l => l.closedDate));
   return { planned: c.requestedAmount ?? sum(ls.map(l => l.planned)), received, spent, remaining: received - spent,
-    persons: people.length, ready: people.filter(p => p.lines.every(l => l.done)).length, itemsDone: ls.filter(l => l.done).length, items: ls.length };
+    persons: people.length, ready: people.filter(p => p.lines.every(l => l.done) && !p.lines.some(l => l.closedDate)).length,
+    closed: closed.length, itemsDone: ls.filter(l => l.done).length, items: ls.length };
 }
 /** أرصدة المستلمين: اتصرف له كام، ونفّذ كام، والباقي معاه (العهد اللي اتصرفت بس) */
 function custodianBalances() {
@@ -262,16 +264,19 @@ function openCustodyDetails(id) {
       ${c.status === 'requested' ? `<div class="notice small">${t('اطبع الطلب واعتمده من المسؤول والإدارة المالية، وبعد الصرف اضغط «💵 تم الصرف» وسجّل المبلغ.')}</div>` : ''}
       <div class="small muted" style="margin:6px 0">${t('البند بيتعلّم «تم» لوحده لما مرحلة الشخص تعدّيه، وتقدر تعلّمه وتعدّل المبلغ الفعلي ورقم الإيصال بإيدك.')}</div>
       <div class="table-wrap"><table class="data cu-lines"><thead><tr><th style="width:34px">✓</th><th>${t('البند')}</th><th>${t('الجهة')}</th><th>${t('المحدد')}</th><th>${t('الفعلي')}</th><th>${t('رقم الإيصال')}</th><th>${t('تاريخ التنفيذ')}</th></tr></thead><tbody>
-      ${custodyPersons(c).map(p => { const done = p.lines.every(l => l.done); return `<tr class="cu-person"><td colspan="7">${done ? '✅' : '⏳'} ${esc(p.name)}
+      ${custodyPersons(c).map(p => { const done = p.lines.every(l => l.done), closedOn = p.lines.every(l => l.closedDate) && p.lines[0].closedDate; return `<tr class="cu-person ${closedOn ? 'cu-closed' : ''}"><td colspan="7">${closedOn ? '🔒' : done ? '✅' : '⏳'} ${esc(p.name)}
+          ${closedOn ? `<span class="chip" style="background:var(--green-soft);color:var(--green)">${t('اتقفل')} ${fmtDate(closedOn)}</span>` : ''}
           <span class="small muted">${esc(p.civilId || '')}${p.costCenter ? ' · ' + esc(p.costCenter) : ''}${p.companyId ? ' · ' + esc(companyName(p.companyId)) : ''}</span>
           <span class="small" style="float:inline-end">${p.lines.filter(l => l.done).length}/${p.lines.length} · ${fmtMoney(sum(p.lines.map(l => (l.done ? custodyLineAmount(l) : l.planned || 0))))}</span></td></tr>
-        ${p.lines.map(l => `<tr><td><input type="checkbox" data-done="${l.id}" ${l.done ? 'checked' : ''} ${edit ? '' : 'disabled'}></td><td>${esc(l.itemName)}</td><td class="small muted">${esc(l.authority || '')}</td>
+        ${p.lines.map(l => { const ed = edit && !l.closedDate; return `<tr><td><input type="checkbox" data-done="${l.id}" ${l.done ? 'checked' : ''} ${ed ? '' : 'disabled'}></td><td>${esc(l.itemName)}</td><td class="small muted">${esc(l.authority || '')}</td>
           <td class="num">${l.planned == null ? '<span class="muted">—</span>' : rptNum(l.planned)}</td>
-          <td>${edit ? `<input type="number" step="0.001" min="0" data-actual="${l.id}" value="${l.actual ?? ''}" placeholder="${l.planned ?? ''}">` : (l.actual == null ? '—' : rptNum(l.actual))}</td>
-          <td>${edit ? `<input class="cu-receipt" data-receipt="${l.id}" value="${esc(l.receiptNo || '')}">` : esc(l.receiptNo || '')}</td><td class="small num">${fmtDate(l.doneDate)}</td></tr>`).join('')}`; }).join('')}
-      </tbody></table></div>`;
+          <td>${ed ? `<input type="number" step="0.001" min="0" data-actual="${l.id}" value="${l.actual ?? ''}" placeholder="${l.planned ?? ''}">` : (l.actual == null ? '—' : rptNum(l.actual))}</td>
+          <td>${ed ? `<input class="cu-receipt" data-receipt="${l.id}" value="${esc(l.receiptNo || '')}">` : esc(l.receiptNo || '')}</td><td class="small num">${fmtDate(l.doneDate)}</td></tr>`; }).join('')}`; }).join('')}
+      </tbody></table></div>
+      ${custodyClosingsHtml(c)}`;
     const f = $('#cu-df', E);
-    f.innerHTML = `<button class="btn" data-a="print">🖨️ ${t('طباعة طلب الصرف')}</button>
+    f.innerHTML = `${edit && c.status === 'disbursed' && tt.ready ? `<button class="btn primary" data-a="close">🔒 ${t('تقفيل')} (${tt.ready})</button>` : ''}
+      <button class="btn" data-a="print">🖨️ ${t('طباعة طلب الصرف')}</button><button class="btn" data-a="reqxlsx">📊 ${t('طلب الصرف Excel')}</button>
       ${edit ? `<button class="btn primary" data-a="disburse">💵 ${t(c.status === 'requested' ? 'تم الصرف' : 'تعديل الصرف')}</button>` : ''}
       ${edit && c.status === 'requested' ? `<button class="btn" data-a="edit">✏️ ${t('تعديل الطلب')}</button>` : ''}
       <span class="spacer"></span>
@@ -281,11 +286,19 @@ function openCustodyDetails(id) {
     $$('[data-a]', f).forEach(b => b.onclick = async () => {
       const a = b.dataset.a;
       if (a === 'print') printCustodyRequest(c);
+      else if (a === 'reqxlsx') custodyDownload(`/api/custodies/${c.id}/request.xlsx`);
+      else if (a === 'close') openCustodyCloseModal(c, draw);
       else if (a === 'disburse') openCustodyDisburseModal(c, draw);
       else if (a === 'edit') { m.close(); openCustodyRequestModal(c.id); }
       else if (a === 'cancel' && await openConfirm(`${t('إلغاء طلب العهدة')} ${custodyNo(c)}؟`, { danger: true, okLabel: t('إلغاء الطلب') })) {
         await persist('POST', `/api/custodies/${c.id}/cancel`, {}, 'تم الإلغاء'); draw();
       }
+    });
+    $$('[data-closing]', E).forEach(b => b.onclick = () => custodyDownload(`/api/custodies/${c.id}/closing.xlsx?date=${b.dataset.closing}${b.dataset.layout ? '&layout=' + b.dataset.layout : ''}`));
+    $$('[data-reopen]', E).forEach(b => b.onclick = async () => {
+      if (!await openConfirm(`${t('إلغاء تقفيل')} ${fmtDate(b.dataset.reopen)}؟ ${t('البنود هترجع مفتوحة وتقدر تعدّلها وتقفلها تاني.')}`, { danger: true, okLabel: t('إلغاء التقفيل') })) return;
+      try { await persist('POST', `/api/custodies/${c.id}/reopen`, { date: b.dataset.reopen }, 'تم إلغاء التقفيل'); } catch (e) { /* ظاهر */ }
+      draw();
     });
     translateDomText(E);
   };
@@ -355,15 +368,15 @@ function openFeeItemsModal(tx = 'renewal') {
   const load = () => { rows = (STATE.feeItems || []).filter(f => f.txType === cur).map(f => ({ ...f })); dirty = false; draw(); };
   const collect = () => $$('tr[data-i]', E).forEach(tr => {
     const r = rows[tr.dataset.i], g = k => $(`[data-f="${k}"]`, tr);
-    Object.assign(r, { name: g('name').value, authority: g('authority').value, amount: g('amount').value === '' ? null : Number(g('amount').value),
+    Object.assign(r, { name: g('name').value, nameEn: g('nameEn').value, authority: g('authority').value, amount: g('amount').value === '' ? null : Number(g('amount').value),
       options: g('options').value, stage: g('stage').value, active: g('active').checked });
   });
   const draw = () => {
     const stages = custodyFlowStages(CUSTODY_TYPES[cur].flow);
     $('#fee-body', E).innerHTML = `<div class="tabs">${Object.entries(CUSTODY_TYPES).map(([k, v]) => `<button data-fee-tx="${k}" class="${k === cur ? 'active' : ''}">${esc(t(v.label))}</button>`).join('')}</div>
       <div class="notice small" style="margin:8px 0">${t('المبلغ الفاضي = مبلغ مفتوح بيتكتب لكل شخص (زي التصديقات). الاختيارات = مبالغ بيتختار منها (زي إذن العمل 60، 260، 360، 460). المرحلة = لما الشخص يعدّيها البند بيتعلّم «تم» لوحده. التعديل مابيأثرش على العهد القديمة.')}</div>
-      <div class="table-wrap"><table class="data fee-tbl"><thead><tr><th>${t('البند')}</th><th>${t('الجهة')}</th><th>${t('المبلغ (د.ك)')}</th><th>${t('الاختيارات')}</th><th>${t('المرحلة')}</th><th>${t('مفعّل')}</th><th></th></tr></thead>
-      <tbody>${rows.map((r, i) => `<tr data-i="${i}"><td><input data-f="name" value="${esc(r.name || '')}"></td><td><input data-f="authority" value="${esc(r.authority || '')}"></td>
+      <div class="table-wrap"><table class="data fee-tbl"><thead><tr><th>${t('البند')}</th><th>${t('البند بالإنجليزي')}</th><th>${t('الجهة')}</th><th>${t('المبلغ (د.ك)')}</th><th>${t('الاختيارات')}</th><th>${t('المرحلة')}</th><th>${t('مفعّل')}</th><th></th></tr></thead>
+      <tbody>${rows.map((r, i) => `<tr data-i="${i}"><td><input data-f="name" value="${esc(r.name || '')}"></td><td><input data-f="nameEn" value="${esc(r.nameEn || '')}" dir="ltr"></td><td><input data-f="authority" value="${esc(r.authority || '')}"></td>
         <td><input type="number" step="0.001" min="0" data-f="amount" value="${r.amount ?? ''}" placeholder="${esc(t('مفتوح'))}"></td>
         <td><input data-f="options" value="${esc(r.options || '')}" placeholder="60,260" dir="ltr"></td>
         <td><select data-f="stage">${opt('', '—', !r.stage)}${stages.map(s => opt(s.id, t(s.label), s.id === r.stage)).join('')}</select></td>
@@ -376,7 +389,7 @@ function openFeeItemsModal(tx = 'renewal') {
       if (dirty && !await openConfirm(t('فيه تعديلات ماتحفظتش في الجدول ده. تسيبها وتفتح التاني؟'))) return;
       cur = b.dataset.feeTx; load();
     });
-    $('#fee-add', E).onclick = () => { collect(); rows.push({ name: '', authority: '', amount: null, options: '', stage: '', active: true }); dirty = true; draw(); };
+    $('#fee-add', E).onclick = () => { collect(); rows.push({ name: '', nameEn: '', authority: '', amount: null, options: '', stage: '', active: true }); dirty = true; draw(); };
     $$('[data-del]', E).forEach(b => b.onclick = () => { collect(); rows.splice(Number(b.dataset.del), 1); dirty = true; draw(); });
     $('#fee-body', E).addEventListener('input', () => { dirty = true; }, { once: true });
   };
@@ -385,4 +398,69 @@ function openFeeItemsModal(tx = 'renewal') {
     try { await persist('PUT', `/api/fee-items/${cur}`, { items: rows }, 'تم الحفظ'); load(); } catch (e) { /* ظاهر */ }
   };
   load();
+}
+
+/* ---------- التقفيل: كشف Excel لكل مركز تكلفة (custody_excel.py) ---------- */
+async function custodyDownload(url) {
+  try { const r = await fetchBlob(url); downloadBlob(r.blob, r.name); toast('تم التنزيل', 'ok'); } catch (e) { toast(e.message, 'err'); }
+}
+/** كشوف التقفيل اللي اتعملت (بتاريخها): تنزيل جماعي / فردي، وإلغاء */
+function custodyClosingsHtml(c) {
+  const by = {};
+  custodyPersons(c).forEach(p => { const d = p.lines.every(l => l.closedDate) && p.lines[0].closedDate; if (d) (by[d] = by[d] || []).push(p); });
+  const dates = Object.keys(by).sort();
+  if (!dates.length) return '';
+  const fee = c.adminFee ?? 20;
+  return `<h4 class="cu-h">🔒 ${t('كشوف التقفيل')}</h4><div class="cu-closings">${dates.map(d => {
+    const ps = by[d], total = sum(ps.flatMap(p => p.lines.map(custodyLineAmount))) + fee * ps.length;
+    return `<div class="cu-closing"><div><b>${t('كشف تقفيل')} ${fmtDate(d)}</b><div class="small muted">${ps.length} ${t('شخص')} · ${uniq(ps.map(p => p.costCenter || '—')).length} ${t('مركز تكلفة')} · ${fmtMoney(total)}</div></div>
+      <span class="spacer"></span><button class="btn sm primary" data-closing="${d}">📊 ${t('الكشف Excel')}</button>
+      <button class="btn sm" data-closing="${d}" data-layout="individual">👤 ${t('كشف فردي لكل موظف')}</button>
+      ${can('custody.delete') ? `<button class="btn sm danger" data-reopen="${d}">↩️ ${t('إلغاء')}</button>` : ''}</div>`; }).join('')}</div>`;
+}
+/** تقفيل الجاهزين (كل بنودهم «تم»): اختيارهم، الدعم الإداري، التاريخ وشكل الكشف ← تقفيل وتنزيل الكشف */
+function openCustodyCloseModal(c, after) {
+  const ready = custodyPersons(c).filter(p => p.lines.every(l => l.done) && !p.lines.some(l => l.closedDate));
+  const groups = new Map();
+  ready.forEach(p => { const k = p.costCenter || t('بدون مركز تكلفة'); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(p); });
+  const gov = p => sum(p.lines.map(custodyLineAmount));
+  const lastFee = (() => { try { return lsGet('mv_adminFee'); } catch (e) { return null; } })();
+  const m = openModal({
+    title: `🔒 ${t('تقفيل العهدة')} ${esc(custodyNo(c))}`, size: 'wide',
+    body: `<div class="form" id="cl-form">
+        <label>${t('الدعم الإداري لكل موظف (د.ك)')}<input type="number" step="0.001" min="0" name="adminFee" value="${esc(c.adminFee ?? lastFee ?? 20)}"></label>
+        <label>${t('تاريخ التقفيل')}<input type="date" name="date" value="${todayISO()}"></label>
+        <label>${t('شكل الكشف')}<select name="layout">${opt('', t('تلقائي: جماعي لكل مركز تكلفة (وفردي لو موظف واحد)'), true)}${opt('individual', t('كشف فردي لكل موظف'), false)}</select></label></div>
+      <div class="notice small" style="margin:8px 0">${t('الكشف ملف Excel: شيت «الملخص» (لكل مركز تكلفة + تسوية العهدة مع المستلم) وشيت لكل مركز تكلفة. الدعم الإداري بيتحسب على مركز التكلفة ومش من فلوس العهدة. بعد التقفيل البنود مابتتعدّلش إلا لو ألغيت التقفيل.')}</div>
+      <div class="table-wrap"><table class="data"><thead><tr><th style="width:34px"><input type="checkbox" id="cl-all" checked></th><th>${t('الاسم')}</th><th>${t('الرقم المدني')}</th><th>${t('البنود')}</th><th>${t('الرسوم الحكومية')}</th></tr></thead><tbody>
+      ${[...groups.entries()].map(([cc, ps]) => `<tr class="cu-person"><td colspan="5">${esc(cc)} <span class="small muted">(${ps.length})</span></td></tr>
+        ${ps.map(p => `<tr><td><input type="checkbox" data-cl="${esc(p.id)}" checked></td><td>${esc(p.name)}</td><td class="num">${esc(p.civilId || '')}</td>
+          <td class="small">${p.lines.map(l => esc(l.itemName)).join('، ')}</td><td class="num">${fmtMoney(gov(p))}</td></tr>`).join('')}`).join('')}
+      </tbody></table></div>
+      <div class="row cu-cl-sum" id="cl-sum"></div>`,
+    foot: `<button class="btn primary" data-go>🔒 ${t('تقفيل وتنزيل الكشف')}</button><span class="spacer"></span><button class="btn" data-close>${t('إلغاء')}</button>`,
+  });
+  const E = m.el;
+  const chosen = () => $$('[data-cl]', E).filter(x => x.checked).map(x => x.dataset.cl);
+  const sumUp = () => {
+    const fee = Number($('[name="adminFee"]', E).value) || 0, ids = chosen(), ps = ready.filter(p => ids.includes(p.id));
+    const g = sum(ps.map(gov));
+    $('#cl-sum', E).innerHTML = `<span class="chip">${t('الأشخاص')}: <b>${ps.length}</b></span><span class="chip">${t('الرسوم الحكومية')}: <b>${fmtMoney(g)}</b></span>
+      <span class="chip">${t('الدعم الإداري')}: <b>${fmtMoney(fee * ps.length)}</b></span><span class="chip on">${t('إجمالي الكشف')}: <b>${fmtMoney(g + fee * ps.length)}</b></span>`;
+  };
+  $('#cl-all', E).onchange = ev => { $$('[data-cl]', E).forEach(x => { x.checked = ev.target.checked; }); sumUp(); };
+  E.addEventListener('change', sumUp);
+  E.addEventListener('input', sumUp);
+  sumUp();
+  $('[data-go]', E).onclick = async () => {
+    const d = formValues($('#cl-form', E)), persons = chosen();
+    if (!persons.length) return openBlockAlert(t('اختار شخص واحد على الأقل'));
+    try { lsSet('mv_adminFee', d.adminFee); } catch (e) { /* مش مهم */ }
+    try {
+      const r = await persist('POST', `/api/custodies/${c.id}/close`, { persons, adminFee: d.adminFee, date: d.date }, 'تم التقفيل');
+      m.close();
+      await custodyDownload(`/api/custodies/${c.id}/closing.xlsx?date=${r.date}${d.layout ? '&layout=' + d.layout : ''}`);
+      if (after) after();
+    } catch (e) { /* ظاهر */ }
+  };
 }

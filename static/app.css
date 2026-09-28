@@ -282,6 +282,10 @@ table.cu-lines tr.cu-person td { background: var(--surface-2); font-weight: 600;
 table.cu-lines input[type=number] { width: 84px; }
 table.cu-lines input.cu-receipt { width: 110px; }
 .fee-tbl input:not([type=checkbox]), .fee-tbl select { width: 100%; min-width: 70px; }
+table.cu-lines tr.cu-closed td { background: var(--green-soft); }
+.cu-closings { display: flex; flex-direction: column; gap: 6px; }
+.cu-closing { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; }
+.cu-cl-sum { gap: 6px; flex-wrap: wrap; margin-top: 10px; }
 .imp-miss { max-height: 180px; overflow: auto; margin: 6px 0; padding-inline-start: 20px; }
 .imp-list { max-height: 340px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; padding: 6px 10px; margin: 6px 0; }
 .imp-emp { padding: 6px 0; border-bottom: 1px dashed var(--border); }

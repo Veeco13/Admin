@@ -3,6 +3,7 @@ SQLAlchemy>=2.0
 alembic>=1.13
 pandas>=2.1
 openpyxl>=3.1
+Pillow>=10.0                       # شعار الشركة في كشوف العهد Excel
 python-docx>=1.1
 pypdf>=4.0                         # دمج العقود في ملف PDF واحد
 pywin32>=306; sys_platform == "win32"   # تحويل العقود لـ PDF عن طريق Microsoft Word (ويندوز)

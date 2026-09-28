@@ -25,6 +25,7 @@ from werkzeug.utils import secure_filename
 import db
 import contracts
 import custody
+import custody_excel
 import docx_engine
 import history
 import importer
@@ -1429,8 +1430,8 @@ def update_custody_line(cid, lid):
         ln = s.get(M.CustodyLine, lid)
         if not ln or ln.custodyId != c.id:
             return err("البند غير موجود", 404)
-        if c.status not in custody.OPEN:
-            return err("العهدة مقفولة أو ملغاة")
+        if c.status not in custody.OPEN or ln.closedDate:
+            return err("البند اتقفل في كشف تقفيل — ألغي التقفيل الأول لو محتاج تعدّله")
         if "done" in d:
             ln.done = bool(d["done"])
             ln.doneDate = datetime.now().date() if ln.done else None
@@ -1441,6 +1442,76 @@ def update_custody_line(cid, lid):
         if "receiptNo" in d:
             ln.receiptNo = (d.get("receiptNo") or "").strip() or None
     return jsonify({"ok": True})
+
+
+@app.post("/api/custodies/<cid>/close")
+@require("custody.edit")
+def close_custody(cid):
+    """تقفيل الأشخاص الجاهزين: {persons: [...], adminFee, date} ← بعدها كشف التقفيل بيتنزّل بنفس التاريخ."""
+    d = body()
+    when = db.parse_date(d.get("date")) or datetime.now().date()
+    fee = custody.num(d.get("adminFee"))
+    fee = custody.DEFAULT_ADMIN_FEE if fee is None else fee
+    with db.session_scope() as s:
+        c = _custody_or_404(s, cid)
+        if c.status != "disbursed":
+            return err("التقفيل بيكون للعهدة اللي اتصرفت")
+        lines, msg = custody.close_people(s, c, d.get("persons"), fee, when)
+        if msg:
+            return err(msg)
+        n = len({ln.personId for ln in lines})
+        total = sum((ln.actual if ln.actual is not None else ln.planned) or 0 for ln in lines) + fee * n
+        db.log_audit(s, "custody_close", f"تقفيل عهدة رقم {c.no}: {n} شخص — {total:g} د.ك (منها دعم إداري {fee:g} لكل شخص)"
+                                         f"{' — العهدة اتقفلت بالكامل' if c.status == 'closed' else ''}", uname())
+        return jsonify({"ok": True, "date": when.isoformat(), "count": n, "status": c.status})
+
+
+@app.post("/api/custodies/<cid>/reopen")
+@require("custody.delete")
+def reopen_custody(cid):
+    when = db.parse_date(body().get("date"))
+    if not when:
+        return err("تاريخ التقفيل مطلوب")
+    with db.session_scope() as s:
+        c = _custody_or_404(s, cid)
+        n = custody.reopen(s, c, when)
+        if not n:
+            return err("مفيش تقفيل بالتاريخ ده")
+        db.log_audit(s, "custody_edit", f"إلغاء تقفيل عهدة رقم {c.no} بتاريخ {when.isoformat()} ({n} بند)", uname())
+    return jsonify({"ok": True})
+
+
+def _xlsx(data, name):
+    return send_file(io.BytesIO(data), as_attachment=True, download_name=name,
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+@app.get("/api/custodies/<cid>/closing.xlsx")
+@require("custody.view")
+def custody_closing_xlsx(cid):
+    """كشف تقفيل Excel لتاريخ تقفيل (?date=): ملخص + شيت لكل مركز تكلفة (?layout=individual ← كشف فردي لكل موظف)."""
+    when = db.parse_date(request.args.get("date"))
+    with db.session_scope(commit=False) as s:
+        c = _custody_or_404(s, cid)
+        q = select(M.CustodyLine).where(M.CustodyLine.custodyId == c.id, M.CustodyLine.closedDate.isnot(None))
+        if when:
+            q = q.where(M.CustodyLine.closedDate == when)
+        lines = s.scalars(q).all()
+        if not lines:
+            return err("مفيش تقفيل للعهدة دي" + (" بالتاريخ ده" if when else ""), 404)
+        when = when or max(ln.closedDate for ln in lines)
+        fee = c.adminFee if c.adminFee is not None else custody.DEFAULT_ADMIN_FEE
+        data = custody_excel.closing_workbook(s, c, lines, fee, when, uname(), request.args.get("layout") == "individual")
+        return _xlsx(data, f"كشف تقفيل عهدة CUS-{c.no:04d} - {when.isoformat()}.xlsx")
+
+
+@app.get("/api/custodies/<cid>/request.xlsx")
+@require("custody.view")
+def custody_request_xlsx(cid):
+    with db.session_scope(commit=False) as s:
+        c = _custody_or_404(s, cid)
+        data = custody_excel.request_workbook(s, c, uname())
+        return _xlsx(data, f"طلب صرف عهدة CUS-{c.no:04d}.xlsx")
 
 
 @app.post("/api/custodies/<cid>/cancel")
@@ -1475,6 +1546,7 @@ def save_fee_items(tx):
                 f = M.FeeItem(id=db.new_id("fee"), txType=tx)
                 s.add(f)
             f.position, f.name = len(keep) + 1, name
+            f.nameEn = (it.get("nameEn") or "").strip() or None
             f.authority = (it.get("authority") or "").strip() or None
             f.amount = custody.num(it.get("amount"))
             opts = [custody.num(x) for x in re.split(r"[,،\s]+", str(it.get("options") or "")) if x.strip()]

@@ -18,12 +18,15 @@ import models as M
 
 # أنواع الطلب: على مين (موظف / مترشّح) ومراحل مين
 TX_TYPES = {
-    "renewal": {"label": "تجديد إقامة", "kind": "employee", "flow": "gov"},
-    "transfer_in": {"label": "تحويل إقامة من الداخل", "kind": "employee", "flow": "gov"},
-    "transfer_out": {"label": "تحويل إقامة من الخارج", "kind": "candidate", "flow": "internal"},
-    "visa": {"label": "إصدار تأشيرة عمل", "kind": "candidate", "flow": "outside"},
-    "first_residency": {"label": "إصدار إقامة أول مرة", "kind": "candidate", "flow": "outside"},
+    "renewal": {"label": "تجديد إقامة", "en": "Residency Renewal", "kind": "employee", "flow": "gov"},
+    "transfer_in": {"label": "تحويل إقامة من الداخل", "en": "Residency Transfer (within the group)", "kind": "employee",
+                    "flow": "gov"},
+    "transfer_out": {"label": "تحويل إقامة من الخارج", "en": "Residency Transfer (from another sponsor)", "kind": "candidate",
+                     "flow": "internal"},
+    "visa": {"label": "إصدار تأشيرة عمل", "en": "Work Visa Issuance", "kind": "candidate", "flow": "outside"},
+    "first_residency": {"label": "إصدار إقامة أول مرة", "en": "First Residency Issuance", "kind": "candidate", "flow": "outside"},
 }
+DEFAULT_ADMIN_FEE = 20            # الدعم الإداري لكل شخص في كشف التقفيل (بيتعدّل وقت التقفيل)
 # ترتيب المراحل (نفس GOV_STAGES و RECRUIT_STAGES_* في static/js/core.js — لو اتغيّروا هناك يتغيّروا هنا).
 # المرحلة = الخطوة الشغالة دلوقتي، فالبند «تم» لما الشخص يوصل مرحلة بعد مرحلته أو آخر مرحلة.
 FLOWS = {
@@ -107,11 +110,47 @@ def build_lines(s, tx, persons, ctx):
             if f is None:
                 continue
             lines.append(M.CustodyLine(personKind=kind, personId=pid, personName=name, civilId=civil, costCenter=cc,
-                                       companyId=co, feeItemId=f.id, itemName=f.name, authority=f.authority, stage=f.stage,
+                                       companyId=co, feeItemId=f.id, itemName=f.name, itemNameEn=f.nameEn,
+                                       authority=f.authority, stage=f.stage,
                                        position=f.position, planned=num(amount), done=False))
     if not lines:
         return None, "اختار موظف واحد على الأقل وبند واحد على الأقل"
     return lines, None
+
+
+def ready_people(s, c):
+    """الأشخاص اللي كل بنودهم «تم» ولسه ماتقفلوش ← {رقم الشخص: [بنوده]}."""
+    by = {}
+    for ln in s.scalars(select(M.CustodyLine).where(M.CustodyLine.custodyId == c.id)):
+        by.setdefault(ln.personId, []).append(ln)
+    return {pid: ls for pid, ls in by.items() if all(x.done for x in ls) and not any(x.closedDate for x in ls)}
+
+
+def close_people(s, c, person_ids, admin_fee, when):
+    """تقفيل الأشخاص دول (لازم يكونوا جاهزين) ← بنودهم closed_date = when. العهدة بتتقفل لما كل الناس تتقفل.
+    بيرجّع (بنود الكشف، رسالة خطأ)."""
+    ready = ready_people(s, c)
+    chosen = [pid for pid in dict.fromkeys(person_ids or []) if pid in ready]
+    if not chosen:
+        return None, "مفيش أشخاص جاهزين للتقفيل (كل بنود الشخص لازم تكون «تم»)"
+    lines = [ln for pid in chosen for ln in ready[pid]]
+    for ln in lines:
+        ln.closedDate = when
+    c.adminFee = admin_fee
+    s.flush()
+    if not s.scalar(select(func.count()).select_from(M.CustodyLine).where(M.CustodyLine.custodyId == c.id,
+                                                                        M.CustodyLine.closedDate.is_(None))):
+        c.status, c.closedDate = "closed", when
+    return lines, None
+
+
+def reopen(s, c, when):
+    """إلغاء كشف تقفيل بتاريخه: البنود ترجع مفتوحة، والعهدة ترجع «تم الصرف»."""
+    n = s.query(M.CustodyLine).filter(M.CustodyLine.custodyId == c.id, M.CustodyLine.closedDate == when) \
+        .update({"closedDate": None}, synchronize_session=False)
+    if n and c.status == "closed":
+        c.status, c.closedDate = "disbursed", None
+    return n
 
 
 def next_no(s):

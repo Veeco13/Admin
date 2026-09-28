@@ -381,6 +381,7 @@ class FeeItem(Base):
     txType: Mapped[str] = col("tx_type", String(30), nullable=False, index=True)   # custody.TX_TYPES
     position: Mapped[int] = col("position", Integer, nullable=False, default=0)
     name: Mapped[str] = col("name", NAME, nullable=False)
+    nameEn: Mapped[Optional[str]] = col("name_en", NAME)                          # للكشوف (ثنائية اللغة)
     authority: Mapped[Optional[str]] = col("authority", NAME)                     # الجهة
     amount: Mapped[Optional[float]] = col("amount", Float)                        # فاضي = مبلغ مفتوح لكل شخص
     options: Mapped[Optional[str]] = col("options", SHORT)                        # «60,260,360,460»
@@ -401,6 +402,7 @@ class Custody(Base):
     disbursedAmount: Mapped[Optional[float]] = col("disbursed_amount", Float)
     disbursedDate: Mapped[Optional[date]] = col("disbursed_date", Date)
     closedDate: Mapped[Optional[date]] = col("closed_date", Date)
+    adminFee: Mapped[Optional[float]] = col("admin_fee", Float)                   # الدعم الإداري لكل شخص في كشف التقفيل
     notes: Mapped[Optional[str]] = col("notes", TEXT)
     createdBy: Mapped[Optional[str]] = col("created_by", NAME)
     createdAt: Mapped[Optional[datetime]] = col("created_at", DateTime)
@@ -419,6 +421,7 @@ class CustodyLine(Base):
     companyId: Mapped[Optional[str]] = col("company_id", ID)
     feeItemId: Mapped[Optional[str]] = col("fee_item_id", ID)
     itemName: Mapped[Optional[str]] = col("item_name", NAME)
+    itemNameEn: Mapped[Optional[str]] = col("item_name_en", NAME)
     authority: Mapped[Optional[str]] = col("authority", NAME)
     stage: Mapped[Optional[str]] = col("stage", String(60))
     position: Mapped[int] = col("position", Integer, nullable=False, default=0)
@@ -427,3 +430,4 @@ class CustodyLine(Base):
     done: Mapped[bool] = col("done", Boolean, nullable=False, default=False)
     doneDate: Mapped[Optional[date]] = col("done_date", Date)
     receiptNo: Mapped[Optional[str]] = col("receipt_no", SHORT)
+    closedDate: Mapped[Optional[date]] = col("closed_date", Date)                 # اتقفل في كشف التقفيل بتاريخ ده
