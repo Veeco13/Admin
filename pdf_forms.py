@@ -5,8 +5,8 @@
 - driving:   نموذج إصدار رخصة القيادة + شهادتين اللياقة الطبية (الإدارة العامة للمرور) — للموظفين والمترشّحين.
 
 forms/*.pdf = النموذج الرسمي فاضي (من غير تشفير، ومن غير القيم التجريبية) — بيتعمل مرة واحدة من الملف
-الأصلي بـ prepare_base(). الخانات بتفضل قابلة للكتابة. NeedAppearances ← المتصفح (أو Acrobat) هو اللي
-بيرسم النص، فالعربي بيطلع متوصّل.
+الأصلي بـ prepare_base(). الخانات بتفضل قابلة للكتابة. نص الخانات المتعبّية بنرسمه إحنا (pdf_text.py) بخط
+متضمّن وحروف موصولة، لأن عارض كروم/إيدج بيرسم العربي حروف منفصلة لو سبناله الرسم.
 """
 import io
 import os
@@ -15,6 +15,8 @@ from datetime import date, datetime
 
 from pypdf import PdfReader, PdfWriter
 from pypdf.generic import ArrayObject, BooleanObject, NameObject, TextStringObject
+
+import pdf_text
 
 FORMS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "forms")
 
@@ -131,14 +133,15 @@ def _fill(path, values):
     """PDF متعبّي (bytes). القيم الفاضية مابتتكتبش، والخانات بتفضل قابلة للتعديل."""
     w = PdfWriter(clone_from=PdfReader(path))
     vals = {k: str(v) for k, v in values.items() if v not in (None, "")}
+    drawn = []
     for a, fld in _widgets(w):
         name = str(fld.get("/T"))
         if name not in vals:
             continue
         v = _pick(fld, vals[name]) if fld.get("/FT") == "/Ch" else vals[name]
         fld[NameObject("/V")] = TextStringObject(v)
-        if "/AP" in a:           # المتصفح بيرسمها من /V (NeedAppearances)
-            del a["/AP"]
+        drawn.append((a, fld, v))
+    pdf_text.draw_fields(w, drawn)           # النص مرسوم بحروف موصولة (ولو مفيش خط مناسب: العارض بيرسمه)
     out = io.BytesIO()
     w.write(out)
     return out.getvalue()
