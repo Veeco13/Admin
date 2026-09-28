@@ -24,6 +24,7 @@ from werkzeug.utils import secure_filename
 
 import db
 import contracts
+import custody
 import docx_engine
 import history
 import importer
@@ -260,6 +261,7 @@ def api_state():
     u = me()
     with db.session_scope(commit=False) as s:
         state = db.dump_state(s, u)
+        state.update(custody.dump(s, u) if u.can("custody.view") else {"custodies": [], "feeItems": []})
     for t in state.get("templates", []):     # خيارات التوقيع بتظهر بس لو القالب فيه مكانها
         path = os.path.join(TEMPLATE_DOCS, t["filename"])
         fields = contracts.template_fields(path) if os.path.exists(path) else set()
@@ -398,6 +400,8 @@ def save_employee(orig_id):
                 old = db.to_dict(e)
                 db.apply(e, data)
                 new = db.to_dict(e)
+                if old.get("govStage") != new.get("govStage"):
+                    custody.sync_person(s, "employee", new_id, new.get("govStage"))
                 changes = [f"{lab}: {history.value_label(k, old.get(k)) or '—'} ← {history.value_label(k, new.get(k)) or '—'}"
                            for k, lab in DIFF_LABELS.items() if k in data and old.get(k) != new.get(k)]
                 if "children" in data and old.get("children") != new.get("children"):
@@ -520,6 +524,7 @@ def renew_employees():
             e.lastUpdated, e.lastUpdatedBy = db.now(), user
             if d.get("setRenewedStage"):
                 e.govStage, e.govStageNote = "renewed", None
+                custody.sync_person(s, "employee", eid, "renewed")
             db.push_timeline(s, eid, "renew", f"تجديد {lab}: {old or '—'} ← {new_date.isoformat()}", user)
             affs = db.get_affiliations(s, eid)
             if field == "residencyExp" and affs and affs[0].get("companyId"):
@@ -548,6 +553,7 @@ def set_gov_stage(emp_id):
         if [db.ser(getattr(e, k)) for k in keys] == before:
             return jsonify({"ok": True, "unchanged": True})    # مفيش تغيير (ضغطة مكررة): مانسجّلش حاجة
         e.lastUpdated, e.lastUpdatedBy = db.now(), uname()
+        custody.sync_person(s, "employee", emp_id, e.govStage)       # بنود العهد اللي المرحلة عدّتها ← «تم»
         db.push_timeline(s, emp_id, "gov_stage", f"مرحلة المعاملة: {history.value_label('govStage', d.get('govStage')) or '—'}"
                          + (f" — {d.get('govStageNote')}" if d.get("govStageNote") else ""), uname())
         db.log_audit(s, "employee_edit", f"تحديث مرحلة معاملة {e.name} ({emp_id})", uname())
@@ -1278,6 +1284,9 @@ def save_candidate(cand_id=None):
             d.setdefault("appliedDate", datetime.now().strftime("%Y-%m-%d"))
             s.add(db.build(M.Candidate, d))
             db.log_audit(s, "candidate_add", f"إضافة مترشّح: {d['name']}", uname())
+        if d.get("stage"):
+            s.flush()
+            custody.sync_person(s, "candidate", cand_id, d["stage"])
     return jsonify({"ok": True, "id": cand_id})
 
 
@@ -1335,8 +1344,149 @@ def convert_candidate(cand_id):
             db.log_company_history(s, c.targetCompanyId, "employee_joined",
                                    f"انضمام الموظف {c.name} ({civil}) — تحويل من مترشّح", uname())
         db.log_audit(s, "candidate_convert", f"تحويل المترشّح {c.name} إلى موظف ({civil})", uname())
+        custody.candidate_to_employee(s, cand_id, civil)
         s.delete(c)
     return jsonify({"ok": True, "employeeId": civil})
+
+
+# ---------------------------------------------------------------------------
+# العهد والمصروفات (custody.py)
+# ---------------------------------------------------------------------------
+def _custody_or_404(s, cid):
+    c = s.get(M.Custody, cid)
+    if not c:
+        abort(404, "العهدة غير موجودة")
+    return c
+
+
+@app.post("/api/custodies")
+@app.put("/api/custodies/<cid>")
+@require("custody.edit")
+def save_custody(cid=None):
+    """طلب عهدة، أو تعديله قبل الصرف: {txType, custodian, companyId, requestDate, notes, persons: [{id, items: {بند: مبلغ}}]}"""
+    d = body()
+    tx = d.get("txType")
+    if tx not in custody.TX_TYPES:
+        return err("نوع الطلب غير معروف")
+    who = (d.get("custodian") or "").strip()
+    if not who:
+        return err("اسم المستلم مطلوب")
+    co = d.get("companyId") or None
+    if co and not me().company_ok(co):
+        return forbidden(OUT_OF_SCOPE)
+    with db.session_scope() as s:
+        c = _custody_or_404(s, cid) if cid else None
+        if c and c.status != "requested":
+            return err("العهدة اتصرفت خلاص، مينفعش الطلب يتعدّل")
+        lines, msg = custody.build_lines(s, tx, d.get("persons") or [], me())
+        if msg:
+            return err(msg)
+        if c:
+            s.query(M.CustodyLine).filter(M.CustodyLine.custodyId == c.id).delete()
+        else:
+            c = M.Custody(id=db.new_id("cus"), no=custody.next_no(s), status="requested", createdBy=uname(), createdAt=db.now())
+            s.add(c)
+        c.txType, c.custodian, c.companyId, c.notes = tx, who, co, (d.get("notes") or "").strip() or None
+        c.requestDate = db.parse_date(d.get("requestDate")) or datetime.now().date()
+        c.requestedAmount = round(sum(x.planned or 0 for x in lines), 3)
+        s.flush()
+        for x in lines:
+            x.custodyId = c.id
+            s.add(x)
+        n = len({x.personId for x in lines})
+        db.log_audit(s, "custody_edit" if cid else "custody_add",
+                     f"{'تعديل طلب' if cid else 'طلب'} عهدة رقم {c.no} ({custody.TX_TYPES[tx]['label']}) — المستلم: {who} — "
+                     f"{n} شخص — {c.requestedAmount:g} د.ك", uname())
+        return jsonify({"ok": True, "id": c.id, "no": c.no})
+
+
+@app.post("/api/custodies/<cid>/disburse")
+@require("custody.edit")
+def disburse_custody(cid):
+    """«تم الصرف» بعد اعتماد الطلب الورقي: {amount, date} (وبيتعدّل بنفس الطلب لو اتكتب غلط)."""
+    d = body()
+    amount, when = custody.num(d.get("amount")), db.parse_date(d.get("date"))
+    if amount is None or amount < 0 or not when:
+        return err("المبلغ اللي اتصرف وتاريخه مطلوبين")
+    with db.session_scope() as s:
+        c = _custody_or_404(s, cid)
+        if c.status not in custody.OPEN:
+            return err("العهدة مقفولة أو ملغاة")
+        first = c.status == "requested"
+        c.status, c.disbursedAmount, c.disbursedDate = "disbursed", amount, when
+        db.log_audit(s, "custody_edit", f"{'صرف' if first else 'تعديل صرف'} عهدة رقم {c.no}: {amount:g} د.ك بتاريخ "
+                                        f"{when.isoformat()} — المستلم: {c.custodian}", uname())
+    return jsonify({"ok": True})
+
+
+@app.put("/api/custodies/<cid>/lines/<int:lid>")
+@require("custody.edit")
+def update_custody_line(cid, lid):
+    """بند: {done, actual, receiptNo}. «تم» من غير مبلغ فعلي ← المبلغ المحدد."""
+    d = body()
+    with db.session_scope() as s:
+        c = _custody_or_404(s, cid)
+        ln = s.get(M.CustodyLine, lid)
+        if not ln or ln.custodyId != c.id:
+            return err("البند غير موجود", 404)
+        if c.status not in custody.OPEN:
+            return err("العهدة مقفولة أو ملغاة")
+        if "done" in d:
+            ln.done = bool(d["done"])
+            ln.doneDate = datetime.now().date() if ln.done else None
+            if ln.done and ln.actual is None:
+                ln.actual = ln.planned
+        if "actual" in d:
+            ln.actual = custody.num(d["actual"])
+        if "receiptNo" in d:
+            ln.receiptNo = (d.get("receiptNo") or "").strip() or None
+    return jsonify({"ok": True})
+
+
+@app.post("/api/custodies/<cid>/cancel")
+@require("custody.delete")
+def cancel_custody(cid):
+    with db.session_scope() as s:
+        c = _custody_or_404(s, cid)
+        if c.status != "requested":
+            return err("العهدة اتصرفت خلاص، مينفعش تتلغي")
+        c.status = "cancelled"
+        db.log_audit(s, "custody_delete", f"إلغاء عهدة رقم {c.no} — المستلم: {c.custodian}", uname())
+    return jsonify({"ok": True})
+
+
+@app.put("/api/fee-items/<tx>")
+@require("custody.fees")
+def save_fee_items(tx):
+    """جدول رسوم نوع طلب كامل: {items: [{id?, name, authority, amount, options, stage, active}]} بالترتيب.
+    العهد القديمة مابتتأثرش (بنودها نسخة)."""
+    if tx not in custody.TX_TYPES:
+        abort(404)
+    stages = custody.FLOWS[custody.TX_TYPES[tx]["flow"]]
+    with db.session_scope() as s:
+        existing = {f.id: f for f in s.scalars(select(M.FeeItem).where(M.FeeItem.txType == tx))}
+        keep = set()
+        for it in body().get("items") or []:
+            name = (it.get("name") or "").strip()
+            if not name:
+                continue
+            f = existing.get(it.get("id"))
+            if f is None:
+                f = M.FeeItem(id=db.new_id("fee"), txType=tx)
+                s.add(f)
+            f.position, f.name = len(keep) + 1, name
+            f.authority = (it.get("authority") or "").strip() or None
+            f.amount = custody.num(it.get("amount"))
+            opts = [custody.num(x) for x in re.split(r"[,،\s]+", str(it.get("options") or "")) if x.strip()]
+            f.options = ",".join(f"{x:g}" for x in opts if x is not None) or None
+            f.stage = it.get("stage") if it.get("stage") in stages else None
+            f.active = bool(it.get("active", True))
+            keep.add(f.id)
+        for fid, f in existing.items():
+            if fid not in keep:
+                s.delete(f)
+        db.log_audit(s, "custody_fees", f"تعديل جدول رسوم «{custody.TX_TYPES[tx]['label']}» ({len(keep)} بند)", uname())
+    return jsonify({"ok": True})
 
 
 # ---------------------------------------------------------------------------

@@ -14,6 +14,7 @@ const VIEWS = [
   { id: 'recruitment', label: 'تسجيل موظف جديد',        ico: '🧭', render: () => renderRecruitment() }, // الموظف الجديد بيتضاف من هنا بس
   { id: 'employees',   label: 'الإقامات والموظفين',      ico: '👥', render: () => renderEmployees() },
   { id: 'vehicles',    label: 'السيارات',               ico: '🚗', render: () => renderVehicles() },
+  { id: 'custody',     label: 'العهد والمصروفات',        ico: '💰', render: () => renderCustody() },
   { id: 'contract',    label: 'عقد العمل',              ico: '📄', render: () => renderContractView() },
   { id: 'companylog',  label: 'السجل التاريخي والتدقيق', ico: '🗂️', render: () => renderCompanyLog() },
 ];
@@ -201,7 +202,8 @@ const PERM_KEYS = [
   'sensitive.salary', 'sensitive.bank', 'sensitive.documents', 'system.import', 'system.backup', 'contract.sign', 'scope.all', 'admin',
 ];
 const VIEW_PERM = { employees: 'employees.view', companies: 'companies.view|costcenters.view', vehicles: 'vehicles.view',
-  contract: 'contract.view employees.view sensitive.salary', recruitment: 'recruitment.view', companylog: 'companylog.view' };
+  contract: 'contract.view employees.view sensitive.salary', recruitment: 'recruitment.view', companylog: 'companylog.view',
+  custody: 'custody.view' };
 function can(key) {
   const m = STATE && STATE.me;
   if (!m) return false;
@@ -508,7 +510,7 @@ function openReportWindow({ title, subtitle = '', company = null, meta = [], cri
       ${criteria ? `<div class="rpt-criteria"><b>${esc(t('معايير التقرير'))}:</b> ${criteria}</div>` : ''}
       ${summary.length ? `<div class="rpt-summary">${summary.map(([v, l]) => `<div><b>${esc(v)}</b><span>${esc(l)}</span></div>`).join('')}</div>` : ''}
       ${body}
-      ${sign ? `<div class="rpt-sign"><div>${esc(t('أعده'))}</div><div>${esc(t('راجعه'))}</div><div>${esc(t('اعتمده'))}</div></div>` : ''}
+      ${sign ? `<div class="rpt-sign">${(Array.isArray(sign) ? sign : [t('أعده'), t('راجعه'), t('اعتمده')]).map(x => `<div>${esc(x)}</div>`).join('')}</div>` : ''}
       <div class="rpt-end">— ${esc(t('نهاية التقرير'))} —</div></div></body></html>`);
   w.document.close();
 }
@@ -598,6 +600,7 @@ let UI = Object.assign({
   log: { tab: 'history', company: '', category: '', q: '' },
   vehicles: { q: '' },
   co: { tab: '', projQ: '', projCompany: '' },
+  custody: { tab: 'list', q: '', status: '', type: '', custodian: '' },
 }, lsJson('mv_uiState', {}));
 const saveUiStateToLocalStorage = debounce(() => lsSet('mv_uiState', JSON.stringify(UI)), 300);
 

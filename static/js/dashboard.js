@@ -23,7 +23,7 @@ function goEmployees(filters) {
 }
 
 const DB_TIER_COLORS = { expired: 'var(--red)', d30: 'var(--orange)', d60: 'var(--yellow)', d90: 'var(--green)', ok: 'var(--blue)', none: 'color-mix(in srgb, var(--grey) 38%, var(--surface))' };
-const DB_AUDIT_ICONS = { employee: '👤', company: '🏢', candidate: '🧭', contract: '📄', vehicle: '🚗', backup: '💾' };
+const DB_AUDIT_ICONS = { employee: '👤', company: '🏢', candidate: '🧭', contract: '📄', vehicle: '🚗', custody: '💰', backup: '💾' };
 
 /** سهم «روح لـ» حسب اتجاه اللغة */
 function dbArrow() { return LANG === 'en' ? '→' : '←'; }

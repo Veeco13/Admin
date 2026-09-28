@@ -25,6 +25,7 @@ MODULES = [
     ("costcenters", "مراكز التكلفة", ("view", "edit", "delete")),
     ("recruitment", "الاستقدام والتوظيف", ("view", "edit", "delete")),
     ("contract", "عقود العمل والقوالب", ("view", "edit")),
+    ("custody", "العهد والمصروفات", ("view", "edit", "delete")),
     ("companylog", "السجل التاريخي والتدقيق", ("view",)),
 ]
 ACTION_LABELS = {"view": "عرض", "edit": "إضافة وتعديل", "delete": "حذف"}
@@ -41,6 +42,7 @@ SYSTEM = [
     ("system.import", "استيراد الموظفين من Excel/CSV"),
     ("system.backup", "تنزيل نسخة احتياطية كاملة"),
     ("contract.sign", "توقيعات المفوّضين والموظفين"),
+    ("custody.fees", "تعديل جدول رسوم المعاملات"),
 ]
 
 ALL_KEYS = ([f"{m}.{a}" for m, _, acts in MODULES for a in acts]

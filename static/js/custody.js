@@ -386,14 +386,3 @@ function openFeeItemsModal(tx = 'renewal') {
   };
   load();
 }
-
-/** بطاقة الموظف: عهده (المستندات والتواريخ) */
-function custodyPersonHtml(kind, id) {
-  if (!can('custody.view')) return '';
-  const rows = (STATE.custodies || []).filter(c => c.status !== 'cancelled')
-    .map(c => ({ c, ls: (c.lines || []).filter(l => l.personKind === kind && l.personId === id) })).filter(x => x.ls.length);
-  if (!rows.length) return '';
-  return `<h4>💰 ${t('العهد')}</h4><table class="data"><thead><tr><th>${t('العهدة')}</th><th>${t('النوع')}</th><th>${t('المستلم')}</th><th>${t('البنود')}</th><th>${t('المبلغ')}</th><th>${t('الحالة')}</th></tr></thead><tbody>
-    ${rows.map(({ c, ls }) => `<tr class="clickable" data-cu="${c.id}"><td class="num">${esc(custodyNo(c))}</td><td>${esc(custodyTypeLabel(c.txType))}</td><td>${esc(c.custodian)}</td>
-      <td>${ls.filter(l => l.done).length}/${ls.length}</td><td class="num">${fmtMoney(sum(ls.map(l => (l.done ? custodyLineAmount(l) : l.planned || 0))))}</td><td>${custodyStatusChip(c.status)}</td></tr>`).join('')}</tbody></table>`;
-}

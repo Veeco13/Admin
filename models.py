@@ -369,3 +369,61 @@ ALL_MODELS = [Meta, Role, User, Company, UserCompany, Project, CostCenter, UserC
               EmployeeTimeline]
 # جداول الحسابات والصلاحيات ← بتتعامل مع بعض في النسخ الاحتياطي (include_users)
 AUTH_MODELS = (Role, User, UserCompany, UserCostCenter)
+
+
+# ---------------------------------------------------------------------------
+# العهد والمصروفات (custody.py)
+# ---------------------------------------------------------------------------
+class FeeItem(Base):
+    """جدول رسوم المعاملات: بند لكل إجراء في كل نوع طلب (بيتعدّل من الشاشة)."""
+    __tablename__ = "fee_items"
+    id: Mapped[str] = col("id", ID, primary_key=True)
+    txType: Mapped[str] = col("tx_type", String(30), nullable=False, index=True)   # custody.TX_TYPES
+    position: Mapped[int] = col("position", Integer, nullable=False, default=0)
+    name: Mapped[str] = col("name", NAME, nullable=False)
+    authority: Mapped[Optional[str]] = col("authority", NAME)                     # الجهة
+    amount: Mapped[Optional[float]] = col("amount", Float)                        # فاضي = مبلغ مفتوح لكل شخص
+    options: Mapped[Optional[str]] = col("options", SHORT)                        # «60,260,360,460»
+    stage: Mapped[Optional[str]] = col("stage", String(60))                       # المرحلة اللي بتعلّم البند «تم»
+    active: Mapped[bool] = col("active", Boolean, nullable=False, default=True)
+
+
+class Custody(Base):
+    __tablename__ = "custodies"
+    id: Mapped[str] = col("id", ID, primary_key=True)
+    no: Mapped[int] = col("no", Integer, nullable=False, unique=True)              # رقم العهدة للعرض والطباعة
+    txType: Mapped[str] = col("tx_type", String(30), nullable=False)
+    custodian: Mapped[str] = col("custodian", NAME, nullable=False)               # المستلم (أي اسم)
+    companyId: Mapped[Optional[str]] = col("company_id", ID, fk("companies.id"))  # رأس الطباعة (اختياري)
+    status: Mapped[str] = col("status", String(20), nullable=False, default="requested")   # requested | disbursed | closed | cancelled
+    requestDate: Mapped[Optional[date]] = col("request_date", Date)
+    requestedAmount: Mapped[Optional[float]] = col("requested_amount", Float)
+    disbursedAmount: Mapped[Optional[float]] = col("disbursed_amount", Float)
+    disbursedDate: Mapped[Optional[date]] = col("disbursed_date", Date)
+    closedDate: Mapped[Optional[date]] = col("closed_date", Date)
+    notes: Mapped[Optional[str]] = col("notes", TEXT)
+    createdBy: Mapped[Optional[str]] = col("created_by", NAME)
+    createdAt: Mapped[Optional[datetime]] = col("created_at", DateTime)
+
+
+class CustodyLine(Base):
+    """بند في العهدة لشخص: نسخة من الاسم ومركز التكلفة والشركة والبند وقت الطلب."""
+    __tablename__ = "custody_lines"
+    id: Mapped[int] = col("id", Integer, primary_key=True, autoincrement=True)
+    custodyId: Mapped[str] = col("custody_id", ID, fk("custodies.id"), nullable=False, index=True)
+    personKind: Mapped[str] = col("person_kind", String(20), nullable=False)       # employee | candidate
+    personId: Mapped[str] = col("person_id", ID, nullable=False, index=True)       # الرقم المدني أو رقم المترشّح
+    personName: Mapped[Optional[str]] = col("person_name", NAME)
+    civilId: Mapped[Optional[str]] = col("civil_id", ID)
+    costCenter: Mapped[Optional[str]] = col("cost_center", NAME)
+    companyId: Mapped[Optional[str]] = col("company_id", ID)
+    feeItemId: Mapped[Optional[str]] = col("fee_item_id", ID)
+    itemName: Mapped[Optional[str]] = col("item_name", NAME)
+    authority: Mapped[Optional[str]] = col("authority", NAME)
+    stage: Mapped[Optional[str]] = col("stage", String(60))
+    position: Mapped[int] = col("position", Integer, nullable=False, default=0)
+    planned: Mapped[Optional[float]] = col("planned", Float)                      # المبلغ المحدد وقت الطلب
+    actual: Mapped[Optional[float]] = col("actual", Float)                        # المصروف فعلًا
+    done: Mapped[bool] = col("done", Boolean, nullable=False, default=False)
+    doneDate: Mapped[Optional[date]] = col("done_date", Date)
+    receiptNo: Mapped[Optional[str]] = col("receipt_no", SHORT)

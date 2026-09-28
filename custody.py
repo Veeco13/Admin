@@ -76,11 +76,6 @@ def candidate_to_employee(s, cand_id, civil):
         .update({"personKind": "employee", "personId": civil, "civilId": civil}, synchronize_session=False)
 
 
-def rename_employee(s, old_id, new_id):
-    s.query(M.CustodyLine).filter(M.CustodyLine.personKind == "employee", M.CustodyLine.personId == old_id) \
-        .update({"personId": new_id, "civilId": new_id}, synchronize_session=False)
-
-
 def build_lines(s, tx, persons, ctx):
     """persons = [{id, items: {رقم البند: المبلغ}}] (البند اللي مش موجود = الشخص مش محتاجه) ← (بنود، رسالة خطأ)."""
     kind = TX_TYPES[tx]["kind"]

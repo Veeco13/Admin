@@ -264,6 +264,24 @@ table.data tr.sel td { background: var(--primary-soft); }
 .rb-nat { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 6px; }
 .rb-nat-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
 .rb-nat-list { display: flex; flex-wrap: wrap; gap: 5px; max-height: 98px; overflow: auto; padding: 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+/* ---------- العهد والمصروفات ---------- */
+.cu-kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+.cu-kpi { padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; }
+.cu-kpi b { font-size: 20px; }
+.cu-kpi span { font-size: 12px; color: var(--muted); }
+.cu-h { margin: 14px 0 6px; font-size: 13px; color: var(--primary); }
+.cu-pick-list { max-height: 230px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; margin-top: 6px; }
+.cu-pick-list label { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-bottom: 1px solid var(--border); cursor: pointer; font-size: 13px; }
+.cu-pick-list label:last-child { border-bottom: 0; }
+.cu-pick-list label.on { background: var(--primary-soft); }
+table.cu-matrix th, table.cu-matrix td { white-space: nowrap; }
+table.cu-matrix .cu-cell input[type=checkbox] { margin-inline-end: 4px; vertical-align: middle; }
+table.cu-matrix .cu-cell input[type=number], table.cu-matrix .cu-cell select { width: 72px; }
+table.cu-matrix .cu-cell.off { opacity: .45; }
+table.cu-lines tr.cu-person td { background: var(--surface-2); font-weight: 600; }
+table.cu-lines input[type=number] { width: 84px; }
+table.cu-lines input.cu-receipt { width: 110px; }
+.fee-tbl input:not([type=checkbox]), .fee-tbl select { width: 100%; min-width: 70px; }
 .imp-miss { max-height: 180px; overflow: auto; margin: 6px 0; padding-inline-start: 20px; }
 .imp-list { max-height: 340px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; padding: 6px 10px; margin: 6px 0; }
 .imp-emp { padding: 6px 0; border-bottom: 1px dashed var(--border); }

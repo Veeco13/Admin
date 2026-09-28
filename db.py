@@ -371,6 +371,8 @@ def rename_employee(s, old_id, new_id_):
     for model, attr in ((M.EmployeeAffiliation, "employeeId"), (M.EmployeeTimeline, "employeeId"),
                         (M.EmployeeFile, "employeeId"), (M.Vehicle, "driverId")):
         s.query(model).filter(getattr(model, attr) == old_id).update({attr: new_id_}, synchronize_session=False)
+    s.query(M.CustodyLine).filter(M.CustodyLine.personKind == "employee", M.CustodyLine.personId == old_id) \
+        .update({"personId": new_id_, "civilId": new_id_}, synchronize_session=False)
     s.flush()
     s.delete(old)
     s.flush()
