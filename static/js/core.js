@@ -10,11 +10,11 @@ let VIEW_ARGS = {};        // وسائط تُمرَّر عند الانتقال 
 
 const VIEWS = [
   { id: 'dashboard',   label: 'الصفحة الرئيسية',        ico: '🏠', render: () => renderDashboard() },
-  { id: 'employees',   label: 'الإقامات والموظفين',      ico: '👥', render: () => renderEmployees() },
   { id: 'companies',   label: 'الشركات',                ico: '🏢', render: () => renderCompanies() },   // + المشاريع ومراكز التكلفة
+  { id: 'recruitment', label: 'تسجيل موظف جديد',        ico: '🧭', render: () => renderRecruitment() }, // الموظف الجديد بيتضاف من هنا بس
+  { id: 'employees',   label: 'الإقامات والموظفين',      ico: '👥', render: () => renderEmployees() },
   { id: 'vehicles',    label: 'السيارات',               ico: '🚗', render: () => renderVehicles() },
   { id: 'contract',    label: 'عقد العمل',              ico: '📄', render: () => renderContractView() },
-  { id: 'recruitment', label: 'الاستقدام والتوظيف',      ico: '🧭', render: () => renderRecruitment() },
   { id: 'companylog',  label: 'السجل التاريخي والتدقيق', ico: '🗂️', render: () => renderCompanyLog() },
 ];
 
@@ -76,6 +76,17 @@ const RECRUIT_STAGES_OUTSIDE = [
   { id: 'civil_id_issue',        label: 'إصدار البطاقة المدنية' },
   { id: 'all_completed',         label: '✅ تم إنجاز جميع الإجراءات', final: true },
 ];
+// العمالة الوطنية (الجنسية كويتي / معاملة كويتية ← المصدر «عمالة وطنية» تلقائيًا). أول مرحلة: عقد العمل
+// واستمارة 103 واستمارة العلاوة الاجتماعية للطباعة والتوقيع
+const RECRUIT_STAGES_KUWAITI = [
+  { id: 'kw_forms',         label: 'طباعة النماذج والتوقيع عليها' },
+  { id: 'kw_pifss',         label: 'التسجيل في التأمينات الاجتماعية' },
+  { id: 'kw_work_permit',   label: 'استخراج إذن العمل' },
+  { id: 'kw_labor_support', label: 'تسجيل دعم العمالة' },
+  { id: 'all_completed',    label: '✅ تم إنجاز جميع الإجراءات', final: true },
+];
+const RECRUIT_SOURCES = { outside: ['استقدام من الخارج', 'من الخارج'], internal: ['نقل داخلي', 'نقل داخلي'], kuwaiti: ['عمالة وطنية', 'عمالة وطنية'] };
+function recruitSourceLabel(src, short = false) { return t((RECRUIT_SOURCES[src] || RECRUIT_SOURCES.outside)[short ? 1 : 0]); }
 const RECRUIT_STAGES_INTERNAL = [
   { id: 'employment_contract',       label: 'عقد العمل' },
   { id: 'sponsor_approval',          label: 'موافقة الكفيل' },
@@ -663,7 +674,7 @@ function trackedAlertItems(maxDays = 90) {
     push({ kind: 'vehicle', refId: v.id, name: v.plate, what: 'دفتر السيارة', date: v.govLicenseExpiry });
   }
   for (const c of STATE.candidates) {
-    if (c.stage === 'rejected' || c.stage === 'all_completed') continue;
+    if (c.stage === 'rejected' || c.stage === 'all_completed' || c.source === 'kuwaiti') continue;
     if (c.source !== 'internal') {
       push({ kind: 'candidate', refId: c.id, name: c.name, what: 'تأشيرة المترشّح', date: c.visaExp });
       if (c.entryDate) push({ kind: 'candidate', refId: c.id, name: c.name, what: 'مهلة 60 يوم من الدخول', date: addDays(c.entryDate, 60) });

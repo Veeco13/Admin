@@ -643,20 +643,26 @@ def employee_official_form(emp_id, form):
     return _send_pdf(out[0], out[1])
 
 
-@app.post("/api/candidates/<cand_id>/forms/driving")
+@app.post("/api/candidates/<cand_id>/forms/<form>")
 @require("recruitment.view")
-def candidate_driving_form(cand_id):
+def candidate_official_form(cand_id, form):
+    """رخصة القيادة لأي مترشّح، واستمارة 103 والعلاوة الاجتماعية للعمالة الوطنية (مع عقد العمل في أول مرحلة)."""
+    if form not in ("driving", "pifss103", "social"):
+        abort(404)
     with db.session_scope() as s:
         c = s.get(M.Candidate, cand_id)
         if not c:
             return err("المترشّح غير موجود", 404)
         if not me().record_ok(c.targetCompanyId, db.cost_center_company(s, c.costCenter), c.costCenter):
             return forbidden(OUT_OF_SCOPE)
+        if pdf_forms.FORMS[form].get("kuwaiti") and not pdf_forms.is_kuwaiti(c.nationality):
+            return err("النموذج ده للعمالة الوطنية بس (الكويتيين ومعاملة كويتية)")
         company = db.to_dict(s.get(M.Company, c.targetCompanyId)) if c.targetCompanyId else None
-        out, bad = _official_form("driving", me().strip("candidate", db.to_dict(c)), company, ("candidate", cand_id))
+        out, bad = _official_form(form, me().strip("candidate", db.employee_dict(c)), company, ("candidate", cand_id),
+                                  _form_extra(s, c.targetCompanyId))
         if bad:
             return bad
-        db.log_audit(s, "candidate_driving_form", f"نموذج رخصة قيادة ({out[2]}) للمترشّح: {c.name}", uname())
+        db.log_audit(s, f"candidate_{form}_form", f"{pdf_forms.FORMS[form]['title']} ({out[2]}) للمترشّح: {c.name}", uname())
     return _send_pdf(out[0], out[1])
 
 
@@ -1236,6 +1242,8 @@ def save_candidate(cand_id=None):
                            409, block=True)
         if d.get("stage") == "all_completed" and not (d.get("civilId") or "").strip():
             return err("لا يمكن اختيار «تم إنجاز جميع الإجراءات» قبل تسجيل الرقم المدني")
+        if "children" in d:
+            d["children"] = db.children_json(d["children"])
         if cand_id:
             c = s.get(M.Candidate, cand_id)
             if not c:
@@ -1289,6 +1297,10 @@ def convert_candidate(cand_id):
             passportExp=c.passportExp, costCenter=c.costCenter, gender=c.gender, unifiedNumber=c.unifiedNumber,
             bloodType=c.bloodType, addressArea=c.addressArea, addressBlock=c.addressBlock, addressStreet=c.addressStreet,
             addressHouse=c.addressHouse, addressApartment=c.addressApartment, homePhone=c.homePhone,
+            email=c.email, maritalStatus=c.maritalStatus, qualification=c.qualification, specialization=c.specialization,
+            naturalizationDate=c.naturalizationDate, citizenshipArticle=c.citizenshipArticle, nationalityNo=c.nationalityNo,
+            studyInstitution=c.studyInstitution, studyAbroad=c.studyAbroad, studyStartDate=c.studyStartDate,
+            children=c.children,
             employmentStatus="pending_completion", dateOfHire=datetime.now().date(),
             lastUpdated=db.now(), lastUpdatedBy=uname()))
         s.flush()

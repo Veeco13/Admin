@@ -344,6 +344,7 @@ def children_json(v):
 
 
 def employee_dict(e):
+    """موظف أو مترشّح ← dict والأبناء قائمة."""
     d = to_dict(e)
     d["children"] = children_list(d.get("children"))
     return d
@@ -424,7 +425,7 @@ def dump_state(s, ctx=None):
     def in_scope(cid):
         return company_ok(cid) if cid else all_companies
 
-    candidates = [strip("candidate", to_dict(x)) for x in s.scalars(select(M.Candidate)
+    candidates = [strip("candidate", employee_dict(x)) for x in s.scalars(select(M.Candidate)
                                                                     .order_by(M.Candidate.appliedDate.desc()))
                   if not ctx or ctx.record_ok(x.targetCompanyId, cc_co.get(x.costCenter), x.costCenter)] \
         if can("recruitment.view") else []

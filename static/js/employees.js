@@ -84,7 +84,7 @@ function renderEmployees() {
   viewRoot().innerHTML = `
     <div class="page-head"><div><h1>مركز إدارة الإقامات والموظفين</h1><div class="sub">${list.length} ${t('من')} ${scopedEmployees().length} ${t('موظف')}</div></div>
       <div class="actions">
-        <button class="btn primary write-only" data-p="employees.edit" id="e-add">➕ إضافة موظف</button>
+
         <button class="btn write-only" data-p="employees.edit system.import sensitive.salary sensitive.bank sensitive.documents scope.all" id="e-import">📥 استيراد Excel/CSV</button>
         <button class="btn" id="e-export">📤 تصدير CSV</button>
         <button class="btn" id="e-print">🖨️ تقرير</button>
@@ -168,7 +168,6 @@ function renderEmployees() {
     }
     openProfileCard(tr.dataset.id);
   });
-  $('#e-add').onclick = () => openEmployeeModal(null);
   $('#e-import').onclick = handleImportCsv;
   $('#e-export').onclick = () => exportEmployeesCsv(list);
   $('#e-print').onclick = () => openEmployeeReportModal();

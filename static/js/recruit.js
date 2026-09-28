@@ -1,10 +1,11 @@
 /* =====================================================================
-   RECRUITMENT — الاستقدام والتوظيف
+   RECRUITMENT — تسجيل موظف جديد (الاستقدام والتوظيف): الموظف الجديد بيتضاف من هنا بس
+   المصادر: استقدام من الخارج / نقل داخلي / عمالة وطنية (بتتختار تلقائيًا للجنسية الكويتية)
    ===================================================================== */
 'use strict';
 
 function recruitStagesForSource(source) {
-  return (source === 'internal' ? RECRUIT_STAGES_INTERNAL : RECRUIT_STAGES_OUTSIDE).concat([REJECTED_STAGE]);
+  return ({ internal: RECRUIT_STAGES_INTERNAL, kuwaiti: RECRUIT_STAGES_KUWAITI }[source] || RECRUIT_STAGES_OUTSIDE).concat([REJECTED_STAGE]);
 }
 function recruitStageInfo(source, stage) {
   return recruitStagesForSource(source).find(s => s.id === stage) || null;
@@ -21,6 +22,8 @@ function migrateRecruitStages(c) {
 }
 /* ---------- عقد العمل (بيظهر في مرحلة «عقد العمل» بس) ---------- */
 const CANDIDATE_CONTRACT_STAGE = 'employment_contract';
+const CANDIDATE_KW_FORMS_STAGE = 'kw_forms';        // العمالة الوطنية: العقد + استمارة 103 + استمارة العلاوة
+function candidateContractStage(stage) { return stage === CANDIDATE_CONTRACT_STAGE || stage === CANDIDATE_KW_FORMS_STAGE; }
 // بيانات المترشّح اللي العقد محتاجها — الباقي (الشركة بالإنجليزي، المفوّض، …) بيتفحص في نافذة العقد
 const CANDIDATE_CONTRACT_FIELDS = [['civilId', 'الرقم المدني'], ['name', 'الاسم'], ['nameEn', 'الاسم بالإنجليزي'], ['nationality', 'الجنسية'],
   ['profession', 'المهنة'], ['salary', 'الراتب'], ['targetCompanyId', 'الشركة المستهدفة']];
@@ -33,7 +36,7 @@ function candidateContractBlockMsg(miss) {
 
 function candidateDeadline(c) {
   // مهلة 60 يوم من تاريخ الدخول (استقدام من الخارج)
-  if (c.source === 'internal' || !c.entryDate) return null;
+  if (c.source === 'internal' || c.source === 'kuwaiti' || !c.entryDate) return null;
   return addDays(c.entryDate, 60);
 }
 
@@ -44,7 +47,7 @@ function renderRecruitFunnelCard() {
       ${recruitStagesForSource(source).map(s => { const n = list.filter(c => c.stage === s.id).length; return `<div class="st ${s.final ? 'done' : ''} ${s.rejected ? 'rej' : ''}" data-funnel="${source}|${s.id}"><span>${esc(t(s.label))}</span><b>${n}</b></div>`; }).join('')}
     </div></div>`;
   };
-  return `<div class="card"><h3>🧭 مراحل الاستقدام</h3><div class="row" style="align-items:flex-start;gap:14px">${block('outside', 'استقدام من الخارج')}${block('internal', 'نقل داخلي')}</div></div>`;
+  return `<div class="card"><h3>🧭 ${t('مراحل التسجيل')}</h3><div class="row" style="align-items:flex-start;gap:14px">${Object.keys(RECRUIT_SOURCES).map(k => block(k, RECRUIT_SOURCES[k][0])).join('')}</div></div>`;
 }
 function bindRecruitFunnel() {
   $$('[data-funnel]').forEach(el => el.onclick = () => {
@@ -67,12 +70,13 @@ function filteredCandidates() {
 function renderRecruitment() {
   const f = UI.cand;
   const list = filteredCandidates().sort((a, b) => (b.appliedDate || '').localeCompare(a.appliedDate || ''));
-  const stageOpts = f.source ? recruitStagesForSource(f.source) : uniq([...RECRUIT_STAGES_OUTSIDE, ...RECRUIT_STAGES_INTERNAL, REJECTED_STAGE].map(s => s.id)).map(id => [...RECRUIT_STAGES_OUTSIDE, ...RECRUIT_STAGES_INTERNAL, REJECTED_STAGE].find(s => s.id === id));
-  viewRoot().innerHTML = `<div class="page-head"><div><h1>الاستقدام والتوظيف</h1><div class="sub">${STATE.candidates.length} ${t('مترشّح')}</div></div>
+  const allStages = [...RECRUIT_STAGES_OUTSIDE, ...RECRUIT_STAGES_INTERNAL, ...RECRUIT_STAGES_KUWAITI, REJECTED_STAGE];
+  const stageOpts = f.source ? recruitStagesForSource(f.source) : uniq(allStages.map(s => s.id)).map(id => allStages.find(s => s.id === id));
+  viewRoot().innerHTML = `<div class="page-head"><div><h1>${t('تسجيل موظف جديد')}</h1><div class="sub">${STATE.candidates.length} ${t('مترشّح')}</div></div>
     <div class="actions"><button class="btn primary write-only" data-p="recruitment.edit" id="c-add">➕ إضافة مترشّح</button><button class="btn" id="c-report">📊 تقرير المترشّحين</button></div></div>
     <div class="grid" style="margin-bottom:12px">${renderRecruitFunnelCard()}</div>
     <div class="filters"><input type="search" id="cf-q" placeholder="بحث بالاسم أو الجواز أو الهاتف…" value="${esc(f.q)}">
-      <select id="cf-source">${opt('', t('— كل المصادر —'), !f.source)}${opt('outside', t('استقدام من الخارج'), f.source === 'outside')}${opt('internal', t('نقل داخلي'), f.source === 'internal')}</select>
+      <select id="cf-source">${opt('', t('— كل المصادر —'), !f.source)}${Object.keys(RECRUIT_SOURCES).map(k => opt(k, recruitSourceLabel(k), f.source === k)).join('')}</select>
       <select id="cf-stage">${opt('', t('— كل المراحل —'), !f.stage)}${stageOpts.map(s => opt(s.id, t(s.label), s.id === f.stage)).join('')}</select>
       <select id="cf-co">${companyOptions(f.company, '— كل الشركات —')}</select>
       <button class="btn sm ghost" id="cf-clear">✕ ${t('مسح الفلاتر')}</button></div>
@@ -83,10 +87,10 @@ function renderRecruitment() {
       const idx = recruitStageIndex(c) + 1;
       const dl = candidateDeadline(c);
       return `<tr class="clickable" data-id="${c.id}"><td><b>${esc(c.name)}</b>${c.nameEn ? `<div class="small muted">${esc(c.nameEn)}</div>` : ''}</td><td>${esc(c.nationality || '')}</td><td>${esc(c.profession || '')}</td>
-        <td><span class="chip">${c.source === 'internal' ? t('نقل داخلي') : t('من الخارج')}</span></td>
-        <td>${st ? `<span class="chip ${st.final ? 'on' : ''}" style="${st.rejected ? 'background:var(--red-soft);color:var(--red)' : ''}">${esc(t(st.label))}</span>${c.stage === CANDIDATE_CONTRACT_STAGE && canCandidateContract() ? ` <button class="btn sm ghost" data-contract="${c.id}" title="${esc(t('طباعة عقد العمل'))}">📄</button>` : ''}${!st.rejected ? `<div class="progress" style="width:90px;margin-top:3px"><i style="width:${100 * idx / steps}%"></i></div>` : ''}` : '—'}</td>
+        <td><span class="chip">${recruitSourceLabel(c.source, true)}</span></td>
+        <td>${st ? `<span class="chip ${st.final ? 'on' : ''}" style="${st.rejected ? 'background:var(--red-soft);color:var(--red)' : ''}">${esc(t(st.label))}</span>${candidateContractStage(c.stage) && canCandidateContract() ? ` <button class="btn sm ghost" data-contract="${c.id}" title="${esc(t('طباعة عقد العمل'))}">📄</button>` : ''}${!st.rejected ? `<div class="progress" style="width:90px;margin-top:3px"><i style="width:${100 * idx / steps}%"></i></div>` : ''}` : '—'}</td>
         <td>${esc(companyName(c.targetCompanyId))}</td><td class="num" data-p="sensitive.salary">${c.salary ? fmtMoney(c.salary) : '—'}${c.housingAllowance ? ' 🏠' : ''}</td><td class="num small">${fmtDate(c.appliedDate)}</td>
-        <td>${c.source === 'internal' ? datePill(c.oldSponsorResidencyExp) : (dl ? datePill(dl) : datePill(c.visaExp))}</td></tr>`;
+        <td>${c.source === 'kuwaiti' ? '<span class="muted">—</span>' : c.source === 'internal' ? datePill(c.oldSponsorResidencyExp) : (dl ? datePill(dl) : datePill(c.visaExp))}</td></tr>`;
     }).join('') || `<tr><td colspan="9" class="empty">${t('لا يوجد مترشّحين')}</td></tr>`}</tbody></table></div>`;
   bindRecruitFunnel();
   const upd = p => { Object.assign(UI.cand, p); saveUiStateToLocalStorage(); render(); };
@@ -110,19 +114,19 @@ function renderRecruitment() {
 function candidatesReportRows(list) {
   return list.map(c => {
     const st = recruitStageInfo(c.source || 'outside', c.stage);
-    return { c, st: st ? t(st.label) : '—', deadline: c.source === 'internal' ? c.oldSponsorResidencyExp : (candidateDeadline(c) || c.visaExp) };
+    return { c, st: st ? t(st.label) : '—', deadline: c.source === 'kuwaiti' ? null : c.source === 'internal' ? c.oldSponsorResidencyExp : (candidateDeadline(c) || c.visaExp) };
   });
 }
 function renderCandidatesReportModal() {
   const list = filteredCandidates();
   const rows = candidatesReportRows(list);
-  const bySource = { outside: list.filter(c => c.source !== 'internal').length, internal: list.filter(c => c.source === 'internal').length };
+  const bySource = k => list.filter(c => (c.source || 'outside') === k).length;
   const m = openModal({
     title: '📊 ' + t('تقرير المترشّحين'), size: 'wide',
-    body: `<div class="row" style="margin-bottom:10px"><span class="chip">${t('الإجمالي')}: ${list.length}</span><span class="chip">${t('من الخارج')}: ${bySource.outside}</span><span class="chip">${t('نقل داخلي')}: ${bySource.internal}</span>
+    body: `<div class="row" style="margin-bottom:10px"><span class="chip">${t('الإجمالي')}: ${list.length}</span>${Object.keys(RECRUIT_SOURCES).map(k => `<span class="chip">${recruitSourceLabel(k, true)}: ${bySource(k)}</span>`).join('')}
       <span class="chip" data-p="sensitive.salary">${t('إجمالي الرواتب المتفق عليها')}: ${fmtMoney(sum(list.filter(c => c.stage !== 'rejected').map(c => c.salary)))}</span></div>
       <div class="table-wrap"><table class="data"><thead><tr><th>#</th><th>${t('الاسم')}</th><th>${t('الجنسية')}</th><th>${t('المهنة')}</th><th>${t('المصدر')}</th><th>${t('المرحلة')}</th><th>${t('الشركة المستهدفة')}</th><th data-p="sensitive.salary">${t('الراتب')}</th><th>${t('بدل السكن')}</th><th>${t('المهلة')}</th></tr></thead><tbody>
-      ${rows.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.c.name)}</td><td>${esc(r.c.nationality || '')}</td><td>${esc(r.c.profession || '')}</td><td>${r.c.source === 'internal' ? t('نقل داخلي') : t('من الخارج')}</td><td>${esc(r.st)}</td><td>${esc(companyName(r.c.targetCompanyId))}</td><td class="num" data-p="sensitive.salary">${r.c.salary ? fmtMoney(r.c.salary) : '—'}</td><td>${r.c.housingAllowance ? '✓' : ''}</td><td>${datePill(r.deadline)}</td></tr>`).join('')}
+      ${rows.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.c.name)}</td><td>${esc(r.c.nationality || '')}</td><td>${esc(r.c.profession || '')}</td><td>${recruitSourceLabel(r.c.source, true)}</td><td>${esc(r.st)}</td><td>${esc(companyName(r.c.targetCompanyId))}</td><td class="num" data-p="sensitive.salary">${r.c.salary ? fmtMoney(r.c.salary) : '—'}</td><td>${r.c.housingAllowance ? '✓' : ''}</td><td>${datePill(r.deadline)}</td></tr>`).join('')}
       </tbody></table></div>`,
     foot: `<button class="btn primary" data-print>🖨️ طباعة</button><button class="btn" data-csv>📤 CSV</button><button class="btn" data-close>إغلاق</button>`,
   });
@@ -135,18 +139,18 @@ function printCandidatesReport(rows) {
   const f = UI.cand, coIds = uniq(rows.map(r => r.c.targetCompanyId));
   const company = (f.company && IDX.company[f.company]) || (coIds.length === 1 ? IDX.company[coIds[0]] : null);
   const sal = can('sensitive.salary');
-  const crit = [f.source && `${t('المصدر')}: ${t(f.source === 'internal' ? 'نقل داخلي' : 'استقدام من الخارج')}`,
-    f.stage && `${t('المرحلة')}: ${esc(t((recruitStageInfo(f.source || 'outside', f.stage) || recruitStageInfo('internal', f.stage) || {}).label || f.stage))}`,
+  const crit = [f.source && `${t('المصدر')}: ${recruitSourceLabel(f.source)}`,
+    f.stage && `${t('المرحلة')}: ${esc(t((recruitStageInfo(f.source || 'outside', f.stage) || recruitStageInfo('internal', f.stage) || recruitStageInfo('kuwaiti', f.stage) || {}).label || f.stage))}`,
     f.company && `${t('الشركة المستهدفة')}: ${esc(companyName(f.company))}`, f.q && `${t('بحث')}: «${esc(f.q)}»`].filter(Boolean).join(' · ');
   const active = rows.filter(r => r.c.stage !== 'rejected');
   const table = `<table class="rpt"><thead><tr><th>#</th><th class="txt">${t('الاسم')}</th><th>${t('الجنسية')}</th><th>${t('المهنة')}</th><th>${t('المصدر')}</th><th>${t('المرحلة')}</th><th>${t('الشركة المستهدفة')}</th>
       ${sal ? `<th class="num">${t('الراتب')} (${t('د.ك')})</th>` : ''}<th>${t('بدل السكن')}</th><th>${t('المهلة')}</th></tr></thead>
     <tbody>${rows.map((r, i) => `<tr class="${i % 2 ? 'z' : ''}"><td class="idx">${i + 1}</td><td class="txt">${esc(r.c.name)}</td><td>${esc(r.c.nationality || '')}</td><td>${esc(r.c.profession || '')}</td>
-      <td>${r.c.source === 'internal' ? t('نقل داخلي') : t('من الخارج')}</td><td>${esc(r.st)}</td><td>${esc(companyName(r.c.targetCompanyId))}</td>
+      <td>${recruitSourceLabel(r.c.source, true)}</td><td>${esc(r.st)}</td><td>${esc(companyName(r.c.targetCompanyId))}</td>
       ${sal ? `<td class="num">${r.c.salary ? rptNum(r.c.salary) : ''}</td>` : ''}<td>${r.c.housingAllowance ? '✓' : ''}</td><td>${r.deadline ? datePill(r.deadline) : ''}</td></tr>`).join('')}</tbody>
     ${sal ? `<tfoot><tr><td></td><td colspan="6">${t('إجمالي الرواتب المتفق عليها')} (${active.length})</td><td class="num">${rptNum(sum(active.map(r => r.c.salary)))}</td><td></td><td></td></tr></tfoot>` : ''}</table>`;
   openReportWindow({ title: t('تقرير المترشّحين'), company, criteria: crit, body: table, landscape: true,
-    summary: [[rows.length, t('الإجمالي')], [rows.filter(r => r.c.source !== 'internal').length, t('من الخارج')], [rows.filter(r => r.c.source === 'internal').length, t('نقل داخلي')],
+    summary: [[rows.length, t('الإجمالي')], ...Object.keys(RECRUIT_SOURCES).map(k => [rows.filter(r => (r.c.source || 'outside') === k).length, recruitSourceLabel(k, true)]),
       [rows.filter(r => r.c.stage === 'rejected').length, t('مرفوض')]],
     meta: [[t('عدد السجلات'), String(rows.length)]] });
 }
@@ -163,11 +167,14 @@ function openCandidateModal(id) {
     title: isNew ? t('إضافة مترشّح') : t('تعديل مترشّح') + ': ' + esc(c.name), size: 'wide',
     body: `${draftNote}<form class="form" id="cand-form" autocomplete="off">
       <h4>المصدر والمرحلة</h4>
-      <label>${t('المصدر')}<select name="source">${opt('outside', t('استقدام من الخارج'), c.source !== 'internal')}${opt('internal', t('نقل داخلي'), c.source === 'internal')}</select></label>
+      <label>${t('المصدر')}<select name="source">${Object.keys(RECRUIT_SOURCES).map(k => opt(k, recruitSourceLabel(k), (c.source || 'outside') === k)).join('')}</select></label>
       <label>${t('مرحلة الإجراءات')}<select name="stage" id="cand-stage"></select></label>
       <div class="notice" id="cand-contract" style="grid-column:1/-1" hidden>
-        <div class="row"><b>📄 ${t('عقد العمل')}</b><span class="spacer"></span><button type="button" class="btn primary sm" id="cand-contract-go">🖨️ ${t('طباعة عقد العمل')}</button></div>
-        <div class="small" id="cand-contract-miss" style="margin-top:4px"></div></div>
+        <div class="row" id="cand-contract-row"><b>📄 ${t('عقد العمل')}</b><span class="spacer"></span><button type="button" class="btn primary sm" id="cand-contract-go">🖨️ ${t('طباعة عقد العمل')}</button></div>
+        <div class="small" id="cand-contract-miss" style="margin-top:4px"></div>
+        <div class="row" id="cand-kw-forms" style="margin-top:8px" hidden><b>🇰🇼 ${t('نماذج العمالة الوطنية')}</b><span class="spacer"></span>
+          <button type="button" class="btn sm" data-kwform="pifss103">${t('استمارة 103 (التأمينات)')}</button>
+          <button type="button" class="btn sm" data-kwform="social">${t('استمارة العلاوة الاجتماعية')}</button></div></div>
       <label>${t('تاريخ التقديم')}<input type="date" name="appliedDate" value="${v('appliedDate')}"></label>
       <label>${t('الشركة المستهدفة')}<select name="targetCompanyId">${companyOptions(c.targetCompanyId)}</select></label>
       <label>${t('مركز التكلفة')}<select name="costCenter">${costCenterOptions(c.costCenter)}</select></label>
@@ -179,7 +186,9 @@ function openCandidateModal(id) {
       <label>${t('الجنس')}<select name="gender">${opt('', '—', !c.gender)}${Object.entries(GENDER_LABELS).map(([k, l]) => opt(k, t(l), k === c.gender)).join('')}</select></label>
       <label>${t('المهنة')}<input name="profession" value="${v('profession')}" list="dl-prof2"></label>
       <label>${t('الهاتف')}<input name="phone" value="${v('phone')}" dir="ltr"></label>
+      <label>${t('البريد الإلكتروني')}<input type="email" name="email" value="${v('email')}" dir="ltr"></label>
       ${personExtraInputs(c)}
+      <div data-src="kuwaiti" style="grid-column:1/-1">${kuwaitiInputs(c)}</div>
       ${hiddenField('candidate', 'salary') ? '' : `<label>${t('الراتب المتفق عليه (د.ك)')}<input type="number" step="0.001" min="0" name="salary" value="${v('salary')}"></label>`}
       <label class="check"><input type="checkbox" name="housingAllowance" ${c.housingAllowance ? 'checked' : ''}> 🏠 ${t('بدل السكن')}</label>
       <h4>الجواز</h4>
@@ -202,10 +211,13 @@ function openCandidateModal(id) {
     foot: `${!isNew ? '<button class="btn danger write-only" data-p="recruitment.delete" data-del>🗑️ حذف</button><button class="btn" data-driving>🚗 نموذج رخصة القيادة</button><span class="spacer"></span>' : ''}<button class="btn primary write-only" data-p="recruitment.edit" data-save>💾 حفظ</button><button class="btn" data-close>إلغاء</button>`,
   });
   const form = $('#cand-form', m.el);
-  const srcSel = $('[name="source"]', form), stSel = $('#cand-stage', form);
+  const srcSel = $('[name="source"]', form), stSel = $('#cand-stage', form), natIn = $('[name="nationality"]', form);
+  const values = () => Object.assign(formValues(form), { children: collectKidRows(form) });
   const syncSource = () => {
     const src = srcSel.value;
     const cur = stSel.value || c.stage;
+    const kwOk = isKuwaitiStaff({ nationality: natIn.value });
+    srcSel.querySelector('option[value="kuwaiti"]').disabled = !kwOk && src !== 'kuwaiti';
     stSel.innerHTML = recruitStagesForSource(src).filter(s => s.id !== 'all_completed' || can('employees.edit') || s.id === cur).map((s, i) => opt(s.id, `${s.rejected ? '' : (i + 1) + '. '}${t(s.label)}`, s.id === cur)).join('');
     $$('[data-src]', form).forEach(el => el.hidden = el.dataset.src !== src);
     updDeadline();
@@ -214,8 +226,11 @@ function openCandidateModal(id) {
   // صندوق عقد العمل: بيظهر أول ما تختار المرحلة، وبيقول الناقص وإنت بتكتب
   const contractBox = $('#cand-contract', form);
   const syncContract = () => {
-    contractBox.hidden = !(canCandidateContract() && stSel.value === CANDIDATE_CONTRACT_STAGE);
-    if (contractBox.hidden) return;
+    const kwForms = stSel.value === CANDIDATE_KW_FORMS_STAGE;
+    contractBox.hidden = !((canCandidateContract() && candidateContractStage(stSel.value)) || kwForms);
+    $('#cand-kw-forms', form).hidden = !kwForms;
+    $('#cand-contract-row', form).hidden = $('#cand-contract-miss', form).hidden = !canCandidateContract();
+    if (contractBox.hidden || !canCandidateContract()) return;
     const miss = candidateContractMissing(formValues(form));
     $('#cand-contract-miss', form).innerHTML = miss.length
       ? `<span style="color:var(--red)">⚠️ ${esc(candidateContractBlockMsg(miss))}</span>`
@@ -228,14 +243,25 @@ function openCandidateModal(id) {
     $('#deadline-box', form).innerHTML = ed ? `${t('آخر موعد لإنهاء الإجراءات')}: ${datePill(addDays(ed, 60))} <span class="muted">${esc(daysText(daysUntil(addDays(ed, 60))))}</span>` : '';
   };
   srcSel.onchange = syncSource;
+  // الجنسية الكويتية ← المصدر «عمالة وطنية» بمراحله، وغيرها ← يرجع «استقدام من الخارج»
+  natIn.addEventListener('input', () => {
+    const kw = isKuwaitiStaff({ nationality: natIn.value });
+    if (kw !== (srcSel.value === 'kuwaiti')) { srcSel.value = kw ? 'kuwaiti' : 'outside'; syncSource(); }
+  });
+  $('#kw-box', form).style.display = '';          // القسم ظاهر/مخفي مع المصدر (data-src)
+  bindKidRows(form);
+  $('#kid-add', form).onclick = () => {
+    const kids = collectKidRows(form, true); kids.push({});
+    $('#kids-box', form).innerHTML = renderKidRows(kids); bindKidRows(form); translateDomText($('#kids-box', form));
+  };
   $('[name="entryDate"]', form).onchange = updDeadline;
   syncSource();
   const dd = $('#drop-draft', m.el); if (dd) dd.onclick = () => { clearDraft('candidate'); m.close(); openCandidateModal(null); };
-  if (isNew) attachDraftAutosave('candidate', form, () => formValues(form));
+  if (isNew) attachDraftAutosave('candidate', form, values);
 
   // الحفظ ← رقم المترشّح، أو قيمة فاضية لو اتمنع (والتحويل لموظف بيقفل النافذة بنفسه)
   const save = async () => {
-    const d = formValues(form);
+    const d = values();
     if (!d.name) return openBlockAlert(t('الاسم مطلوب'));
     // منع التكرار (القسم 8.2): كله منع عند إضافة مترشّح
     if (d.civilId) { const x = findDuplicateCivilId(d.civilId, null); const own = STATE.candidates.find(k => k.civilId === d.civilId && k.id === id); if (x && !own) return openBlockAlert(t('الرقم المدني مسجّل بالفعل لـ') + ' ' + x); }
@@ -270,6 +296,12 @@ function openCandidateModal(id) {
     m.close();
     openCandidateContractModal(cid);
   };
+  $$('[data-kwform]', form).forEach(b => b.onclick = async () => {
+    const cid = can('recruitment.edit') ? await save() : id;     // النموذج بيطلع بآخر تعديلات في النافذة
+    if (!cid) return;
+    m.close();
+    openOfficialFormModal(b.dataset.kwform, 'candidate', cid);
+  });
   const drv = $('[data-driving]', m.el);
   if (drv) drv.onclick = async () => {
     const cid = can('recruitment.edit') ? await save() : id;     // النموذج بيطلع بآخر تعديلات في النافذة

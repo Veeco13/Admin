@@ -87,7 +87,7 @@ function renderDashboard() {
   const tiles = [
     { ico: '👥', l: 'في الخدمة', v: count('active'), sub: `${t('من')} ${emps.length} ${t('موظف')} · ${count('terminated')} ${t('منتهي خدمته')}`, go: () => goEmployees({ status: 'active' }) },
     { ico: '🧩', l: 'قيد الاستكمال', v: count('pending_completion'), sub: `${t('في فترة الإنذار')}: ${count('warning')}`, go: () => goEmployees({ status: 'pending_completion' }) },
-    viewAllowed('recruitment') && { ico: '🧭', l: 'المترشّحين', v: cands.length, sub: `${t('من الخارج')} ${cands.filter(c => c.source !== 'internal').length} · ${t('نقل داخلي')} ${cands.filter(c => c.source === 'internal').length}`, go: () => setView('recruitment') },
+    viewAllowed('recruitment') && { ico: '🧭', l: 'المترشّحين', v: cands.length, sub: Object.keys(RECRUIT_SOURCES).map(k => `${recruitSourceLabel(k, true)} ${cands.filter(c => (c.source || 'outside') === k).length}`).join(' · '), go: () => setView('recruitment') },
     can('companies.view') && { ico: '🏢', l: 'الشركات', v: scopedCompanies().length, sub: `${STATE.projects.filter(p => companyInScope(p.companyId)).length} ${t('مشروع')}`, go: () => setView('companies') },
     viewAllowed('vehicles') && { ico: '🚗', l: 'السيارات', v: STATE.vehicles.length, sub: vehDue ? `${vehDue} ${t('مستند بينتهي خلال 30 يوم')}` : t('كل مستنداتها سارية'), go: () => setView('vehicles') },
     can('sensitive.salary') && { ico: '💰', l: 'إجمالي الرواتب الشهرية', v: fmtMoney(payroll), sub: paid ? `${t('متوسط الراتب')} ${fmtMoney(Math.round(payroll / paid))}` : '', go: () => goEmployees({}) },
@@ -140,7 +140,7 @@ function renderDashboard() {
   const recRows = src => recruitStagesForSource(src).filter(s => !s.rejected && !s.final).map((s, i) => ({ s, i, n: cands.filter(c => (c.source || 'outside') === src && c.stage === s.id).length }))
     .filter(x => x.n).map(x => ({ label: t(x.s.label), html: `<span class="muted">${x.i + 1}.</span> ${esc(t(x.s.label))}`, n: x.n, attrs: `data-rec="${src}|${x.s.id}"` }));
   const recBlock = (src, title) => { const rows = recRows(src); return `<div class="db-mini-h">${esc(t(title))} <span class="muted">(${sum(rows.map(r => r.n))})</span></div>${rows.length ? dbBars(rows) : `<div class="small muted">${t('لا يوجد')}</div>`}`; };
-  const recCard = viewAllowed('recruitment') ? dbCard('db-span-4', 'الاستقدام والتوظيف', recBlock('outside', 'استقدام من الخارج') + recBlock('internal', 'نقل داخلي'),
+  const recCard = viewAllowed('recruitment') ? dbCard('db-span-4', 'تسجيل موظف جديد', Object.keys(RECRUIT_SOURCES).map(k => recBlock(k, RECRUIT_SOURCES[k][0])).join(''),
     { sub: `${cands.length} ${t('مترشّح نشط')}`, link: 'عرض', linkId: 'd-rec' }) : '';
   // الجنسيات: أول 6 والباقي «أخرى»
   const byNat = {};
