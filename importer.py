@@ -158,10 +158,17 @@ def _affiliation_for_file(s, file_no):
     return None
 
 
-def upsert_employee(s, rec, user, stats, company_cache):
+def upsert_employee(s, rec, user, stats, company_cache, allow_add=True):
+    """allow_add=False (استيراد الشاشة): الموظف الجديد بيتسجّل من «تسجيل موظف جديد» بس، فالرقم المدني اللي مش
+    موجود بيتخطّى ويترجع في stats["notRegistered"] (ومعاه لو فيه مترشّح بنفس الرقم)."""
     emp_id = clean(rec.get("id"))
     if not emp_id or not rec.get("name"):
         stats["skipped"] += 1
+        return
+    if not allow_add and s.get(M.Employee, emp_id) is None:
+        if emp_id not in {x["id"] for x in stats["notRegistered"]}:
+            cand = s.scalar(select(M.Candidate).where(M.Candidate.civilId == emp_id))
+            stats["notRegistered"].append({"id": emp_id, "name": rec.get("name"), "candidate": cand.name if cand else None})
         return
     company_name = rec.pop("_companyName", None)
     rec.pop("_projectName", None)
@@ -208,7 +215,7 @@ def upsert_employee(s, rec, user, stats, company_cache):
         history.record_moves(s, emp_id, data.get("name"), old_affs, new_affs, old_cc, new_cc, user, "استيراد")
 
 
-def import_dataframe_with_headers(s, df, user, stats, cache):
+def import_dataframe_with_headers(s, df, user, stats, cache, allow_add=True):
     cols = {}
     for c in df.columns:
         key = str(c).strip().lower()
@@ -232,11 +239,11 @@ def import_dataframe_with_headers(s, df, user, stats, cache):
             rec["bloodType"] = rec["bloodType"].replace(" ", "").upper()
         if rec.get("maritalStatus"):
             rec["maritalStatus"] = norm_marital(rec["maritalStatus"])
-        upsert_employee(s, rec, user, stats, cache)
+        upsert_employee(s, rec, user, stats, cache, allow_add)
     return True
 
 
-def import_manpower_headerless(s, df, user, stats, cache):
+def import_manpower_headerless(s, df, user, stats, cache, allow_add=True):
     if df.shape[1] < 9:
         return False
     for _, row in df.iterrows():
@@ -254,12 +261,13 @@ def import_manpower_headerless(s, df, user, stats, cache):
         }
         if rec["profession"] and "سائق" in rec["profession"]:
             rec["isDriver"] = True
-        upsert_employee(s, rec, user, stats, cache)
+        upsert_employee(s, rec, user, stats, cache, allow_add)
     return True
 
 
-def import_file(s, path, user):
-    stats = {"added": 0, "updated": 0, "skipped": 0, "sheets": []}
+def import_file(s, path, user, allow_add=True):
+    """allow_add=False ← تحديث الموجودين بس (الشاشة). seed_import بيضيف عادي (أول تشغيل)."""
+    stats = {"added": 0, "updated": 0, "skipped": 0, "sheets": [], "notRegistered": []}
     cache = {}
     if path.lower().endswith(".csv"):
         frames = {"csv": pd.read_csv(path, header=None, dtype=object, encoding="utf-8-sig")}
@@ -273,9 +281,9 @@ def import_file(s, path, user):
         if any(h in HEADER_MAP and HEADER_MAP[h] in ("id", "name") for h in first):
             df = raw.iloc[1:].copy()
             df.columns = [str(x).strip() for x in raw.iloc[0].tolist()]
-            ok = import_dataframe_with_headers(s, df, user, stats, cache)
+            ok = import_dataframe_with_headers(s, df, user, stats, cache, allow_add)
         else:
-            ok = import_manpower_headerless(s, raw, user, stats, cache)
+            ok = import_manpower_headerless(s, raw, user, stats, cache, allow_add)
         if ok:
             stats["sheets"].append(name)
     return stats

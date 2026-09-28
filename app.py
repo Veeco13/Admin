@@ -568,9 +568,13 @@ def import_employees():
     f.save(path)
     try:
         with db.session_scope() as s:
-            stats = importer.import_file(s, path, uname())
-            db.log_audit(s, "employee_add",
-                         f"استيراد ملف {f.filename}: {stats['added']} جديد، {stats['updated']} تحديث", uname())
+            # تحديث الموظفين الموجودين بس — الموظف الجديد بيتسجّل من «تسجيل موظف جديد»
+            stats = importer.import_file(s, path, uname(), allow_add=False)
+            miss = stats["notRegistered"]
+            db.log_audit(s, "employee_edit",
+                         f"استيراد ملف {f.filename}: {stats['updated']} تحديث"
+                         + (f"، تخطّي {len(miss)} رقم مدني مش مسجّل ({'، '.join(x['id'] for x in miss[:20])}"
+                            + ("…" if len(miss) > 20 else "") + ")" if miss else ""), uname())
     except Exception as e:
         return err(f"خطأ في قراءة الملف: {e}")
     return jsonify({"ok": True, **stats})

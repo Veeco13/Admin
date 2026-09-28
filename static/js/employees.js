@@ -498,7 +498,8 @@ async function handleImportCsv() {
   const m = openModal({
     title: '📥 ' + t('استيراد الموظفين'),
     body: `<div class="notice">${t('الملف ممكن يكون Excel أو CSV. أول صف لازم يكون عناوين الأعمدة (زي: الرقم المدني، الاسم، english name، المهنة، الجنسية، تاريخ الانتهاء، نوع العقد، رقم الملف)، أو ملف القوى العاملة بدون عناوين.')}</div>
-      <p class="small muted">${t('التحديث بالرقم المدني: لو الموظف موجود هتتحدّث بياناته، والخانات الفاضية في الملف مش هتمسح الموجود.')}</p>
+      <p class="small muted">${t('التحديث بالرقم المدني: الموظفين الموجودين بس هتتحدّث بياناتهم، والخانات الفاضية في الملف مش هتمسح الموجود.')}
+        ${t('الموظف الجديد بيتسجّل من «تسجيل موظف جديد»، والأرقام المدنية اللي مش مسجّلة هتظهرلك في الآخر.')}</p>
       <input type="file" id="imp-file" accept=".xlsx,.xls,.csv"><div id="imp-res" style="margin-top:10px"></div>`,
     foot: `<button class="btn primary" id="imp-go">استيراد</button><button class="btn" data-close>إغلاق</button>`,
   });
@@ -509,7 +510,19 @@ async function handleImportCsv() {
     $('#imp-go', m.el).disabled = true;
     try {
       const r = await persist('POST', '/api/employees/import', fd);
-      $('#imp-res', m.el).innerHTML = `<div class="notice">✅ ${t('تمت إضافة')} <b>${r.added}</b> · ${t('تحديث')} <b>${r.updated}</b> · ${t('تخطي')} <b>${r.skipped}</b></div>`;
+      const miss = r.notRegistered || [];
+      $('#imp-res', m.el).innerHTML = `<div class="notice">✅ ${t('تم تحديث')} <b>${r.updated}</b> ${t('موظف')}
+          ${r.skipped ? `<div class="small muted">${t('صفوف من غير رقم مدني أو اسم')}: ${r.skipped}</div>` : ''}</div>
+        ${miss.length ? `<div class="notice warn" style="margin-top:8px">⚠️ ${t('تم تخطّي')} <b>${miss.length}</b> ${t('صف، لأن الرقم المدني مش مسجّل في السيستم')}:
+          <ul class="imp-miss">${miss.map(x => `<li><b>${esc(x.name || '—')}</b> — <span class="num">${esc(x.id)}</span>${x.candidate ? ` <span class="small muted">(${t('موجود كمترشّح في «تسجيل موظف جديد»')})</span>` : ''}</li>`).join('')}</ul>
+          <div>${t('لو ده موظف جديد، سجّله من «تسجيل موظف جديد».')}</div>
+          <div class="row" style="margin-top:6px"><button class="btn sm" id="imp-miss-csv">📤 ${t('تنزيل القائمة')}</button>
+            ${viewAllowed('recruitment') ? `<button class="btn sm" id="imp-go-rec">🧭 ${t('فتح تسجيل موظف جديد')}</button>` : ''}</div></div>` : ''}`;
+      const csv = $('#imp-miss-csv', m.el);
+      if (csv) csv.onclick = () => downloadBlob(toCsv([[t('الرقم المدني'), t('الاسم'), t('ملاحظة')],
+        ...miss.map(x => [x.id, x.name, x.candidate ? t('موجود كمترشّح في «تسجيل موظف جديد»') : ''])]), `import-not-registered-${todayISO()}.csv`, 'text/csv;charset=utf-8');
+      const go = $('#imp-go-rec', m.el);
+      if (go) go.onclick = () => { m.close(); setView('recruitment'); };
     } catch (e) { $('#imp-res', m.el).innerHTML = `<div class="notice err">${esc(e.message)}</div>`; }
     $('#imp-go', m.el).disabled = false;
   };
