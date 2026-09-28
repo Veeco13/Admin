@@ -11,7 +11,7 @@ from datetime import date, datetime
 from typing import Optional
 
 from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Unicode, UnicodeText
-from sqlalchemy import MetaData
+from sqlalchemy import MetaData, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -431,3 +431,28 @@ class CustodyLine(Base):
     doneDate: Mapped[Optional[date]] = col("done_date", Date)
     receiptNo: Mapped[Optional[str]] = col("receipt_no", SHORT)
     closedDate: Mapped[Optional[date]] = col("closed_date", Date)                 # اتقفل في كشف التقفيل بتاريخ ده
+
+
+class Invoice(Base):
+    """فاتورة من الشركة المُصدِرة لمركز تكلفة في تقفيل عهدة: الرسوم الحكومية + الدعم الإداري لكل موظف.
+    INV-<السنة>-<مسلسل يبدأ من 1 كل سنة>. pending ← التقفيل بيتلغي وهي بتتمسح، approved (اعتمدتها الحسابات) ← نهائية."""
+    __tablename__ = "invoices"
+    __table_args__ = (UniqueConstraint("year", "no"),)
+    id: Mapped[str] = col("id", ID, primary_key=True)
+    year: Mapped[int] = col("year", Integer, nullable=False)
+    no: Mapped[int] = col("no", Integer, nullable=False)
+    custodyId: Mapped[str] = col("custody_id", ID, fk("custodies.id"), nullable=False, index=True)
+    closingDate: Mapped[date] = col("closing_date", Date, nullable=False)          # تاريخ التقفيل اللي طلعت منه
+    costCenter: Mapped[Optional[str]] = col("cost_center", NAME)                   # فاتورة إلى
+    billCompanyId: Mapped[Optional[str]] = col("bill_company_id", ID)              # شركة مركز التكلفة
+    issuerCompanyId: Mapped[Optional[str]] = col("issuer_company_id", ID)          # المُصدِر (أبراج انرجي)
+    employees: Mapped[int] = col("employees", Integer, nullable=False, default=0)
+    govAmount: Mapped[float] = col("gov_amount", Float, nullable=False, default=0)
+    supportFee: Mapped[float] = col("support_fee", Float, nullable=False, default=0)          # لكل موظف
+    supportAmount: Mapped[float] = col("support_amount", Float, nullable=False, default=0)
+    total: Mapped[float] = col("total", Float, nullable=False, default=0)
+    status: Mapped[str] = col("status", String(20), nullable=False, default="pending")       # pending | approved
+    approvedDate: Mapped[Optional[date]] = col("approved_date", Date)
+    approvedBy: Mapped[Optional[str]] = col("approved_by", NAME)
+    createdBy: Mapped[Optional[str]] = col("created_by", NAME)
+    createdAt: Mapped[Optional[datetime]] = col("created_at", DateTime)

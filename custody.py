@@ -2,31 +2,40 @@
 """
 Lunx — العهد والمصروفات.
 
-العهدة = مبلغ بيتصرف لمستلم (مندوب — أي اسم) علشان يدفع رسوم معاملات مجموعة موظفين أو مترشّحين:
-  طلب (بيتطبع ويتعتمد على الورق) ← «تم الصرف» (المبلغ وتاريخه) ← تنفيذ البنود ← تقفيل (المرحلة التانية).
-- بنودها من جدول الرسوم (fee_items) حسب نوع الطلب، ولكل شخص نسخة من البند والمبلغ ومركز التكلفة وقت الطلب.
+الفلوس كلها من الشركة المُصدِرة (أبراج انرجي — «إعدادات الفواتير»): بتتصرف عهدة لمستلم يدفع بيها رسوم معاملات
+موظفين أو مترشّحين من أي مركز تكلفة، وبعد التنفيذ الشركة بتعمل فاتورة لكل مركز تكلفة:
+  طلب (بيتطبع ويتعتمد على الورق) ← «تم الصرف» (المبلغ وتاريخه) ← تنفيذ البنود ← تقفيل ← فاتورة لكل مركز تكلفة
+  (الرسوم الفعلية + الدعم الإداري مرة لكل موظف، ومافيش دعم لمراكز تكلفة الشركة نفسها) ← موافقة الحسابات.
+- بنود العهدة من جدول الرسوم (fee_items) حسب نوع الطلب، ولكل شخص نسخة من البند والمبلغ ومركز التكلفة وقت الطلب.
 - البند مربوط بمرحلة: لما مرحلة الشخص (المعاملة الحكومية للموظف أو «تسجيل موظف جديد» للمترشّح) تعدّي مرحلة
   البند، بيتعلّم «تم» لوحده (sync_person) والمبلغ الفعلي = المحدد لحد ما يتعدّل.
 - الرصيد مع المستلم = المصروف له − المنفّذ فعلًا (البنود اللي «تم»).
+- الفاتورة «بانتظار موافقة الحسابات» ← التقفيل بيتلغي وهي بتتمسح. «اعتمدتها الحسابات» ← نهائية.
 """
+import json
 from datetime import date
 
 from sqlalchemy import func, select
 
 import db
 import models as M
+import pdf_forms
 
-# أنواع الطلب: على مين (موظف / مترشّح) ومراحل مين
+# أنواع الطلب: على مين (موظف / مترشّح)، ومراحل مين، والعمالة الوطنية (True = الكويتيين بس، False = من غيرهم)
 TX_TYPES = {
-    "renewal": {"label": "تجديد إقامة", "en": "Residency Renewal", "kind": "employee", "flow": "gov"},
+    "renewal": {"label": "تجديد إقامة", "en": "Residency Renewal", "kind": "employee", "flow": "gov", "kuwaiti": False},
     "transfer_in": {"label": "تحويل إقامة من الداخل", "en": "Residency Transfer (within the group)", "kind": "employee",
-                    "flow": "gov"},
+                    "flow": "gov", "kuwaiti": False},
     "transfer_out": {"label": "تحويل إقامة من الخارج", "en": "Residency Transfer (from another sponsor)", "kind": "candidate",
                      "flow": "internal"},
     "visa": {"label": "إصدار تأشيرة عمل", "en": "Work Visa Issuance", "kind": "candidate", "flow": "outside"},
     "first_residency": {"label": "إصدار إقامة أول مرة", "en": "First Residency Issuance", "kind": "candidate", "flow": "outside"},
+    "kw_permit_new": {"label": "إصدار إذن عمل — عمالة وطنية", "en": "Work Permit Issuance (National Labor)",
+                      "kind": "candidate", "flow": "kuwaiti", "kuwaiti": True},
+    "kw_permit_renewal": {"label": "تجديد إذن عمل — عمالة وطنية", "en": "Work Permit Renewal (National Labor)",
+                          "kind": "employee", "flow": "gov", "kuwaiti": True},
 }
-DEFAULT_ADMIN_FEE = 20            # الدعم الإداري لكل شخص في كشف التقفيل (بيتعدّل وقت التقفيل)
+DEFAULT_ADMIN_FEE = 20            # الدعم الإداري لكل موظف في الفاتورة (الافتراضي — من «إعدادات الفواتير»)
 # ترتيب المراحل (نفس GOV_STAGES و RECRUIT_STAGES_* في static/js/core.js — لو اتغيّروا هناك يتغيّروا هنا).
 # المرحلة = الخطوة الشغالة دلوقتي، فالبند «تم» لما الشخص يوصل مرحلة بعد مرحلته أو آخر مرحلة.
 FLOWS = {
@@ -35,9 +44,11 @@ FLOWS = {
                 "health_insurance", "residency_issue", "civil_id_issue", "all_completed"),
     "internal": ("employment_contract", "sponsor_approval", "transfer_work_license", "health_insurance_internal",
                  "residency_issue_internal", "civil_id_renew", "all_completed"),
+    "kuwaiti": ("kw_forms", "kw_pifss", "kw_work_permit", "kw_labor_support", "all_completed"),
 }
 STATUSES = {"requested": "مطلوبة", "disbursed": "تم الصرف", "closed": "مقفولة", "cancelled": "ملغاة"}
 OPEN = ("requested", "disbursed")
+SETTINGS_KEY = "custody_settings"
 
 
 def num(v):
@@ -47,6 +58,49 @@ def num(v):
         return None
 
 
+def amount(ln):
+    """المبلغ الفعلي للبند (أو المحدد لو الفعلي ماتكتبش)."""
+    return float((ln.actual if ln.actual is not None else ln.planned) or 0)
+
+
+# ---------------------------------------------------------------------------
+# إعدادات الفواتير: الشركة المُصدِرة، الدعم الإداري الافتراضي، ومراكز التكلفة اللي مالهاش دعم
+# ---------------------------------------------------------------------------
+def settings(s):
+    try:
+        d = json.loads(db.get_meta(s, SETTINGS_KEY) or "{}")
+    except ValueError:
+        d = {}
+    issuer = d.get("issuerCompanyId")
+    if not issuer or s.get(M.Company, issuer) is None:            # الافتراضي: «Abraaj Energy …»
+        companies = s.scalars(select(M.Company).order_by(M.Company.id)).all()
+        issuer = next((c.id for c in companies if (c.nameEn or "").lower().startswith("abraaj energy")),
+                      companies[0].id if companies else None)
+    fee = num(d.get("supportFee"))
+    no_support = d.get("noSupportCostCenters")
+    if no_support is None:                                         # الافتراضي: مركز التكلفة اللي اسمه اسم الشركة نفسها
+        ic = s.get(M.Company, issuer) if issuer else None
+        key = (ic.nameEn or "").lower() if ic is not None else ""
+        no_support = [cc.name for cc in s.scalars(select(M.CostCenter))
+                      if key and (cc.nameEn or "").strip() and (cc.nameEn or "").strip().lower() in key]
+    return {"issuerCompanyId": issuer, "supportFee": DEFAULT_ADMIN_FEE if fee is None else fee,
+            "noSupportCostCenters": no_support}
+
+
+def save_settings(s, d):
+    cur = settings(s)
+    issuer = d.get("issuerCompanyId") if s.get(M.Company, d.get("issuerCompanyId") or "") is not None else cur["issuerCompanyId"]
+    fee = num(d.get("supportFee"))
+    names = {cc.name for cc in s.scalars(select(M.CostCenter))}
+    no_support = [x for x in (d.get("noSupportCostCenters") or []) if x in names]
+    db.set_meta(s, SETTINGS_KEY, json.dumps({"issuerCompanyId": issuer, "supportFee": cur["supportFee"] if fee is None else fee,
+                                             "noSupportCostCenters": no_support}, ensure_ascii=False))
+    return settings(s)
+
+
+# ---------------------------------------------------------------------------
+# الربط بالمراحل
+# ---------------------------------------------------------------------------
 def stage_passed(flow, current, item_stage):
     order = FLOWS.get(flow, ())
     if current not in order or item_stage not in order:
@@ -79,9 +133,12 @@ def candidate_to_employee(s, cand_id, civil):
         .update({"personKind": "employee", "personId": civil, "civilId": civil}, synchronize_session=False)
 
 
+# ---------------------------------------------------------------------------
+# الطلب
+# ---------------------------------------------------------------------------
 def build_lines(s, tx, persons, ctx):
     """persons = [{id, items: {رقم البند: المبلغ}}] (البند اللي مش موجود = الشخص مش محتاجه) ← (بنود، رسالة خطأ)."""
-    kind = TX_TYPES[tx]["kind"]
+    kind, kuwaiti = TX_TYPES[tx]["kind"], TX_TYPES[tx].get("kuwaiti")
     fees = {f.id: f for f in s.scalars(select(M.FeeItem).where(M.FeeItem.txType == tx))}
     cc_co = db.cost_center_companies(s)
     lines, seen = [], set()
@@ -97,7 +154,8 @@ def build_lines(s, tx, persons, ctx):
             affs = db.get_affiliations(s, pid)
             if ctx and not ctx.affs_ok(affs, cc_co.get(e.costCenter), e.costCenter):
                 return None, f"الموظف {e.name} برّه نطاقك"
-            name, civil, cc, co = e.name, e.id, e.costCenter, next((a["companyId"] for a in affs if a.get("companyId")), None)
+            name, civil, cc, kw = e.name, e.id, e.costCenter, pdf_forms.is_kuwaiti(e.nationality)
+            co = next((a["companyId"] for a in affs if a.get("companyId")), None)
         else:
             c = s.get(M.Candidate, pid)
             if not c:
@@ -105,19 +163,31 @@ def build_lines(s, tx, persons, ctx):
             if ctx and not ctx.record_ok(c.targetCompanyId, cc_co.get(c.costCenter), c.costCenter):
                 return None, f"المترشّح {c.name} برّه نطاقك"
             name, civil, cc, co = c.name, c.civilId, c.costCenter, c.targetCompanyId
-        for fid, amount in (p.get("items") or {}).items():
+            kw = c.source == "kuwaiti" or pdf_forms.is_kuwaiti(c.nationality)
+        if kuwaiti is True and not kw:
+            return None, f"{name}: النوع ده للعمالة الوطنية بس (الكويتيين ومعاملة كويتية)"
+        if kuwaiti is False and kw:
+            return None, f"{name}: العمالة الوطنية ليها «{TX_TYPES['kw_permit_renewal']['label']}»"
+        for fid, value in (p.get("items") or {}).items():
             f = fees.get(fid)
             if f is None:
                 continue
             lines.append(M.CustodyLine(personKind=kind, personId=pid, personName=name, civilId=civil, costCenter=cc,
                                        companyId=co, feeItemId=f.id, itemName=f.name, itemNameEn=f.nameEn,
                                        authority=f.authority, stage=f.stage,
-                                       position=f.position, planned=num(amount), done=False))
+                                       position=f.position, planned=num(value), done=False))
     if not lines:
         return None, "اختار موظف واحد على الأقل وبند واحد على الأقل"
     return lines, None
 
 
+def next_no(s):
+    return (s.scalar(select(func.max(M.Custody.no))) or 0) + 1
+
+
+# ---------------------------------------------------------------------------
+# التقفيل والفواتير
+# ---------------------------------------------------------------------------
 def ready_people(s, c):
     """الأشخاص اللي كل بنودهم «تم» ولسه ماتقفلوش ← {رقم الشخص: [بنوده]}."""
     by = {}
@@ -126,44 +196,78 @@ def ready_people(s, c):
     return {pid: ls for pid, ls in by.items() if all(x.done for x in ls) and not any(x.closedDate for x in ls)}
 
 
-def close_people(s, c, person_ids, admin_fee, when):
-    """تقفيل الأشخاص دول (لازم يكونوا جاهزين) ← بنودهم closed_date = when. العهدة بتتقفل لما كل الناس تتقفل.
-    بيرجّع (بنود الكشف، رسالة خطأ)."""
+def invoice_no(inv):
+    return f"INV-{inv.year}-{inv.no:04d}"
+
+
+def make_invoices(s, c, lines, fee, when, user):
+    """فاتورة لكل مركز تكلفة في التقفيل: الرسوم الفعلية + الدعم الإداري مرة لكل موظف (إلا مراكز الشركة نفسها)."""
+    st = settings(s)
+    cc_co = db.cost_center_companies(s)
+    by_cc = {}
+    for ln in lines:
+        by_cc.setdefault(ln.costCenter or "", []).append(ln)
+    out = []
+    for cc, ls in sorted(by_cc.items()):
+        people = len({ln.personId for ln in ls})
+        gov = round(sum(amount(ln) for ln in ls), 3)
+        support = 0.0 if cc in st["noSupportCostCenters"] else float(fee)
+        no = (s.scalar(select(func.max(M.Invoice.no)).where(M.Invoice.year == when.year)) or 0) + 1
+        inv = M.Invoice(id=db.new_id("inv"), year=when.year, no=no, custodyId=c.id, closingDate=when, costCenter=cc or None,
+                        billCompanyId=cc_co.get(cc) or next((ln.companyId for ln in ls if ln.companyId), None),
+                        issuerCompanyId=st["issuerCompanyId"], employees=people, govAmount=gov, supportFee=support,
+                        supportAmount=round(support * people, 3), total=round(gov + support * people, 3), status="pending",
+                        createdBy=user, createdAt=db.now())
+        s.add(inv)
+        s.flush()
+        out.append(inv)
+    return out
+
+
+def close_people(s, c, person_ids, fee, when, user):
+    """تقفيل الأشخاص دول (لازم يكونوا جاهزين) ← بنودهم closed_date = when، وفاتورة لكل مركز تكلفة.
+    العهدة بتتقفل لما كل الناس تتقفل. بيرجّع (البنود، الفواتير، رسالة خطأ)."""
     ready = ready_people(s, c)
     chosen = [pid for pid in dict.fromkeys(person_ids or []) if pid in ready]
     if not chosen:
-        return None, "مفيش أشخاص جاهزين للتقفيل (كل بنود الشخص لازم تكون «تم»)"
+        return None, None, "مفيش أشخاص جاهزين للتقفيل (كل بنود الشخص لازم تكون «تم»)"
+    if s.scalar(select(func.count()).select_from(M.Invoice).where(M.Invoice.custodyId == c.id, M.Invoice.closingDate == when)):
+        return None, None, "فيه تقفيل بنفس التاريخ للعهدة دي — اختار تاريخ تاني أو ألغي التقفيل القديم"
     lines = [ln for pid in chosen for ln in ready[pid]]
     for ln in lines:
         ln.closedDate = when
-    c.adminFee = admin_fee
+    c.adminFee = fee
     s.flush()
+    invoices = make_invoices(s, c, lines, fee, when, user)
     if not s.scalar(select(func.count()).select_from(M.CustodyLine).where(M.CustodyLine.custodyId == c.id,
                                                                         M.CustodyLine.closedDate.is_(None))):
         c.status, c.closedDate = "closed", when
-    return lines, None
+    return lines, invoices, None
 
 
 def reopen(s, c, when):
-    """إلغاء كشف تقفيل بتاريخه: البنود ترجع مفتوحة، والعهدة ترجع «تم الصرف»."""
+    """إلغاء تقفيل بتاريخه (فواتيره لسه بانتظار الحسابات): الفواتير بتتمسح، والبنود ترجع مفتوحة، والعهدة «تم الصرف».
+    بيرجّع (عدد البنود، رسالة خطأ)."""
+    invoices = s.scalars(select(M.Invoice).where(M.Invoice.custodyId == c.id, M.Invoice.closingDate == when)).all()
+    approved = [invoice_no(i) for i in invoices if i.status == "approved"]
+    if approved:
+        return 0, f"الحسابات اعتمدت {'، '.join(approved)} — مينفعش التقفيل يتلغي"
+    for inv in invoices:
+        s.delete(inv)
     n = s.query(M.CustodyLine).filter(M.CustodyLine.custodyId == c.id, M.CustodyLine.closedDate == when) \
         .update({"closedDate": None}, synchronize_session=False)
     if n and c.status == "closed":
         c.status, c.closedDate = "disbursed", None
-    return n
-
-
-def next_no(s):
-    return (s.scalar(select(func.max(M.Custody.no))) or 0) + 1
+    return n, None
 
 
 def dump(s, ctx):
-    """للواجهة: جدول الرسوم والعهد ببنودها. المستخدم المحدود بشركات بيشوف العهدة لو فيها حد من نطاقه."""
+    """للواجهة: جدول الرسوم والإعدادات والعهد ببنودها وفواتيرها. المستخدم المحدود بشركات بيشوف العهدة لو فيها حد من نطاقه."""
     lines = {}
     for ln in s.scalars(select(M.CustodyLine).order_by(M.CustodyLine.custodyId, M.CustodyLine.personName,
                                                        M.CustodyLine.personId, M.CustodyLine.position)):
         lines.setdefault(ln.custodyId, []).append(db.to_dict(ln))
-    out = []
+    out, visible = [], set()
     for c in s.scalars(select(M.Custody).order_by(M.Custody.no.desc())):
         ls = lines.get(c.id, [])
         if ctx and not ctx.allCompanies and not any(ctx.company_ok(x["companyId"]) for x in ls if x["companyId"]) \
@@ -172,7 +276,16 @@ def dump(s, ctx):
         d = db.to_dict(c)
         d["lines"] = ls
         out.append(d)
+        visible.add(c.id)
+    invoices = []
+    for inv in s.scalars(select(M.Invoice).order_by(M.Invoice.year.desc(), M.Invoice.no.desc())):
+        if inv.custodyId in visible:
+            d = db.to_dict(inv)
+            d["number"] = invoice_no(inv)
+            invoices.append(d)
     return {
         "custodies": out,
+        "invoices": invoices,
+        "custodySettings": settings(s),
         "feeItems": [db.to_dict(f) for f in s.scalars(select(M.FeeItem).order_by(M.FeeItem.txType, M.FeeItem.position))],
     }

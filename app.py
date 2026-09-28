@@ -262,7 +262,8 @@ def api_state():
     u = me()
     with db.session_scope(commit=False) as s:
         state = db.dump_state(s, u)
-        state.update(custody.dump(s, u) if u.can("custody.view") else {"custodies": [], "feeItems": []})
+        state.update(custody.dump(s, u) if u.can("custody.view")
+                     else {"custodies": [], "invoices": [], "feeItems": [], "custodySettings": None})
     for t in state.get("templates", []):     # خيارات التوقيع بتظهر بس لو القالب فيه مكانها
         path = os.path.join(TEMPLATE_DOCS, t["filename"])
         fields = contracts.template_fields(path) if os.path.exists(path) else set()
@@ -1447,38 +1448,105 @@ def update_custody_line(cid, lid):
 @app.post("/api/custodies/<cid>/close")
 @require("custody.edit")
 def close_custody(cid):
-    """تقفيل الأشخاص الجاهزين: {persons: [...], adminFee, date} ← بعدها كشف التقفيل بيتنزّل بنفس التاريخ."""
+    """تقفيل الأشخاص الجاهزين: {persons: [...], adminFee, date} ← فاتورة لكل مركز تكلفة (بانتظار موافقة الحسابات)."""
     d = body()
     when = db.parse_date(d.get("date")) or datetime.now().date()
     fee = custody.num(d.get("adminFee"))
-    fee = custody.DEFAULT_ADMIN_FEE if fee is None else fee
     with db.session_scope() as s:
+        fee = custody.settings(s)["supportFee"] if fee is None or fee < 0 else fee
         c = _custody_or_404(s, cid)
         if c.status != "disbursed":
             return err("التقفيل بيكون للعهدة اللي اتصرفت")
-        lines, msg = custody.close_people(s, c, d.get("persons"), fee, when)
+        lines, invoices, msg = custody.close_people(s, c, d.get("persons"), fee, when, uname())
         if msg:
             return err(msg)
         n = len({ln.personId for ln in lines})
-        total = sum((ln.actual if ln.actual is not None else ln.planned) or 0 for ln in lines) + fee * n
-        db.log_audit(s, "custody_close", f"تقفيل عهدة رقم {c.no}: {n} شخص — {total:g} د.ك (منها دعم إداري {fee:g} لكل شخص)"
-                                         f"{' — العهدة اتقفلت بالكامل' if c.status == 'closed' else ''}", uname())
-        return jsonify({"ok": True, "date": when.isoformat(), "count": n, "status": c.status})
+        db.log_audit(s, "custody_close",
+                     f"تقفيل عهدة رقم {c.no}: {n} شخص — {len(invoices)} فاتورة: "
+                     + "، ".join(f"{custody.invoice_no(i)} ({i.costCenter or '—'}) {i.total:g} د.ك" for i in invoices)
+                     + (" — العهدة اتقفلت بالكامل" if c.status == "closed" else ""), uname())
+        return jsonify({"ok": True, "date": when.isoformat(), "count": n, "status": c.status,
+                        "invoices": [custody.invoice_no(i) for i in invoices]})
 
 
 @app.post("/api/custodies/<cid>/reopen")
 @require("custody.delete")
 def reopen_custody(cid):
+    """إلغاء تقفيل بتاريخه — لو فواتيره كلها لسه بانتظار الحسابات (بتتمسح)."""
     when = db.parse_date(body().get("date"))
     if not when:
         return err("تاريخ التقفيل مطلوب")
     with db.session_scope() as s:
         c = _custody_or_404(s, cid)
-        n = custody.reopen(s, c, when)
+        numbers = [custody.invoice_no(i) for i in s.scalars(select(M.Invoice).where(M.Invoice.custodyId == c.id,
+                                                                                    M.Invoice.closingDate == when))]
+        n, msg = custody.reopen(s, c, when)
+        if msg:
+            return err(msg)
         if not n:
             return err("مفيش تقفيل بالتاريخ ده")
-        db.log_audit(s, "custody_edit", f"إلغاء تقفيل عهدة رقم {c.no} بتاريخ {when.isoformat()} ({n} بند)", uname())
+        db.log_audit(s, "custody_edit", f"إلغاء تقفيل عهدة رقم {c.no} بتاريخ {when.isoformat()} ({n} بند)"
+                                        + (f" — اتمسحت الفواتير: {'، '.join(numbers)}" if numbers else ""), uname())
     return jsonify({"ok": True})
+
+
+def _invoice_or_404(s, iid):
+    inv = s.get(M.Invoice, iid)
+    if not inv:
+        abort(404, "الفاتورة غير موجودة")
+    return inv
+
+
+@app.post("/api/invoices/<iid>/approve")
+@require("custody.edit")
+def approve_invoice(iid):
+    """«اعتمدتها الحسابات» بتاريخ: {date} ← الفاتورة نهائية والتقفيل مايتلغيش."""
+    when = db.parse_date(body().get("date")) or datetime.now().date()
+    with db.session_scope() as s:
+        inv = _invoice_or_404(s, iid)
+        if inv.status == "approved":
+            return err("الفاتورة معتمدة خلاص")
+        inv.status, inv.approvedDate, inv.approvedBy = "approved", when, uname()
+        db.log_audit(s, "custody_edit", f"اعتماد الحسابات للفاتورة {custody.invoice_no(inv)} ({inv.costCenter or '—'}) — "
+                                        f"{inv.total:g} د.ك بتاريخ {when.isoformat()}", uname())
+    return jsonify({"ok": True})
+
+
+@app.post("/api/invoices/<iid>/unapprove")
+@require("custody.delete")
+def unapprove_invoice(iid):
+    """رجوع عن «اعتمدتها الحسابات» (لو اتعلّمت بالغلط) ← بانتظار الحسابات تاني."""
+    with db.session_scope() as s:
+        inv = _invoice_or_404(s, iid)
+        if inv.status != "approved":
+            return err("الفاتورة مش معتمدة")
+        inv.status, inv.approvedDate, inv.approvedBy = "pending", None, None
+        db.log_audit(s, "custody_edit", f"إلغاء اعتماد الحسابات للفاتورة {custody.invoice_no(inv)} ({inv.costCenter or '—'})",
+                     uname())
+    return jsonify({"ok": True})
+
+
+@app.get("/api/invoices/<iid>.xlsx")
+@require("custody.view")
+def invoice_xlsx(iid):
+    """فاتورة Excel (?layout=individual ← + ملحق كشف فردي لكل موظف)."""
+    with db.session_scope(commit=False) as s:
+        inv = _invoice_or_404(s, iid)
+        data = custody_excel.invoice_workbook(s, inv, uname(), request.args.get("layout") == "individual")
+        return _xlsx(data, f"فاتورة {custody.invoice_no(inv)} - {inv.costCenter or 'بدون مركز تكلفة'}.xlsx")
+
+
+@app.put("/api/custody-settings")
+@require("custody.fees")
+def save_custody_settings():
+    """إعدادات الفواتير: {issuerCompanyId, supportFee, noSupportCostCenters: [...]}"""
+    with db.session_scope() as s:
+        st = custody.save_settings(s, body())
+        co = s.get(M.Company, st["issuerCompanyId"]) if st["issuerCompanyId"] else None
+        db.log_audit(s, "custody_fees", f"إعدادات فواتير العهد: المُصدِر {co.nameAr if co is not None else '—'} — الدعم الإداري "
+                                        f"{st['supportFee']:g} د.ك لكل موظف — من غير دعم: "
+                                        f"{'، '.join(st['noSupportCostCenters']) or '—'}", uname())
+        return jsonify({"ok": True, "settings": st})
 
 
 def _xlsx(data, name):
@@ -1489,20 +1557,19 @@ def _xlsx(data, name):
 @app.get("/api/custodies/<cid>/closing.xlsx")
 @require("custody.view")
 def custody_closing_xlsx(cid):
-    """كشف تقفيل Excel لتاريخ تقفيل (?date=): ملخص + شيت لكل مركز تكلفة (?layout=individual ← كشف فردي لكل موظف)."""
+    """تقفيل Excel بتاريخه (?date= — الافتراضي آخر تقفيل): الملخص + فاتورة لكل مركز تكلفة
+    (?layout=individual ← + ملحق كشف فردي لكل موظف)."""
     when = db.parse_date(request.args.get("date"))
     with db.session_scope(commit=False) as s:
         c = _custody_or_404(s, cid)
-        q = select(M.CustodyLine).where(M.CustodyLine.custodyId == c.id, M.CustodyLine.closedDate.isnot(None))
+        q = select(func.max(M.Invoice.closingDate)).where(M.Invoice.custodyId == c.id)
         if when:
-            q = q.where(M.CustodyLine.closedDate == when)
-        lines = s.scalars(q).all()
-        if not lines:
-            return err("مفيش تقفيل للعهدة دي" + (" بالتاريخ ده" if when else ""), 404)
-        when = when or max(ln.closedDate for ln in lines)
-        fee = c.adminFee if c.adminFee is not None else custody.DEFAULT_ADMIN_FEE
-        data = custody_excel.closing_workbook(s, c, lines, fee, when, uname(), request.args.get("layout") == "individual")
-        return _xlsx(data, f"كشف تقفيل عهدة CUS-{c.no:04d} - {when.isoformat()}.xlsx")
+            q = q.where(M.Invoice.closingDate == when)
+        when = s.scalar(q)
+        if not when:
+            return err("مفيش تقفيل للعهدة دي" + (" بالتاريخ ده" if request.args.get("date") else ""), 404)
+        data = custody_excel.closing_workbook(s, c, when, uname(), request.args.get("layout") == "individual")
+        return _xlsx(data, f"تقفيل عهدة CUS-{c.no:04d} - {when.isoformat()}.xlsx")
 
 
 @app.get("/api/custodies/<cid>/request.xlsx")
