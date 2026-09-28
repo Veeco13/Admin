@@ -265,6 +265,12 @@ table.data tr.sel td { background: var(--primary-soft); }
 .rb-nat-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
 .rb-nat-list { display: flex; flex-wrap: wrap; gap: 5px; max-height: 98px; overflow: auto; padding: 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
 .imp-miss { max-height: 180px; overflow: auto; margin: 6px 0; padding-inline-start: 20px; }
+.imp-list { max-height: 340px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; padding: 6px 10px; margin: 6px 0; }
+.imp-emp { padding: 6px 0; border-bottom: 1px dashed var(--border); }
+.imp-emp:last-child { border-bottom: 0; }
+.imp-emp ul { margin: 4px 0 0; padding-inline-start: 20px; font-size: 13px; }
+.imp-old { color: var(--red); text-decoration: line-through; }
+.imp-new { color: var(--green); font-weight: 600; }
 table.kids td { padding: 3px 4px; }
 table.kids input:not([type=checkbox]), table.kids select { width: 100%; min-width: 0; }
 .chip.x { background: var(--red-soft); color: var(--red); border-color: var(--red); text-decoration: line-through; }

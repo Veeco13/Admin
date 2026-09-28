@@ -494,38 +494,91 @@ function printEmployeeReport(list, cols, { title, filters, selectedCount }) {
 }
 
 /* ---------- الاستيراد ---------- */
+/* استيراد Excel/CSV: معاينة الأول (مفيش حاجة بتتحفظ) ← «تطبيق». تحديث الموظفين الموجودين بس، والإضافة لمدير النظام */
 async function handleImportCsv() {
+  const admin = can('admin');
   const m = openModal({
-    title: '📥 ' + t('استيراد الموظفين'),
+    title: '📥 ' + t('استيراد الموظفين'), size: 'wide',
     body: `<div class="notice">${t('الملف ممكن يكون Excel أو CSV. أول صف لازم يكون عناوين الأعمدة (زي: الرقم المدني، الاسم، english name، المهنة، الجنسية، تاريخ الانتهاء، نوع العقد، رقم الملف)، أو ملف القوى العاملة بدون عناوين.')}</div>
       <p class="small muted">${t('التحديث بالرقم المدني: الموظفين الموجودين بس هتتحدّث بياناتهم، والخانات الفاضية في الملف مش هتمسح الموجود.')}
         ${t('الموظف الجديد بيتسجّل من «تسجيل موظف جديد»، والأرقام المدنية اللي مش مسجّلة هتظهرلك في الآخر.')}</p>
-      <input type="file" id="imp-file" accept=".xlsx,.xls,.csv"><div id="imp-res" style="margin-top:10px"></div>`,
-    foot: `<button class="btn primary" id="imp-go">استيراد</button><button class="btn" data-close>إغلاق</button>`,
+      <div class="row" style="gap:14px;flex-wrap:wrap"><input type="file" id="imp-file" accept=".xlsx,.xls,.csv">
+        ${admin ? `<label class="check"><input type="checkbox" id="imp-add"> ➕ ${t('السماح بإضافة موظفين جدد')} <span class="small muted">(${t('لمدير النظام بس، وبيتسجّل في سجل التدقيق')})</span></label>` : ''}</div>
+      <div id="imp-res" style="margin-top:10px"></div>`,
+    foot: `<button class="btn primary" id="imp-preview">🔍 ${t('معاينة')}</button><button class="btn primary" id="imp-apply" hidden>✅ ${t('تطبيق')}</button>
+      <span class="spacer"></span><button class="btn" data-close>${t('إغلاق')}</button>`,
   });
-  $('#imp-go', m.el).onclick = async () => {
+  const res = $('#imp-res', m.el), pv = $('#imp-preview', m.el), ap = $('#imp-apply', m.el), addCb = $('#imp-add', m.el);
+  let token = null, fileName = '';
+  const reset = () => { token = null; ap.hidden = true; pv.hidden = false; res.innerHTML = ''; };
+  $('#imp-file', m.el).onchange = reset;
+  if (addCb) addCb.onchange = reset;                     // المعاينة لازم تتعاد بنفس الاختيار
+  const form = mode => {
+    const fd = new FormData();
+    fd.append('mode', mode);
+    if (addCb && addCb.checked) fd.append('allowAdd', '1');
+    if (mode === 'apply') { fd.append('token', token); fd.append('name', fileName); return fd; }
     const file = $('#imp-file', m.el).files[0];
-    if (!file) return toast('اختر ملف أولاً', 'err');
-    const fd = new FormData(); fd.append('file', file);
-    $('#imp-go', m.el).disabled = true;
-    try {
-      const r = await persist('POST', '/api/employees/import', fd);
-      const miss = r.notRegistered || [];
-      $('#imp-res', m.el).innerHTML = `<div class="notice">✅ ${t('تم تحديث')} <b>${r.updated}</b> ${t('موظف')}
-          ${r.skipped ? `<div class="small muted">${t('صفوف من غير رقم مدني أو اسم')}: ${r.skipped}</div>` : ''}</div>
-        ${miss.length ? `<div class="notice warn" style="margin-top:8px">⚠️ ${t('تم تخطّي')} <b>${miss.length}</b> ${t('صف، لأن الرقم المدني مش مسجّل في السيستم')}:
-          <ul class="imp-miss">${miss.map(x => `<li><b>${esc(x.name || '—')}</b> — <span class="num">${esc(x.id)}</span>${x.candidate ? ` <span class="small muted">(${t('موجود كمترشّح في «تسجيل موظف جديد»')})</span>` : ''}</li>`).join('')}</ul>
-          <div>${t('لو ده موظف جديد، سجّله من «تسجيل موظف جديد».')}</div>
-          <div class="row" style="margin-top:6px"><button class="btn sm" id="imp-miss-csv">📤 ${t('تنزيل القائمة')}</button>
-            ${viewAllowed('recruitment') ? `<button class="btn sm" id="imp-go-rec">🧭 ${t('فتح تسجيل موظف جديد')}</button>` : ''}</div></div>` : ''}`;
-      const csv = $('#imp-miss-csv', m.el);
-      if (csv) csv.onclick = () => downloadBlob(toCsv([[t('الرقم المدني'), t('الاسم'), t('ملاحظة')],
-        ...miss.map(x => [x.id, x.name, x.candidate ? t('موجود كمترشّح في «تسجيل موظف جديد»') : ''])]), `import-not-registered-${todayISO()}.csv`, 'text/csv;charset=utf-8');
-      const go = $('#imp-go-rec', m.el);
-      if (go) go.onclick = () => { m.close(); setView('recruitment'); };
-    } catch (e) { $('#imp-res', m.el).innerHTML = `<div class="notice err">${esc(e.message)}</div>`; }
-    $('#imp-go', m.el).disabled = false;
+    if (!file) return null;
+    fileName = file.name; fd.append('file', file);
+    return fd;
   };
+  pv.onclick = async () => {
+    const fd = form('preview');
+    if (!fd) return toast('اختر ملف أولاً', 'err');
+    pv.disabled = true;
+    try {
+      const r = await api('POST', '/api/employees/import', fd);
+      token = r.token;
+      res.innerHTML = importResultHtml(r, true);
+      bindImportResult(m, r);
+      const nothing = !r.updated && !r.added;
+      ap.hidden = nothing; pv.hidden = !nothing;
+      if (nothing) res.insertAdjacentHTML('beforeend', `<div class="notice" style="margin-top:8px">${t('مفيش حاجة هتتغيّر من الملف ده.')}</div>`);
+    } catch (e) { res.innerHTML = `<div class="notice err">${esc(e.message)}</div>`; }
+    pv.disabled = false;
+  };
+  ap.onclick = async () => {
+    try {
+      const r = await persist('POST', '/api/employees/import', form('apply'));
+      res.innerHTML = importResultHtml(r, false);
+      bindImportResult(m, r);
+      ap.hidden = true; token = null;
+    } catch (e) { res.innerHTML = `<div class="notice err">${esc(e.message)}</div>`; }
+  };
+}
+/** نتيجة المعاينة (preview = true) أو التطبيق: الأعداد، التغييرات حقل حقل، الجدد، واللي اتخطّى */
+function importResultHtml(r, preview) {
+  const miss = r.notRegistered || [], added = r.addedList || [], changes = r.changes || [];
+  const w = (p, d) => t(preview ? p : d);
+  const val = v => v === null || v === undefined ? '<span class="muted">—</span>' : esc(v);
+  return `${preview ? `<div class="notice">🔍 ${t('معاينة: لسه مفيش حاجة اتحفظت. راجع التغييرات وبعدين اضغط «تطبيق».')}</div>`
+      : `<div class="notice">✅ ${t('تم التطبيق')}</div>`}
+    <div class="row" style="gap:6px;margin:8px 0;flex-wrap:wrap">
+      <span class="chip on">✏️ ${w('هيتحدّث', 'اتحدّث')}: <b>${r.updated}</b></span>
+      ${r.allowAdd ? `<span class="chip on">➕ ${w('هيتضاف', 'اتضاف')}: <b>${r.added}</b></span>` : ''}
+      <span class="chip">${t('من غير تغيير')}: <b>${r.unchanged || 0}</b></span>
+      ${miss.length ? `<span class="chip x">⚠️ ${w('هيتخطّى', 'اتخطّى')}: <b>${miss.length}</b></span>` : ''}
+      ${r.skipped ? `<span class="chip">${t('صفوف من غير رقم مدني أو اسم')}: <b>${r.skipped}</b></span>` : ''}</div>
+    ${changes.length ? `<details ${changes.length <= 20 ? 'open' : ''}><summary><b>✏️ ${t('التغييرات')}</b> (${changes.length} ${t('موظف')})</summary>
+      <div class="imp-list">${changes.map(c => `<div class="imp-emp"><b>${esc(c.name)}</b> <span class="num small muted">${esc(c.id)}</span><ul>
+        ${c.fields.map(f => `<li>${esc(t(f.label))}: <span class="imp-old">${val(f.old)}</span> ← <span class="imp-new">${val(f.new)}</span></li>`).join('')}
+        ${(c.moves || []).map(x => `<li>🏢 ${esc(x)}</li>`).join('')}</ul></div>`).join('')}</div></details>` : ''}
+    ${added.length ? `<details open><summary><b>➕ ${w('موظفين هيتضافوا', 'موظفين اتضافوا')}</b> (${added.length})</summary>
+      <ul class="imp-miss">${added.map(x => `<li><b>${esc(x.name || '—')}</b> — <span class="num">${esc(x.id)}</span></li>`).join('')}</ul></details>` : ''}
+    ${miss.length ? `<div class="notice warn" style="margin-top:8px">⚠️ ${w('هيتخطّى', 'تم تخطّي')} <b>${miss.length}</b> ${t('صف، لأن الرقم المدني مش مسجّل في السيستم')}:
+      <ul class="imp-miss">${miss.map(x => `<li><b>${esc(x.name || '—')}</b> — <span class="num">${esc(x.id)}</span>${x.candidate ? ` <span class="small muted">(${t('موجود كمترشّح في «تسجيل موظف جديد»')})</span>` : ''}</li>`).join('')}</ul>
+      <div>${t('لو ده موظف جديد، سجّله من «تسجيل موظف جديد».')}</div>
+      <div class="row" style="margin-top:6px"><button class="btn sm" data-imp-csv>📤 ${t('تنزيل القائمة')}</button>
+        ${viewAllowed('recruitment') ? `<button class="btn sm" data-imp-rec>🧭 ${t('فتح تسجيل موظف جديد')}</button>` : ''}</div></div>` : ''}`;
+}
+function bindImportResult(m, r) {
+  const miss = r.notRegistered || [];
+  const csv = $('[data-imp-csv]', m.el);
+  if (csv) csv.onclick = () => downloadBlob(toCsv([[t('الرقم المدني'), t('الاسم'), t('ملاحظة')],
+    ...miss.map(x => [x.id, x.name, x.candidate ? t('موجود كمترشّح في «تسجيل موظف جديد»') : ''])]), `import-not-registered-${todayISO()}.csv`, 'text/csv;charset=utf-8');
+  const go = $('[data-imp-rec]', m.el);
+  if (go) go.onclick = () => { m.close(); setView('recruitment'); };
 }
 
 /* =====================================================================

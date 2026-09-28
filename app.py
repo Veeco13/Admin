@@ -554,30 +554,49 @@ def set_gov_stage(emp_id):
     return jsonify({"ok": True})
 
 
+IMPORTS_DIR = os.path.join(UPLOADS, "imports")
+
+
 @app.post("/api/employees/import")
 @require("employees.edit", "system.import", "sensitive.salary", "sensitive.bank", "sensitive.documents",
          all_companies=True)   # الملف بيكتب كل الحقول ولأي شركة
 def import_employees():
-    f = request.files.get("file")
-    if not f or not f.filename:
-        return err("لم يتم اختيار ملف")
-    ext = os.path.splitext(f.filename)[1].lower()
-    if ext not in (".xlsx", ".xls", ".csv"):
-        return err("الصيغ المدعومة: xlsx, xls, csv")
-    path = os.path.join(UPLOADS, "imports", datetime.now().strftime("%Y%m%d%H%M%S") + ext)
-    f.save(path)
+    """mode=preview: الملف بيتنفّذ في معاملة بتترجع (مفيش حاجة بتتحفظ) ← اللي هيتغيّر حقل حقل + token.
+    mode=apply + token: نفس الملف بيتنفّذ فعلًا. تحديث الموظفين الموجودين بس — الموظف الجديد بيتسجّل من
+    «تسجيل موظف جديد»، إلا لو مدير النظام اختار allowAdd (وده بيتسجّل في سجل التدقيق)."""
+    mode = "preview" if request.form.get("mode") == "preview" else "apply"
+    allow_add = request.form.get("allowAdd") in ("1", "true")
+    if allow_add and not me().isAdmin:
+        return forbidden("إضافة موظفين جدد من الاستيراد لمدير النظام بس")
+    token = request.form.get("token") or ""
+    if token:
+        if not re.fullmatch(r"[\w-]+\.(xlsx|xls|csv)", token) or not os.path.exists(os.path.join(IMPORTS_DIR, token)):
+            return err("الملف مش موجود — اختاره تاني واعمل معاينة")
+        path, name = os.path.join(IMPORTS_DIR, token), request.form.get("name") or token
+    else:
+        f = request.files.get("file")
+        if not f or not f.filename:
+            return err("لم يتم اختيار ملف")
+        ext = os.path.splitext(f.filename)[1].lower()
+        if ext not in (".xlsx", ".xls", ".csv"):
+            return err("الصيغ المدعومة: xlsx, xls, csv")
+        os.makedirs(IMPORTS_DIR, exist_ok=True)
+        token = f"{datetime.now():%Y%m%d%H%M%S}_{db.new_id('imp')}{ext}"
+        path, name = os.path.join(IMPORTS_DIR, token), f.filename
+        f.save(path)
     try:
-        with db.session_scope() as s:
-            # تحديث الموظفين الموجودين بس — الموظف الجديد بيتسجّل من «تسجيل موظف جديد»
-            stats = importer.import_file(s, path, uname(), allow_add=False)
-            miss = stats["notRegistered"]
-            db.log_audit(s, "employee_edit",
-                         f"استيراد ملف {f.filename}: {stats['updated']} تحديث"
-                         + (f"، تخطّي {len(miss)} رقم مدني مش مسجّل ({'، '.join(x['id'] for x in miss[:20])}"
-                            + ("…" if len(miss) > 20 else "") + ")" if miss else ""), uname())
+        with db.session_scope(commit=mode == "apply") as s:        # المعاينة مابتتحفظش (rollback)
+            stats = importer.import_file(s, path, uname(), allow_add=allow_add)
+            if mode == "apply":
+                miss, added = stats["notRegistered"], stats["addedList"]
+                db.log_audit(s, "employee_add" if added else "employee_edit",
+                             f"استيراد ملف {name}: {stats['updated']} تحديث"
+                             + (f"، إضافة {len(added)} موظف جديد (بصلاحية مدير النظام — {uname()})" if added else "")
+                             + (f"، تخطّي {len(miss)} رقم مدني مش مسجّل ({'، '.join(x['id'] for x in miss[:20])}"
+                                + ("…" if len(miss) > 20 else "") + ")" if miss else ""), uname())
     except Exception as e:
         return err(f"خطأ في قراءة الملف: {e}")
-    return jsonify({"ok": True, **stats})
+    return jsonify({"ok": True, "mode": mode, "token": token, "fileName": name, "allowAdd": allow_add, **stats})
 
 
 # النماذج الرسمية (pdf_forms.py): الإقامة ورخصة القيادة — PDF متعبّي والخانات قابلة للتعديل قبل الطباعة.

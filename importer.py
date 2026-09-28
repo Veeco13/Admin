@@ -158,6 +158,39 @@ def _affiliation_for_file(s, file_no):
     return None
 
 
+# اسم الحقل للعرض في المعاينة والسجل: أول عنوان عربي في HEADER_MAP، والباقي من هنا
+FIELD_LABELS = {"transferNote": "حالة التحويل", "isDriver": "سائق", "employmentStatus": "الحالة الوظيفية",
+                "fileNo": "رقم الملف", "residencyExp": "انتهاء الإقامة"}
+for _k, _f in HEADER_MAP.items():
+    if re.search(r"[\u0600-\u06FF]", _k):
+        FIELD_LABELS.setdefault(_f, _k)
+_NO_DIFF = {"id", "lastUpdated", "lastUpdatedBy"}
+
+
+def _show(field, v):
+    import history
+    if v is None or v == "":
+        return None
+    if isinstance(v, bool):
+        return "نعم" if v else "لا"
+    if field == "gender":
+        return {"male": "ذكر", "female": "أنثى"}.get(v, v)
+    return str(history.value_label(field, v))
+
+
+def _changes(e, data):
+    """الحقول اللي هتتغيّر فعلًا: [{field, label, old, new}] (بعد تحويل النوع، فـ «540» = 540.0 مش تغيير)."""
+    cols, out = db._columns(type(e)), []
+    for k, v in data.items():
+        if k in _NO_DIFF or k not in cols:
+            continue
+        old, new = db.ser(getattr(e, k)), db.ser(db.coerce(cols[k].columns[0].type, v))
+        if new is None or old == new:          # الخانة الفاضية مابتمسحش (والفاضي أصلًا مابيتبعتش)
+            continue
+        out.append({"field": k, "label": FIELD_LABELS.get(k, k), "old": _show(k, old), "new": _show(k, new)})
+    return out
+
+
 def upsert_employee(s, rec, user, stats, company_cache, allow_add=True):
     """allow_add=False (استيراد الشاشة): الموظف الجديد بيتسجّل من «تسجيل موظف جديد» بس، فالرقم المدني اللي مش
     موجود بيتخطّى ويترجع في stats["notRegistered"] (ومعاه لو فيه مترشّح بنفس الرقم)."""
@@ -185,14 +218,14 @@ def upsert_employee(s, rec, user, stats, company_cache, allow_add=True):
     e = s.get(M.Employee, emp_id)
     is_new = e is None
     old_affs, old_cc = (db.get_affiliations(s, emp_id), e.costCenter) if e else ([], None)
+    changed = []
     if e:
-        db.apply(e, data)
-        stats["updated"] += 1
-        db.push_timeline(s, emp_id, "import_update", "تحديث من ملف استيراد", user)
+        changed = _changes(e, data)
+        if changed:                             # من غير تغيير فعلي ← الموظف مابيتلمسش (ولا «آخر تعديل» ولا سجل)
+            db.apply(e, data)
     else:
         data.setdefault("employmentStatus", "active")
         s.add(db.build(M.Employee, data))
-        stats["added"] += 1
     s.flush()
     # الانتماء
     if not db.get_affiliations(s, emp_id):
@@ -206,13 +239,24 @@ def upsert_employee(s, rec, user, stats, company_cache, allow_add=True):
     import history
     new_affs, new_cc = db.get_affiliations(s, emp_id), s.get(M.Employee, emp_id).costCenter
     if is_new:
+        stats["added"] += 1
+        stats["addedList"].append({"id": emp_id, "name": data.get("name")})
         db.push_timeline(s, emp_id, "import_add", "إضافة من ملف استيراد — " + history.current_state_text(s, new_affs, new_cc), user)
         for a in new_affs:
             if a.get("companyId"):
                 db.log_company_history(s, a["companyId"], "employee_joined",
                                        f"انضمام الموظف {data.get('name')} ({emp_id}) — استيراد", user)
     else:
-        history.record_moves(s, emp_id, data.get("name"), old_affs, new_affs, old_cc, new_cc, user, "استيراد")
+        moves = history.record_moves(s, emp_id, data.get("name"), old_affs, new_affs, old_cc, new_cc, user, "استيراد") or []
+        if changed or moves:
+            stats["updated"] += 1
+            stats["changes"].append({"id": emp_id, "name": e.name, "fields": changed, "moves": moves})
+            if changed:
+                db.push_timeline(s, emp_id, "import_update", "تحديث من ملف استيراد — " + "، ".join(
+                    f"{c['label']}: {c['old'] or '—'} ← {c['new'] or '—'}" for c in changed[:8])
+                    + ("…" if len(changed) > 8 else ""), user)
+        else:
+            stats["unchanged"] += 1
 
 
 def import_dataframe_with_headers(s, df, user, stats, cache, allow_add=True):
@@ -267,7 +311,8 @@ def import_manpower_headerless(s, df, user, stats, cache, allow_add=True):
 
 def import_file(s, path, user, allow_add=True):
     """allow_add=False ← تحديث الموجودين بس (الشاشة). seed_import بيضيف عادي (أول تشغيل)."""
-    stats = {"added": 0, "updated": 0, "skipped": 0, "sheets": [], "notRegistered": []}
+    stats = {"added": 0, "updated": 0, "unchanged": 0, "skipped": 0, "sheets": [], "notRegistered": [],
+             "changes": [], "addedList": []}
     cache = {}
     if path.lower().endswith(".csv"):
         frames = {"csv": pd.read_csv(path, header=None, dtype=object, encoding="utf-8-sig")}
