@@ -59,6 +59,7 @@ class Company(Base):
     commercialLicenseExpiry: Mapped[Optional[date]] = col("commercial_license_expiry", Date)
     licenseCivilNo: Mapped[Optional[str]] = col("license_civil_no", SHORT)
     unifiedNumber: Mapped[Optional[str]] = col("unified_number", SHORT)        # الرقم الموحد للشركة
+    pifssNo: Mapped[Optional[str]] = col("pifss_no", SHORT)                    # رقم التسجيل في التأمينات الاجتماعية
     trafficAuthExpiry: Mapped[Optional[date]] = col("traffic_auth_expiry", Date)
     civilAffairsAuthExpiry: Mapped[Optional[date]] = col("civil_affairs_auth_expiry", Date)
     activity: Mapped[Optional[str]] = col("activity", NAME)
@@ -118,6 +119,19 @@ class Employee(Base):
     addressHouse: Mapped[Optional[str]] = col("address_house", SHORT)
     addressApartment: Mapped[Optional[str]] = col("address_apartment", SHORT)
     homePhone: Mapped[Optional[str]] = col("home_phone", SHORT)
+    email: Mapped[Optional[str]] = col("email", SHORT)
+    # العمالة الوطنية (استمارة 103 للتأمينات واستمارة العلاوة الاجتماعية)
+    maritalStatus: Mapped[Optional[str]] = col("marital_status", String(20))    # single | married | divorced | widowed
+    qualification: Mapped[Optional[str]] = col("qualification", SHORT)
+    specialization: Mapped[Optional[str]] = col("specialization", NAME)
+    naturalizationDate: Mapped[Optional[date]] = col("naturalization_date", Date)
+    citizenshipArticle: Mapped[Optional[str]] = col("citizenship_article", SHORT)    # مادة الجنسية (الأولى …)
+    nationalityNo: Mapped[Optional[str]] = col("nationality_no", SHORT)              # رقم الجنسية
+    studyInstitution: Mapped[Optional[str]] = col("study_institution", NAME)         # جهة الدراسة الحالية (فاضي = مش بيدرس)
+    studyAbroad: Mapped[Optional[bool]] = col("study_abroad", Boolean)
+    studyStartDate: Mapped[Optional[date]] = col("study_start_date", Date)
+    # الأبناء: JSON [{name, dateOfBirth, disabled, disabilityDegree, working, married}] ← db.children_json
+    children: Mapped[Optional[str]] = col("children", TEXT)
     dateOfHire: Mapped[Optional[date]] = col("date_of_hire", Date)
     serviceEndDate: Mapped[Optional[date]] = col("service_end_date", Date)      # آخر يوم عمل (إقرار المخالصة)
     salary: Mapped[Optional[float]] = col("salary", Float)
@@ -196,6 +210,7 @@ class Signatory(Base):
     nameAr: Mapped[str] = col("name_ar", NAME, nullable=False)
     nameEn: Mapped[Optional[str]] = col("name_en", NAME)
     civilId: Mapped[Optional[str]] = col("civil_id", ID)
+    title: Mapped[Optional[str]] = col("title", NAME)                          # المسمى الوظيفي (إقرار استمارة 103)
 
 
 class Template(Base):

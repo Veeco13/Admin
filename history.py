@@ -24,8 +24,13 @@ EMP_STATUS_LABELS = {"active": "في الخدمة", "warning": "في فترة ا
                      "pending_completion": "قيد الاستكمال"}
 
 
+MARITAL_LABELS = {"single": "أعزب", "married": "متزوج", "divorced": "مطلق", "widowed": "أرمل"}
+
+
 def value_label(field, value):
     """قيمة حقل للعرض في السجل (بدل الكود الداخلي)."""
+    if field == "maritalStatus":
+        return MARITAL_LABELS.get(value, value)
     if field == "govStage":
         return GOV_STAGE_LABELS.get(value, value)
     if field == "employmentStatus":

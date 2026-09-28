@@ -101,7 +101,7 @@ function fillCompanyDetails() {
   $('.modal-head h2', m.el).innerHTML = `🏢 ${esc(c.nameAr)}`;
   const panes = {
     info: `<div class="kv">${kv('الاسم (إنجليزي)', c.nameEn)}${kv('مجال النشاط', c.activity)}${kv('إدارة العمل', c.laborOffice)}${kv('رقم الملف الرئيسي', c.mainFileNumber)}
-        ${kv('رقم الرخصة التجارية', c.commercialLicenseNo)}${kv('الرقم المدني للرخصة', c.licenseCivilNo)}${kv('الرقم الموحد', c.unifiedNumber)}</div>
+        ${kv('رقم الرخصة التجارية', c.commercialLicenseNo)}${kv('الرقم المدني للرخصة', c.licenseCivilNo)}${kv('الرقم الموحد', c.unifiedNumber)}${kv('رقم التسجيل في التأمينات', c.pifssNo)}</div>
       <h4>${t('المستندات')}</h4>
       <table class="data"><thead><tr><th>${t('المستند')}</th><th>${t('الانتهاء')}</th><th>${t('المتبقي')}</th><th>${t('الملف')}</th></tr></thead><tbody>
       ${COMPANY_DOC_KINDS.map(k => { const d = c.docs && c.docs[k.key]; return `<tr><td>${esc(t(k.label))}</td><td>${datePill(c[k.exp])}</td><td class="small muted">${c[k.exp] ? esc(daysText(daysUntil(c[k.exp]))) : ''}</td>
@@ -109,7 +109,7 @@ function fillCompanyDetails() {
       </tbody></table>`,
     sigs: `<div class="row" style="margin-bottom:8px"><span class="spacer"></span><button class="btn sm write-only" data-p="companies.edit" data-sig-add>➕ ${t('إضافة مفوّض')}</button></div>
       ${sigs.length ? `<table class="data"><thead><tr><th>${t('الاسم')}</th><th>${t('الرقم المدني')}</th><th>${t('انتهاء البطاقة')}</th><th></th></tr></thead><tbody>
-      ${sigs.map(s => { const sd = s.civilId && STATE.signatoryDocs[s.civilId]; return `<tr><td><b>${esc(s.nameAr)}</b><div class="small muted" dir="ltr" style="text-align:start">${esc(s.nameEn || '')}</div></td>
+      ${sigs.map(s => { const sd = s.civilId && STATE.signatoryDocs[s.civilId]; return `<tr><td><b>${esc(s.nameAr)}</b>${s.title ? `<div class="small muted">${esc(s.title)}</div>` : ''}<div class="small muted" dir="ltr" style="text-align:start">${esc(s.nameEn || '')}</div></td>
         <td class="num">${esc(s.civilId || '')}</td><td>${sd ? datePill(sd.expiryDate) : '<span class="muted">—</span>'}</td>
         <td class="row">${sd && sd.url && sd.name ? `<a class="btn sm" href="${esc(sd.url)}" target="_blank" title="${t('عرض البطاقة')}">🪪</a>` : ''}
           <button class="btn sm write-only" data-p="companies.edit" data-sig-doc="${esc(s.civilId || '')}">🪪 ${t('البطاقة')}</button>
@@ -194,6 +194,7 @@ function openCompanyModal(id) {
       <label>${t('رقم الرخصة التجارية')}<input name="commercialLicenseNo" value="${v('commercialLicenseNo')}"></label>
       <label>${t('الرقم المدني للرخصة')}<input name="licenseCivilNo" value="${v('licenseCivilNo')}"></label>
       <label>${t('الرقم الموحد')}<input name="unifiedNumber" value="${v('unifiedNumber')}" inputmode="numeric"></label>
+      <label>${t('رقم التسجيل في التأمينات الاجتماعية')}<input name="pifssNo" value="${v('pifssNo')}"></label>
       <label>${t('انتهاء الرخصة التجارية')}<input type="date" name="commercialLicenseExpiry" value="${v('commercialLicenseExpiry')}"></label>
       <label>${t('انتهاء تفويض المرور')}<input type="date" name="trafficAuthExpiry" value="${v('trafficAuthExpiry')}"></label>
       <label>${t('انتهاء تفويض الشؤون المدنية')}<input type="date" name="civilAffairsAuthExpiry" value="${v('civilAffairsAuthExpiry')}"></label>
@@ -239,7 +240,8 @@ function openSignatoryModal(companyId, s) {
     title: s.id ? t('تعديل مفوّض') : t('إضافة مفوّض بالتوقيع'), size: 'narrow',
     body: `<div class="form"><label class="full"><span class="req">${t('الاسم (عربي)')}</span><input name="nameAr" value="${esc(s.nameAr || '')}"></label>
       <label class="full">${t('الاسم (إنجليزي)')}<input name="nameEn" value="${esc(s.nameEn || '')}" dir="ltr"></label>
-      <label class="full">${t('الرقم المدني')}<input name="civilId" value="${esc(s.civilId || '')}" inputmode="numeric"></label></div>`,
+      <label class="full">${t('الرقم المدني')}<input name="civilId" value="${esc(s.civilId || '')}" inputmode="numeric"></label>
+      <label class="full">${t('المسمى الوظيفي')}<input name="title" value="${esc(s.title || '')}" placeholder="${esc(t('المفوض بالتوقيع'))}"></label></div>`,
     foot: `<button class="btn primary" data-save>حفظ</button><button class="btn" data-close>إلغاء</button>`,
   });
   $('[data-save]', m.el).onclick = async () => {

@@ -32,6 +32,17 @@ const GOV_STAGES = [
 const MOVE_ICONS = { baseline: '🏁', create: '🆕', import_add: '📥', transfer: '🔀', project: '📁', cost_center: '💼' };
 const GENDER_LABELS = { male: 'ذكر', female: 'أنثى' };
 const BLOOD_TYPES = ['A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-'];
+const MARITAL_LABELS = { single: 'أعزب', married: 'متزوج', divorced: 'مطلق', widowed: 'أرمل' };
+// العمالة الوطنية (استمارة 103 للتأمينات واستمارة العلاوة الاجتماعية) — نفس pdf_forms.KUWAITI
+const KUWAITI_NATIONALITIES = ['الكويت', 'كويتي', 'كويتية', 'معاملة كويتية'];
+function isKuwaitiStaff(p) { return KUWAITI_NATIONALITIES.map(norm).includes(norm(p && p.nationality)); }
+function maritalLabel(p) { const l = MARITAL_LABELS[p.maritalStatus]; return l ? t(l) : ''; }
+function ageYears(dob) {
+  const d = parseDate(dob); if (!d) return null;
+  const n = new Date(); let a = n.getFullYear() - d.getFullYear();
+  if (n.getMonth() < d.getMonth() || (n.getMonth() === d.getMonth() && n.getDate() < d.getDate())) a--;
+  return a;
+}
 /** عنوان السكن (موظف أو مترشّح) في سطر واحد */
 function addressText(p) {
   return [p.addressArea, p.addressBlock && `${t('قطعة')} ${p.addressBlock}`, p.addressStreet && `${t('شارع')} ${p.addressStreet}`,

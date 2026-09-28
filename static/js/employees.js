@@ -211,6 +211,9 @@ const EMP_REPORT_COLS = [
   { k: 'gender', g: 'basic', l: 'الجنس', v: e => t(GENDER_LABELS[e.gender] || '') },
   { k: 'dateOfBirth', g: 'basic', l: 'تاريخ الميلاد', date: true },
   { k: 'profession', g: 'basic', l: 'المهنة', v: e => e.profession },
+  { k: 'maritalStatus', g: 'basic', l: 'الحالة الاجتماعية', v: e => maritalLabel(e) },
+  { k: 'qualification', g: 'basic', l: 'المؤهل الدراسي', v: e => e.qualification },
+  { k: 'childrenCount', g: 'basic', l: 'عدد الأبناء', v: e => (e.children || []).length || '', num: true },
   { k: 'company', g: 'work', l: 'الشركة', v: e => companyName(empCompanyId(e)) },
   { k: 'project', g: 'work', l: 'المشروع', v: e => projectName(primaryAff(e).projectId) },
   { k: 'costCenter', g: 'work', l: 'مركز التكلفة', v: e => e.costCenter },
@@ -236,6 +239,7 @@ const EMP_REPORT_COLS = [
   { k: 'govTransactionCost', g: 'gov', l: 'تكلفة المعاملة', money: true, perm: 'sensitive.salary' },
   { k: 'phone', g: 'contact', l: 'الهاتف', v: e => e.phone, num: true },
   { k: 'homePhone', g: 'contact', l: 'هاتف المنزل', v: e => e.homePhone, num: true },
+  { k: 'email', g: 'contact', l: 'البريد الإلكتروني', v: e => e.email, ltr: true },
   { k: 'address', g: 'contact', l: 'عنوان السكن', v: e => addressText(e), txt: true },
   { k: 'bank', g: 'contact', l: 'البنك', v: e => e.bank, perm: 'sensitive.bank' },
   { k: 'iban', g: 'contact', l: 'IBAN', v: e => e.iban, perm: 'sensitive.bank' },
@@ -547,9 +551,10 @@ async function openProfileCard(id, tab = 'info') {
         ${field('عنوان السكن', esc(addressText(e)))}${field('هاتف المنزل', esc(e.homePhone))}${can('sensitive.salary') ? field('الراتب', fmtMoney(e.salary)) : ''}
         ${field('بدل السكن', e.housingIncluded ? (e.housingAmount ? fmtMoney(e.housingAmount) : t('مشمول')) : t('غير مشمول'))}
         ${field('نوع العقد', esc(e.contractType))}${field('رقم الملف', esc(e.fileNo))}${field('مركز التكلفة', esc(e.costCenter))}
-        ${field('مكان العمل الفعلي', esc(e.actualWorkplace))}${field('الهاتف', esc(e.phone))}${can('sensitive.bank') ? field('البنك', esc(e.bank) + (e.iban ? `<div class="small muted">${esc(e.iban)}</div>` : '')) : ''}
+        ${field('مكان العمل الفعلي', esc(e.actualWorkplace))}${field('الهاتف', esc(e.phone))}${field('البريد الإلكتروني', esc(e.email))}${can('sensitive.bank') ? field('البنك', esc(e.bank) + (e.iban ? `<div class="small muted">${esc(e.iban)}</div>` : '')) : ''}
         ${field('مرجع إضافي', esc(e.dpId))}
       </div>
+      ${isKuwaitiStaff(e) ? kuwaitiInfoHtml(e, field) : ''}
       <h4>${t('الشركات والمشاريع')}</h4>
       ${costCenterCompanyId(e.costCenter) && !(e.affiliations || []).some(a => a.companyId === costCenterCompanyId(e.costCenter))
         ? `<div class="notice" style="margin:4px 0">🏭 ${t('شغال فعليًا في')}: <b>${esc(companyName(costCenterCompanyId(e.costCenter)) || '—')}</b> <span class="small">(${t('مركز التكلفة')}: ${esc(e.costCenter)})</span></div>` : ''}
@@ -583,6 +588,7 @@ async function openProfileCard(id, tab = 'info') {
       <button class="btn" data-p="contract.view employees.view sensitive.salary" data-a="contract">📄 عقد العمل</button>
       ${empNeedsResidency(e) ? '<button class="btn" data-p="sensitive.documents" data-a="residency">🪪 نموذج الإقامة</button>' : ''}
       <button class="btn" data-a="driving">🚗 نموذج رخصة القيادة</button>
+      ${isKuwaitiStaff(e) ? `<button class="btn" data-a="kw">🇰🇼 ${t('نماذج العمالة الوطنية')}</button>` : ''}
       <button class="btn" data-a="clearance">🧾 إقرار مخالصة</button>
       <button class="btn" data-a="print">🖨️ طباعة</button>
       <span class="spacer"></span>
@@ -604,6 +610,7 @@ async function openProfileCard(id, tab = 'info') {
     else if (a === 'contract') { m.close(); VIEW_ARGS = { emp: e.id }; setView('contract'); }
     else if (a === 'residency') openOfficialFormModal('residency', 'employee', e.id);
     else if (a === 'driving') openOfficialFormModal('driving', 'employee', e.id);
+    else if (a === 'kw') openKuwaitiFormsChooser(e.id);
     else if (a === 'clearance') openClearanceModal(e.id);
     else if (a === 'print') printHtml(e.name, `<h1>${esc(e.name)}</h1><div class="muted">${esc(e.nameEn || '')} · ${esc(e.id)}</div>` + $('[data-pane="info"]', m.el).innerHTML + $('[data-pane="docs"]', m.el).innerHTML);
     else if (a === 'delete') {
@@ -629,6 +636,13 @@ const OFFICIAL_FORMS = {
     actions: ['إصدار رخصة سوق خاصة', 'إصدار رخصة سوق عامة', 'إصدار رخصة سوق دراجة', 'إصدار رخصة سوق إنشائية'],
     fields: ['civilId', 'unifiedNumber', 'nationality', 'dateOfBirth', 'gender', 'bloodType', 'profession', 'actualWorkplace',
       'addressArea', 'addressBlock', 'addressStreet', 'addressHouse', 'addressApartment', 'phone', 'homePhone'] },
+  // العمالة الوطنية
+  pifss103: { title: '🇰🇼 استمارة 103 — التأمينات الاجتماعية', action: 'تسجيل أول مرة', extras: 'pifss',
+    actions: ['تسجيل أول مرة', 'سبق تسجيله', 'إنهاء خدمة'],
+    fields: ['dateOfBirth', 'phone', 'email', 'addressArea', 'addressBlock', 'addressStreet', 'addressHouse', 'nationalityNo',
+      'citizenshipArticle', 'profession', 'dateOfHire', 'company.pifssNo'] },
+  social: { title: '🇰🇼 استمارة العلاوة الاجتماعية وعلاوة الأولاد', action: 'طلب صرف', extras: 'social', actions: ['طلب صرف'],
+    fields: ['phone', 'maritalStatus', 'qualification'] },
 };
 // [العنوان، النوع، خصائص]
 const OFFICIAL_FIELDS = {
@@ -642,6 +656,10 @@ const OFFICIAL_FIELDS = {
   'company.licenseCivilNo': ['الرقم المدني للرخصة (الشركة)'], 'company.unifiedNumber': ['الرقم الموحد للشركة', 'text', 'inputmode="numeric"'],
   'company.nameEn': ['اسم الشركة بالإنجليزي', 'text', 'dir="ltr"'],
   dateOfHire: ['تاريخ التعيين', 'date'], serviceEndDate: ['تاريخ انتهاء الخدمة', 'date'],
+  email: ['البريد الإلكتروني', 'email', 'dir="ltr"'], maritalStatus: ['الحالة الاجتماعية', 'marital'],
+  qualification: ['المؤهل الدراسي', 'text', 'list="dl-qual"'], specialization: ['التخصص'], nationalityNo: ['رقم الجنسية'],
+  citizenshipArticle: ['المادة (الجنسية)', 'text', 'list="dl-article"'], naturalizationDate: ['تاريخ التجنس', 'date'],
+  'company.pifssNo': ['رقم التسجيل في التأمينات (الشركة)'],
 };
 /** البيانات الناقصة لشخص (موظف / مترشّح) وشركته — بتتعرض كخانات، واللي يتكتب فيها بيتحفظ في مكانه.
     fields = مفاتيح OFFICIAL_FIELDS (بتاعة الشركة: company.xxx) */
@@ -657,6 +675,7 @@ function missingDataKit(fields, kind, rec) {
     const [l, type = 'text', extra = ''] = OFFICIAL_FIELDS[k];
     const lab = t(l) + (savable(k) ? '' : ` <span class="small muted">(${t('للنموذج بس')})</span>`);
     if (type === 'gender') return `<label>${lab}<select name="${k}">${opt('', '—', true)}${Object.entries(GENDER_LABELS).map(([v, x]) => opt(v, t(x), false)).join('')}</select></label>`;
+    if (type === 'marital') return `<label>${lab}<select name="${k}">${opt('', '—', true)}${Object.entries(MARITAL_LABELS).map(([v, x]) => opt(v, t(x), false)).join('')}</select></label>`;
     if (type === 'blood') return `<label>${lab}<select name="${k}">${opt('', '—', true)}${BLOOD_TYPES.map(x => opt(x, x, false)).join('')}</select></label>`;
     return `<label>${lab}<input name="${k}" type="${type}" ${extra}></label>`;
   };
@@ -685,35 +704,118 @@ function missingDataKit(fields, kind, rec) {
     },
   };
 }
-/** form = residency | driving، kind = employee | candidate */
+/** form = residency | driving | pifss103 | social، kind = employee | candidate */
 function openOfficialFormModal(form, kind, id) {
   const spec = OFFICIAL_FORMS[form];
   const rec = kind === 'employee' ? IDX.employee[id] : IDX.candidate[id];
   if (!rec) return toast('غير موجود', 'err');
   const kit = missingDataKit(spec.fields, kind, rec);
+  const extras = spec.extras === 'pifss' ? pifssExtrasHtml(kit, rec) : spec.extras === 'social' ? socialExtrasHtml(rec) : '';
   const m = openModal({
-    title: spec.title + ': ' + esc(rec.name), size: kit.missing.length > 3 ? '' : 'narrow',
+    title: esc(t(spec.title)) + ': ' + esc(rec.name), size: kit.missing.length > 3 || spec.extras ? '' : 'narrow',
     body: `<div class="form" id="of-form">
         <label class="full">${t('نوع الإجراء')}<select name="__action">${spec.actions.map(x => opt(x, t(x), x === spec.action)).join('')}</select></label>
-        ${kit.html()}</div>${kit.notice()}
+        ${extras}${kit.html()}</div>${kit.notice()}${KUWAITI_DATALISTS}
       <div class="small muted" style="margin-top:6px">${t('أي خانة تانية فاضية تقدر تكتبها في النموذج نفسه قبل الطباعة.')}</div>`,
     foot: `<button class="btn primary" data-go>📄 ${t('حفظ وعرض النموذج')}</button><span class="spacer"></span><button class="btn" data-close>إلغاء</button>`,
   });
+  const endBox = $('#of-end', m.el), act = $('[name="__action"]', m.el);
+  if (endBox) { const upd = () => { endBox.style.display = act.value === 'إنهاء خدمة' ? '' : 'none'; }; act.addEventListener('change', upd); upd(); }
   $('[data-go]', m.el).onclick = async (ev) => {
     const b = ev.currentTarget;
-    const d = formValues($('#of-form', m.el)), action = d.__action;
-    delete d.__action;
+    const d = formValues($('#of-form', m.el)), action = d.__action, extra = {};
+    Object.keys(d).filter(k => k.startsWith('__')).forEach(k => { if (k.startsWith('__x_') && d[k] !== '' && d[k] != null) extra[k.slice(4)] = d[k]; delete d[k]; });
+    if ('serviceEndDate' in d && (d.serviceEndDate || '') === (rec.serviceEndDate || '')) delete d.serviceEndDate;   // مااتغيّرش
     b.disabled = true;
     const data = await kit.save(d);
     if (!data) { b.disabled = false; return; }
     try {
       const res = await fetchBlob(`/api/${kind === 'employee' ? 'employees' : 'candidates'}/${encodeURIComponent(rec.id)}/forms/${form}`,
-        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, ...data }) });
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, ...extra, ...data }) });
       m.close();
       openPdfPreviewModal(res.blob, res.name, 1);
     } catch (e) { toast(e.message, 'err'); b.disabled = false; }
   };
 }
+
+/* ---------- العمالة الوطنية: استمارة 103 (التأمينات) واستمارة العلاوة الاجتماعية وعلاوة الأولاد ---------- */
+const PIFSS_END_REASONS = ['استقالة', 'إنهاء خدمات من صاحب العمل', 'انتهاء العقد', 'التقاعد', 'الوفاة'];
+const KUWAITI_DATALISTS = `<datalist id="dl-qual">${['ابتدائي', 'متوسط', 'ثانوي', 'دبلوم', 'بكالوريوس', 'ماجستير', 'دكتوراه'].map(x => `<option value="${x}">`).join('')}</datalist>
+  <datalist id="dl-article">${['الأولى', 'الثانية', 'الثالثة', 'الرابعة', 'الخامسة', 'السابعة', 'الثامنة'].map(x => `<option value="${x}">`).join('')}</datalist>`;
+/** اختيارات استمارة 103 اللي مش في بيانات الموظف (المبالغ للي معاه صلاحية الرواتب بس) */
+function pifssExtrasHtml(kit, e) {
+  const money = (k, l) => `<label>${t(l)}<input type="number" step="0.001" min="0" name="__x_${k}"></label>`;
+  return `<label>${t('المفوّض بالتوقيع')}<select name="__x_sig">${batchSigOptions(kit.cid)}</select></label>
+    <label>${t('تاريخ التوقيع')}<input type="date" name="__x_signDate" value="${todayISO()}"></label>
+    ${can('sensitive.salary') ? money('socialAllowance', 'العلاوة الاجتماعية (د.ك)') + money('allowances', 'البدلات الخاضعة للتأمين التكميلي (د.ك)') : ''}
+    <label>${t('تاريخ بدء المرتب الأخير')}<input type="date" name="__x_lastSalaryDate"></label>
+    <label>${t('يوجد نظام صرف مكافأة')}<select name="__x_reward">${opt('', '—', true)}${opt('yes', t('نعم'), false)}${opt('no', t('لا'), false)}</select></label>
+    <label>${t('صرف مكافأة سابقًا')}<select name="__x_rewardPaid">${opt('', '—', true)}${opt('before', t('قبل تطبيق قانون 2014/110'), false)}${opt('after', t('بعد تطبيق قانون 2014/110'), false)}${opt('none', t('لم يتم الصرف'), false)}</select></label>
+    <div class="form" id="of-end" style="grid-column:1/-1;display:none"><h4>${t('انتهاء الخدمة')}</h4>
+      <label>${t('تاريخ انتهاء الخدمة')}<input type="date" name="serviceEndDate" value="${esc(e.serviceEndDate || '')}"></label>
+      <label>${t('سبب انتهاء الخدمة')}<input name="__x_endReason" list="dl-end-reason"></label>
+      <datalist id="dl-end-reason">${PIFSS_END_REASONS.map(x => `<option value="${esc(t(x))}">`).join('')}</datalist></div>`;
+}
+function socialExtrasHtml(e) {
+  const kids = e.children || [];
+  return `<div class="notice" style="grid-column:1/-1">👨‍👩‍👧 ${t('الأبناء المسجّلين')}: <b>${kids.length}</b>${kids.length > 7 ? ' — ' + t('الاستمارة فيها 7 صفوف بس') : ''}
+    ${kids.length ? '<br>' + kids.map(c => esc(c.name)).join('، ') : ''}
+    <div class="small muted">${t('الأبناء والدراسة الحالية بيتعدّلوا من «تعديل» الموظف (بيانات العمالة الوطنية).')}</div></div>`;
+}
+function openKuwaitiFormsChooser(id) {
+  const m = openModal({
+    title: '🇰🇼 ' + t('نماذج العمالة الوطنية'), size: 'narrow',
+    body: ['pifss103', 'social'].map(f => `<button class="btn" data-f="${f}" style="width:100%;justify-content:flex-start;margin-bottom:8px">${esc(t(OFFICIAL_FORMS[f].title))}</button>`).join(''),
+    foot: `<span class="spacer"></span><button class="btn" data-close>${t('إغلاق')}</button>`,
+  });
+  $$('[data-f]', m.el).forEach(b => b.onclick = () => { m.close(); openOfficialFormModal(b.dataset.f, 'employee', id); });
+}
+/** بطاقة الموظف: بيانات العمالة الوطنية + الأبناء */
+function kuwaitiInfoHtml(e, field) {
+  const kids = e.children || [];
+  const study = e.studyInstitution ? esc(e.studyInstitution) + ` <span class="small muted">(${t(e.studyAbroad ? 'خارج الكويت' : 'داخل الكويت')}${e.studyStartDate ? ' · ' + fmtDate(e.studyStartDate) : ''})</span>` : '';
+  return `<h4>🇰🇼 ${t('بيانات العمالة الوطنية')}</h4><div class="kv">
+      ${field('الحالة الاجتماعية', esc(maritalLabel(e)))}${field('المؤهل الدراسي', esc(e.qualification))}${field('التخصص', esc(e.specialization))}
+      ${field('رقم الجنسية', esc(e.nationalityNo))}${field('المادة (الجنسية)', esc(e.citizenshipArticle))}${field('تاريخ التجنس', fmtDate(e.naturalizationDate))}
+      ${field('الدراسة الحالية', study)}</div>
+    <h4>${t('الأبناء')} (${kids.length})</h4>
+    ${kids.length ? `<table class="data"><thead><tr><th>${t('الاسم')}</th><th>${t('تاريخ الميلاد')}</th><th>${t('العمر')}</th><th>${t('الحالة الصحية')}</th><th>${t('يعمل')}</th><th>${t('متزوج')}</th></tr></thead><tbody>
+      ${kids.map(c => `<tr><td>${esc(c.name)}</td><td>${fmtDate(c.dateOfBirth)}</td><td class="num">${ageYears(c.dateOfBirth) ?? ''}</td>
+        <td>${c.disabled ? t('معاق') + (c.disabilityDegree ? ` (${esc(c.disabilityDegree)})` : '') : t('سليم')}</td><td>${c.working ? t('نعم') : t('لا')}</td><td>${c.married ? t('نعم') : t('لا')}</td></tr>`).join('')}
+      </tbody></table>` : '<div class="muted">—</div>'}`;
+}
+/** نافذة الموظف: قسم العمالة الوطنية (بيظهر للكويتي ومعاملة كويتية بس) */
+function kuwaitiInputs(e) {
+  const v = k => esc(e[k] ?? '');
+  const inp = (k, l, type = 'text', extra = '') => `<label>${t(l)}<input name="${k}" type="${type}" value="${v(k)}" ${extra}></label>`;
+  return `<div class="form" id="kw-box" style="grid-column:1/-1;${isKuwaitiStaff(e) ? '' : 'display:none'}">
+    <h4>🇰🇼 ${t('بيانات العمالة الوطنية')} <span class="small muted">(${t('لاستمارة 103 واستمارة العلاوة الاجتماعية')})</span></h4>
+    <label>${t('الحالة الاجتماعية')}<select name="maritalStatus">${opt('', '—', !e.maritalStatus)}${Object.entries(MARITAL_LABELS).map(([k, l]) => opt(k, t(l), k === e.maritalStatus)).join('')}</select></label>
+    ${inp('qualification', 'المؤهل الدراسي', 'text', 'list="dl-qual"')}${inp('specialization', 'التخصص')}
+    ${inp('nationalityNo', 'رقم الجنسية')}${inp('citizenshipArticle', 'المادة (الجنسية)', 'text', 'list="dl-article"')}${inp('naturalizationDate', 'تاريخ التجنس', 'date')}
+    ${inp('studyInstitution', 'جهة الدراسة الحالية')}
+    <label>${t('مكان الدراسة')}<select name="studyAbroad">${opt('', '—', e.studyAbroad == null)}${opt('0', t('داخل الكويت'), e.studyAbroad === false)}${opt('1', t('خارج الكويت'), e.studyAbroad === true)}</select></label>
+    ${inp('studyStartDate', 'بداية القيد في الدراسة', 'date')}
+    <h4>${t('الأبناء')} <button type="button" class="btn sm" id="kid-add">➕ ${t('إضافة ابن')}</button></h4>
+    <div id="kids-box" style="grid-column:1/-1">${renderKidRows(e.children || [])}</div>
+    ${KUWAITI_DATALISTS}</div>`;
+}
+function renderKidRows(kids) {
+  return `<table class="data kids"><thead><tr><th>${t('الاسم')}</th><th>${t('تاريخ الميلاد')}</th><th>${t('الحالة الصحية')}</th><th>${t('درجة الإعاقة')}</th><th>${t('يعمل')}</th><th>${t('متزوج')}</th><th></th></tr></thead><tbody>
+    ${kids.map(c => `<tr data-kid><td><input data-k="name" value="${esc(c.name || '')}"></td><td><input type="date" data-k="dateOfBirth" value="${esc(c.dateOfBirth || '')}"></td>
+      <td><select data-k="disabled">${opt('0', t('سليم'), !c.disabled)}${opt('1', t('معاق'), !!c.disabled)}</select></td><td><input data-k="disabilityDegree" value="${esc(c.disabilityDegree || '')}"></td>
+      <td><input type="checkbox" data-k="working" ${c.working ? 'checked' : ''}></td><td><input type="checkbox" data-k="married" ${c.married ? 'checked' : ''}></td>
+      <td><button type="button" class="btn sm danger" data-kid-del>✕</button></td></tr>`).join('') || `<tr><td colspan="7" class="muted">${t('مفيش أبناء مسجّلين')}</td></tr>`}</tbody></table>`;
+}
+/** keepEmpty = الصفوف اللي لسه من غير اسم (وقت إضافة صف) */
+function collectKidRows(root, keepEmpty = false) {
+  return $$('[data-kid]', root).map(tr => {
+    const g = k => $(`[data-k="${k}"]`, tr);
+    return { name: g('name').value.trim(), dateOfBirth: g('dateOfBirth').value || null, disabled: g('disabled').value === '1',
+      disabilityDegree: g('disabilityDegree').value.trim() || null, working: g('working').checked, married: g('married').checked };
+  }).filter(c => keepEmpty || c.name);
+}
+function bindKidRows(root) { $$('[data-kid-del]', root).forEach(b => b.onclick = () => b.closest('tr').remove()); }
 
 /* ---------- إقرار مخالصة عمالية نهائية (استلام المستحقات) — forms/clearance.docx بمحرك العقود ---------- */
 const CLEARANCE_FIELDS = ['nameEn', 'nationality', 'dateOfHire', 'serviceEndDate', 'company.nameEn'];
@@ -828,8 +930,9 @@ function openEmployeeModal(id) {
       ${dt('dateOfBirth', 'تاريخ الميلاد')}
       <label>${t('الجنس')}<select name="gender">${opt('', '—', !e.gender)}${Object.entries(GENDER_LABELS).map(([k, l]) => opt(k, t(l), k === e.gender)).join('')}</select></label>
       ${inp('placeOfBirth', 'مكان الميلاد')}${dt('dateOfHire', 'تاريخ التعيين')}${dt('serviceEndDate', 'تاريخ انتهاء الخدمة')}
-      ${inp('phone', 'الهاتف')}
+      ${inp('phone', 'الهاتف')}${inp('email', 'البريد الإلكتروني', 'email', 'dir="ltr"')}
       ${personExtraInputs(e)}
+      ${kuwaitiInputs(e)}
       <h4>العمل والراتب</h4>
       <label>${t('الحالة الوظيفية')}<select name="employmentStatus">${Object.entries(EMP_STATUS_LABELS).map(([k, s]) => opt(k, LANG === 'en' ? s.en : s.ar, k === (e.employmentStatus || 'active'))).join('')}</select></label>
       ${inp('salary', 'الراتب (د.ك)', 'number', 'step="0.001" min="0"')}
@@ -865,10 +968,16 @@ function openEmployeeModal(id) {
     $('#aff-box', m.el).innerHTML = renderAffRows(affs); bindAffRows(form); translateDomText($('#aff-box', m.el));
   };
   const dd = $('#drop-draft', m.el); if (dd) dd.onclick = () => { clearDraft('employee'); m.close(); openEmployeeModal(null); };
-  const collect = () => Object.assign(formValues(form), { affiliations: collectAffRows(form) });
+  const collect = () => Object.assign(formValues(form), { affiliations: collectAffRows(form), children: collectKidRows(form) });
+  bindKidRows(form);
+  $('#kid-add', m.el).onclick = () => {
+    const kids = collectKidRows(form, true); kids.push({});
+    $('#kids-box', m.el).innerHTML = renderKidRows(kids); bindKidRows(form); translateDomText($('#kids-box', m.el));
+  };
   if (isNew) attachDraftAutosave('employee', form, collect);
   // ترجمة الجنسية تلقائيًا
   const natIn = form.querySelector('[name="nationality"]');
+  natIn.addEventListener('input', () => { $('#kw-box', m.el).style.display = isKuwaitiStaff({ nationality: natIn.value }) ? '' : 'none'; });
   natIn.addEventListener('change', () => {
     const en = form.querySelector('[name="nationalityEn"]');
     if (!en.value) { const ex = STATE.employees.find(x => x.nationality === natIn.value && x.nationalityEn); if (ex) en.value = ex.nationalityEn; }

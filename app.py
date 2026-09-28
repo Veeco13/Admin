@@ -330,7 +330,7 @@ TRACKED_DATE_LABELS = {
     "healthCardExp": "البطاقة الصحية", "drivingLicenseExp": "رخصة القيادة",
 }
 DIFF_LABELS = {"name": "الاسم", "salary": "الراتب", "profession": "المهنة", "employmentStatus": "الحالة الوظيفية",
-               "govStage": "مرحلة المعاملة", **TRACKED_DATE_LABELS}     # الشركة ومركز التكلفة ← history.record_moves
+               "govStage": "مرحلة المعاملة", "maritalStatus": "الحالة الاجتماعية", **TRACKED_DATE_LABELS}     # الشركة ومركز التكلفة ← history.record_moves
 
 
 @app.post("/api/employees")
@@ -384,6 +384,8 @@ def save_employee(orig_id):
                     return err(f"يوجد موظف بنفس الاسم والجنسية: {dup_name(d)}"
                                + (f" ({d['id']})" if u.allCompanies else ""), 409, warn=True, **dup_extra(d))
             affs = data.pop("affiliations", None)
+            if "children" in data:
+                data["children"] = db.children_json(data["children"])
             data["lastUpdated"] = db.now()
             data["lastUpdatedBy"] = user
             if orig_id:
@@ -398,6 +400,9 @@ def save_employee(orig_id):
                 new = db.to_dict(e)
                 changes = [f"{lab}: {history.value_label(k, old.get(k)) or '—'} ← {history.value_label(k, new.get(k)) or '—'}"
                            for k, lab in DIFF_LABELS.items() if k in data and old.get(k) != new.get(k)]
+                if "children" in data and old.get("children") != new.get("children"):
+                    changes.append(f"بيانات الأبناء: {len(db.children_list(old.get('children')))} ← "
+                                   f"{len(db.children_list(new.get('children')))}")
                 for ch in changes:
                     db.push_timeline(s, new_id, "edit", ch, user)
                 if affs is not None:
@@ -574,7 +579,7 @@ def import_employees():
 # النماذج الرسمية (pdf_forms.py): الإقامة ورخصة القيادة — PDF متعبّي والخانات قابلة للتعديل قبل الطباعة.
 # الجسم: {action, person: {...}, company: {...}} = اللي اتكتب في نافذة البيانات الناقصة. بيتكتب في النموذج حتى لو
 # المستخدم مايقدرش يحفظه (الحفظ في مكانه بيتعمل من الواجهة بالـ PUT العادي بكل فحوصاته قبل الطلب ده).
-def _official_form(form, person, company, who):
+def _official_form(form, person, company, who, extra=None):
     f = pdf_forms.FORMS[form]
     d = body()
     action = d.get("action") or f["actions"][0]
@@ -585,9 +590,24 @@ def _official_form(form, person, company, who):
     person = {**person, **p}
     if who[0] == "employee":
         person["civilId"] = person["id"]
-    data = pdf_forms.fill(form, person, {**(company or {}), **c}, action)
+    data = pdf_forms.fill(form, person, {**(company or {}), **c}, action, extra)
     name = f"{f['title']} - {person.get('name')}.pdf"
     return (data, name, action), None
+
+
+# اختيارات نافذة استمارة 103: المفوّض (من شركة الموظف) وتاريخ التوقيع والمبالغ والمكافأة وسبب انتهاء الخدمة
+FORM_EXTRA_KEYS = ("signDate", "endReason", "reward", "rewardPaid", "socialAllowance", "allowances", "lastSalaryDate")
+
+
+def _form_extra(s, cid):
+    d = body()
+    x = {k: d[k] for k in FORM_EXTRA_KEYS if d.get(k) not in (None, "")}
+    # «أول مفوّض في الشركة» (من غير اختيار) ← أول مفوّض لشركة الموظف، زي العقود
+    sig = s.get(M.Signatory, d["sig"]) if d.get("sig") else \
+        (s.scalars(select(M.Signatory).where(M.Signatory.companyId == cid)).first() if cid else None)
+    if sig and sig.companyId == cid:
+        x["sigName"], x["sigTitle"] = sig.nameAr, sig.title
+    return x
 
 
 def _send_pdf(data, name):
@@ -609,8 +629,13 @@ def employee_official_form(emp_id, form):
             return forbidden(OUT_OF_SCOPE)
         if form == "residency" and not pdf_forms.needs_residency(emp.get("nationality")):
             return err("المواطنين الكويتيين ومواطني الخليج مالهمش إقامة")
+        if pdf_forms.FORMS[form].get("kuwaiti") and not pdf_forms.is_kuwaiti(emp.get("nationality")):
+            return err("النموذج ده للعمالة الوطنية بس (الكويتيين ومعاملة كويتية)")
+        if not me().can("sensitive.salary"):
+            emp["salary"] = None                    # الراتب في استمارة 103 للي معاه صلاحية الرواتب بس
         cid = next((a["companyId"] for a in emp.get("affiliations") or [] if a.get("companyId")), None)
-        out, bad = _official_form(form, emp, db.to_dict(s.get(M.Company, cid)) if cid else None, ("employee", emp_id))
+        out, bad = _official_form(form, emp, db.to_dict(s.get(M.Company, cid)) if cid else None, ("employee", emp_id),
+                                  _form_extra(s, cid))
         if bad:
             return bad
         db.log_audit(s, f"employee_{form}_form", f"{pdf_forms.FORMS[form]['title']} ({out[2]}) للموظف: {emp['name']} ({emp_id})",

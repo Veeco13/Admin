@@ -11,6 +11,7 @@ Lunx — طبقة قاعدة البيانات (SQLAlchemy)
 كل الكود بيتعامل مع الـ ORM (models.py) — مفيش SQL خاص بنوع معيّن.
 """
 import os
+import json
 import re
 import sys
 import uuid
@@ -320,11 +321,39 @@ def set_affiliations(s, emp_id, affs):
     s.flush()
 
 
+def children_list(v):
+    """عمود الأبناء (نص JSON) ← قائمة."""
+    try:
+        v = json.loads(v) if isinstance(v, str) and v.strip() else v
+    except ValueError:
+        return []
+    return v if isinstance(v, list) else []
+
+
+def children_json(v):
+    """الأبناء من الواجهة (قائمة) ← نص JSON نضيف للتخزين (أو None لو مفيش). اللي من غير اسم بيتشال."""
+    out = []
+    for c in children_list(v):
+        if not isinstance(c, dict) or not str(c.get("name") or "").strip():
+            continue
+        out.append({"name": str(c["name"]).strip()[:200], "dateOfBirth": ser(parse_date(c.get("dateOfBirth"))),
+                    "disabled": bool(c.get("disabled")),
+                    "disabilityDegree": (str(c.get("disabilityDegree") or "").strip()[:100] or None) if c.get("disabled") else None,
+                    "working": bool(c.get("working")), "married": bool(c.get("married"))})
+    return json.dumps(out, ensure_ascii=False) if out else None
+
+
+def employee_dict(e):
+    d = to_dict(e)
+    d["children"] = children_list(d.get("children"))
+    return d
+
+
 def employee_full(s, emp_id):
     e = s.get(M.Employee, emp_id)
     if not e:
         return None
-    d = to_dict(e)
+    d = employee_dict(e)
     d["affiliations"] = get_affiliations(s, emp_id)
     return d
 
@@ -387,7 +416,7 @@ def dump_state(s, ctx=None):
             a = affs.get(e.id, [])
             if ctx and not ctx.affs_ok(a, cc_co.get(e.costCenter), e.costCenter):
                 continue
-            d = strip("employee", to_dict(e))
+            d = strip("employee", employee_dict(e))
             d["affiliations"] = a
             employees.append(d)
     emp_ids = {e["id"] for e in employees}

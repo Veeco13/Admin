@@ -49,6 +49,13 @@ HEADER_MAP = {
     "فصيلة الدم": "bloodType", "bloodtype": "bloodType", "blood type": "bloodType",
     "المنطقة": "addressArea", "القطعة": "addressBlock", "الشارع": "addressStreet", "المنزل": "addressHouse",
     "الشقة": "addressApartment", "هاتف المنزل": "homePhone", "homephone": "homePhone",
+    # العمالة الوطنية
+    "البريد الإلكتروني": "email", "البريد الالكتروني": "email", "الإيميل": "email", "email": "email",
+    "الحالة الاجتماعية": "maritalStatus", "maritalstatus": "maritalStatus", "marital status": "maritalStatus",
+    "المؤهل الدراسي": "qualification", "المؤهل": "qualification", "qualification": "qualification",
+    "التخصص": "specialization", "التخصص العلمي": "specialization", "specialization": "specialization",
+    "تاريخ التجنس": "naturalizationDate", "المادة": "citizenshipArticle", "مادة الجنسية": "citizenshipArticle",
+    "رقم الجنسية": "nationalityNo", "رقم شهادة الجنسية": "nationalityNo",
     "تاريخ التعيين": "dateOfHire", "تاريخ البدء": "dateOfHire", "start_date": "dateOfHire", "dateofhire": "dateOfHire",
     # أخرى
     "الراتب": "salary", "salary": "salary",
@@ -88,6 +95,16 @@ def norm_gender(v):
     s = (v or "").strip().lower().replace("أ", "ا")
     return {"ذكر": "male", "male": "male", "m": "male", "انثى": "female", "انثي": "female",
             "female": "female", "f": "female"}.get(s)
+
+
+def norm_marital(v):
+    """أعزب / متزوجة / married … ← single | married | divorced | widowed (وغير كده ← None)."""
+    s = (v or "").strip().lower().replace("أ", "ا").replace("ة", "").replace("ه", "")
+    for key, words in (("single", ("اعزب", "عزباء", "single")), ("married", ("متزوج", "married")),
+                       ("divorced", ("مطلق", "divorced")), ("widowed", ("ارمل", "widowed", "widow"))):
+        if s in words:
+            return key
+    return None
 
 
 def clean(v):
@@ -213,6 +230,8 @@ def import_dataframe_with_headers(s, df, user, stats, cache):
             rec["gender"] = norm_gender(rec["gender"])
         if rec.get("bloodType"):
             rec["bloodType"] = rec["bloodType"].replace(" ", "").upper()
+        if rec.get("maritalStatus"):
+            rec["maritalStatus"] = norm_marital(rec["maritalStatus"])
         upsert_employee(s, rec, user, stats, cache)
     return True
 

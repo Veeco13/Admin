@@ -403,6 +403,9 @@ def _literal(text):
     return "(" + text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)") + ")"
 
 
+COMB = 1 << 24          # خانة مقسّمة مربعات (MaxLen): حرف في كل مربع
+
+
 def draw_fields(w, items):
     """items = [(widget, field, النص)] ← appearance لكل widget بالنص مرسوم، و NeedAppearances = false
     (عشان العارض يستخدم رسمنا). لو مفيش خط مناسب على الجهاز: العارض هو اللي بيرسم زي الأول."""
@@ -421,21 +424,18 @@ def draw_fields(w, items):
         dr = dr_fonts.get("/" + fname)
         base = str(dr.get_object().get("/BaseFont", ""))[1:] if dr is not None else ""
         vis = visual_order(shape_arabic(text))
-        units = _std_width(base, vis)
-        if units is not None:                   # أرقام/إنجليزي بخط النموذج نفسه
-            asc, desc = _STD[base][1] / 1000, _STD[base][2] / 1000
-            plans.append((a, fld, ("/" + fname, dr), _literal(vis), units, asc, desc, fsize, color))
+        if _std_width(base, vis) is not None:                   # أرقام/إنجليزي بخط النموذج نفسه
+            pieces = [(_literal(c), _std_width(base, c)) for c in vis]
+            plans.append((a, fld, ("/" + fname, dr), pieces, _STD[base][1] / 1000, _STD[base][2] / 1000, fsize, color))
             continue
-        gids = []
+        pieces = []
         for ch in vis:
             g = ttf.glyph(ch)
-            gids.append(g)
             used.setdefault(g, ch)
-        units = sum(ttf.advances[g] for g in gids) * 1000 / ttf.upm
-        plans.append((a, fld, None, "<" + "".join(f"{g:04X}" for g in gids) + ">", units, ttf.ascent / ttf.upm,
-                      -ttf.descent / ttf.upm, fsize, color))
+            pieces.append((f"<{g:04X}>", ttf.advances[g] * 1000 / ttf.upm))
+        plans.append((a, fld, None, pieces, ttf.ascent / ttf.upm, -ttf.descent / ttf.upm, fsize, color))
     font_ref = _type0_font(w, ttf, used) if used else None
-    for a, fld, std, string, units, asc, desc, fsize, color in plans:
+    for a, fld, std, pieces, asc, desc, fsize, color in plans:
         x1, y1, x2, y2 = (float(v) for v in a["/Rect"])
         wd, ht = abs(x2 - x1), abs(y2 - y1)
         mk = a.get("/MK") or {}
@@ -447,18 +447,30 @@ def draw_fields(w, items):
         if bw and _color(mk["/BC"], True):
             ops.append(f"q {_color(mk['/BC'], True)} {bw:g} w {bw / 2:.2f} {bw / 2:.2f} {wd - bw:.2f} {ht - bw:.2f} re S Q")
         pad = 2 + bw
+        comb = int(_inherit(a, fld, "/MaxLen") or 0) if int(_inherit(a, fld, "/Ff") or 0) & COMB else 0
         size = fsize or min(12.0, (ht - 2 * bw - 2) / (asc + desc))       # 0 = حجم تلقائي
         size = min(size, (ht - 2 * bw - 1) / (asc + desc))                 # مايتقصّش من فوق وتحت
-        if units * size / 1000 > wd - 2 * pad:                             # النص أعرض من الخانة ← يصغر
-            size = max(4.0, (wd - 2 * pad) * 1000 / units)
-        tw = units * size / 1000
-        q = _inherit(a, fld, "/Q")
-        q = int(acro.get("/Q", 0) if q is None else q)
-        x = {1: (wd - tw) / 2, 2: wd - pad - tw}.get(q, pad)
-        y = (ht - (asc + desc) * size) / 2 + desc * size
+        y = lambda sz: (ht - (asc + desc) * sz) / 2 + desc * sz
         key = std[0] if std else "/LnxF"
-        ops.append(f"/Tx BMC q {bw:g} {bw:g} {wd - 2 * bw:.2f} {ht - 2 * bw:.2f} re W n BT {key} {size:.2f} Tf {color} "
-                   f"{x:.2f} {y:.2f} Td {string} Tj ET Q EMC")
+        if comb:                                                            # حرف في نص كل مربع
+            cell = wd / comb
+            widest = max((u for _, u in pieces), default=0)
+            if widest * size / 1000 > cell - 2:
+                size = max(4.0, (cell - 2) * 1000 / widest)
+            text_ops = " ".join(f"BT {key} {size:.2f} Tf {color} {i * cell + (cell - u * size / 1000) / 2:.2f} {y(size):.2f} Td {enc} Tj ET"
+                                for i, (enc, u) in enumerate(pieces[:comb]))
+        else:
+            units = sum(u for _, u in pieces)
+            if units * size / 1000 > wd - 2 * pad:                         # النص أعرض من الخانة ← يصغر
+                size = max(4.0, (wd - 2 * pad) * 1000 / units)
+            tw = units * size / 1000
+            q = _inherit(a, fld, "/Q")
+            q = int(acro.get("/Q", 0) if q is None else q)
+            x = {1: (wd - tw) / 2, 2: wd - pad - tw}.get(q, pad)
+            inner = "".join(enc[1:-1] for enc, _ in pieces)           # (..) أو <..> لكل حرف ← نص واحد
+            string = f"({inner})" if std else f"<{inner}>"
+            text_ops = f"BT {key} {size:.2f} Tf {color} {x:.2f} {y(size):.2f} Td {string} Tj ET"
+        ops.append(f"/Tx BMC q {bw:g} {bw:g} {wd - 2 * bw:.2f} {ht - 2 * bw:.2f} re W n {text_ops} Q EMC")
         res = DictionaryObject({NameObject("/Font"): DictionaryObject({NameObject(key): std[1] if std else font_ref})})
         ap = _stream(w, "\n".join(ops).encode("latin-1"), {
             "/Type": NameObject("/XObject"), "/Subtype": NameObject("/Form"),
