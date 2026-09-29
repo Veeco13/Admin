@@ -224,11 +224,11 @@ def default_code(s, u):
 
 
 def check_code(s, uid, code):
-    """رمز جديد لمستخدم ← (الرمز، رسالة خطأ). الرمز اللي اتستخدم في عهدة مايتغيّرش."""
+    """رمز جديد لمستخدم ← (الرمز، رسالة خطأ). الرمز بيتحدد مرة واحدة ومايتغيّرش بعد كده."""
     code = (code or "").strip().upper()
     u = s.get(M.User, uid) if uid else None
-    if u is not None and u.custodyCode and code != u.custodyCode and user_code_used(s, u.custodyCode):
-        return None, f"رمز العهد {u.custodyCode} اتستخدم في عهد — مايتغيّرش"
+    if u is not None and u.custodyCode and code != u.custodyCode:
+        return None, f"رمز العهد {u.custodyCode} مايتغيّرش"
     if not CODE_RE.match(code):
         return None, "رمز العهد: من 2 لـ 6 حروف وأرقام إنجليزي، ويبدأ بحرف (مثلًا AA أو AHM)"
     if s.scalar(select(func.count()).select_from(M.User).where(M.User.custodyCode == code, M.User.id != uid)):
@@ -333,21 +333,13 @@ def cc_default_code(s, cc):
     return code
 
 
-def cc_code_used(s, code):
-    return bool(code) and bool(s.scalar(select(func.count()).select_from(M.Invoice).where(M.Invoice.ccCode == code)))
-
-
-def user_code_used(s, code):
-    return bool(code) and bool(s.scalar(select(func.count()).select_from(M.Custody).where(M.Custody.prefix == code)))
-
-
 def set_cc_code(s, cc, code):
-    """رمز جديد لمركز تكلفة ← رسالة خطأ أو None. الرمز اللي اتستخدم في فاتورة مايتغيّرش."""
+    """رمز جديد لمركز تكلفة ← رسالة خطأ أو None. الرمز بيتحدد مرة واحدة ومايتغيّرش بعد كده."""
     code = (code or "").strip().upper()
     if code == (cc.code or ""):
         return None
-    if cc.code and cc_code_used(s, cc.code):
-        return f"رمز المركز {cc.code} اتستخدم في فواتير — مايتغيّرش"
+    if cc.code:
+        return f"رمز المركز {cc.code} مايتغيّرش"
     if not CC_CODE_RE.match(code) or code == NO_CC_CODE:
         return f"رمز المركز: من 2 لـ 5 حروف وأرقام إنجليزي، ويبدأ بحرف (مثلًا SUP) — و{NO_CC_CODE} محجوز"
     if s.scalar(select(func.count()).select_from(M.CostCenter).where(M.CostCenter.code == code, M.CostCenter.id != cc.id)):

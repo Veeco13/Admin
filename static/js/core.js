@@ -1137,7 +1137,7 @@ function openUserEditModal(u, roles, done) {
       <label>${t('الاسم الظاهر')}<input name="displayName" value="${v('displayName')}"></label>
       <label>${t('الوظيفة')}<input name="jobTitle" value="${v('jobTitle')}" placeholder="${t('مثلًا: مندوب حكومي')}"></label>
       <label>${t('رمز العهد')} <span class="small muted">(${t('حروف إنجليزي — أرقام عهده: AA-0001')})</span><input name="custodyCode" value="${v('custodyCode')}" dir="ltr" maxlength="6" style="text-transform:uppercase" placeholder="${t('تلقائي')}" ${u.custodyCodeLocked ? 'disabled' : ''}>
-        <span class="small muted">${u.custodyCodeLocked ? '🔒 ' + t('الرمز اتستخدم في عهد — مايتغيّرش') : t('بعد أول عهدة بالرمز ده مش هيتغيّر تاني.')}</span></label>
+        <span class="small muted">${u.custodyCodeLocked ? '🔒 ' + t('الرمز مايتغيّرش') : t('الرمز بيتحدد مرة واحدة ومش هيتغيّر بعد الحفظ.')}</span></label>
       <label>${t('البريد')}<input name="email" value="${v('email')}" dir="ltr"></label>
       <label>${t('الهاتف')}<input name="phone" value="${v('phone')}" dir="ltr"></label>
       <label>${isNew ? `<span class="req">${t('كلمة المرور')}</span>` : t('كلمة مرور جديدة (سيبها فاضية لو مش هتغيّرها)')}<input name="password" type="password" autocomplete="new-password" minlength="6"></label>

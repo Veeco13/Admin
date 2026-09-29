@@ -273,9 +273,8 @@ def api_state():
                      else {"custodies": [], "invoices": [], "feeItems": [], "custodySettings": None})
         state["valueTranslations"] = value_i18n.merged(s)       # الجنسيات والمهن للتقارير الإنجليزية
         state["exportPasswordSet"] = bool(u.isAdmin and db.get_meta(s, EXPORT_KEY))
-        used = {x for x in s.scalars(select(M.Invoice.ccCode).distinct()) if x}
-        for cc in state.get("costCenters", []):                   # رمز المركز بيتقفل أول ما يتستخدم في فاتورة
-            cc["codeLocked"] = cc.get("code") in used
+        for cc in state.get("costCenters", []):                   # رمز المركز بيتحدد مرة واحدة ومايتغيّرش
+            cc["codeLocked"] = bool(cc.get("code"))
     if not u.can("custody.all"):                                  # عمليات عهد المستخدمين التانيين مش ليه
         state["auditLog"] = [a for a in state.get("auditLog", []) if a.get("category") != "custody" or a.get("user") == u.display]
     for t in state.get("templates", []):     # خيارات التوقيع بتظهر بس لو القالب فيه مكانها
@@ -2191,12 +2190,12 @@ def restore():
 # ---------------------------------------------------------------------------
 # المستخدمين (للمدير)
 # ---------------------------------------------------------------------------
-def _user_api(u, scopes, cc_scopes, used_codes=()):
+def _user_api(u, scopes, cc_scopes):
     return {"id": u.id, "username": u.username, "displayName": u.displayName, "roleId": u.roleId,
             "allCompanies": bool(u.allCompanies), "companies": scopes.get(u.id, []),
             "costCenters": cc_scopes.get(u.id, []), "active": bool(u.active),
             "jobTitle": u.jobTitle, "email": u.email, "phone": u.phone, "custodyCode": u.custodyCode,
-            "custodyCodeLocked": u.custodyCode in used_codes,
+            "custodyCodeLocked": bool(u.custodyCode),
             "lastLogin": db.ser(u.lastLogin), "createdAt": db.ser(u.createdAt)}
 
 
@@ -2217,7 +2216,7 @@ def _set_user_fields(s, u, d):
     for k in ("displayName", "jobTitle", "email", "phone"):
         if k in d:
             setattr(u, k, (d[k] or "").strip() or None)
-    if (d.get("custodyCode") or "").strip():               # رمزه في أرقام العهد (AA-0001) — مايتغيّرش بعد أول عهدة
+    if (d.get("custodyCode") or "").strip():               # رمزه في أرقام العهد (AA-0001) — بيتحدد مرة واحدة ومايتغيّرش
         code, msg = custody.check_code(s, u.id, d["custodyCode"])
         if msg:
             return msg
@@ -2308,8 +2307,7 @@ def list_users():
             scopes.setdefault(r.userId, []).append(r.companyId)
         for r in s.scalars(select(M.UserCostCenter)):
             cc_scopes.setdefault(r.userId, []).append(r.costCenterId)
-        used = {x for x in s.scalars(select(M.Custody.prefix).distinct()) if x}     # رمز العهد بيتقفل أول ما يتستخدم
-        return jsonify([_user_api(u, scopes, cc_scopes, used) for u in s.scalars(select(M.User).order_by(M.User.id))])
+        return jsonify([_user_api(u, scopes, cc_scopes) for u in s.scalars(select(M.User).order_by(M.User.id))])
 
 
 @app.post("/api/users")
