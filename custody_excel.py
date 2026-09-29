@@ -446,7 +446,7 @@ def _group_people(s, lines):
     for ln in lines:
         k = (ln.personKind, ln.personId)
         if k not in people:
-            people[k] = {**_person(s, ln.personKind, ln.personId, ln.personName, tr), "civilId": ln.civilId or "",
+            people[k] = {**_person(s, ln.personKind, ln.personId, ln.personName, tr), "personId": ln.personId, "civilId": ln.civilId or "",
                          "costCenter": ln.costCenter, "companyId": ln.companyId, "lines": []}
         people[k]["lines"].append(ln)
     groups = {}
@@ -505,7 +505,11 @@ def _invoice_sheet(ws, s, c, inv, lines, issuer, user):
     وملخص الفاتورة (الرسوم الحكومية + الدعم = إجمالي المستحق) والمبلغ كتابةً وتوقيعات الاعتماد."""
     people = [p for _, ps in _group_people(s, lines) for p in ps]
     items = _items(lines)
-    support = float(inv.supportFee or 0)
+    # الدعم الإداري مرة لكل موظف في العهدة: في أول تقفيل فيه إجراء ليه — اللي اتحسب له قبل كده «—»
+    earlier = custody.earlier_closed(s, c, inv.closingDate)
+    fee = float(inv.supportFee or 0)
+    charged = [p for p in people if p["personId"] not in earlier]
+    support = fee if fee and charged else 0.0
     headers = ["#", ("Employee Name", "اسم الموظف"), ("Profession", "المهنة"), ("Civil ID", "الرقم المدني")] \
         + [(it["en"], it["ar"]) for it in items] + ([("Admin Support", "الدعم الإداري")] if support else []) \
         + [("Total (KWD)", "الإجمالي (د.ك)")]
@@ -535,7 +539,8 @@ def _invoice_sheet(ws, s, c, inv, lines, issuer, user):
         by = {ln.feeItemId or ln.itemName: ln for ln in p["lines"]}
         r = first + i
         amounts = [(_amount(by[it["key"]]) if it["key"] in by else "—") for it in items]
-        _table_row(ws, r, [i + 1, _pname(ws, p), _pprof(ws, p), p["civilId"], *amounts, *([support] if support else []),
+        _table_row(ws, r, [i + 1, _pname(ws, p), _pprof(ws, p), p["civilId"], *amounts,
+                           *([support if p["personId"] not in earlier else "—"] if support else []),
                            f"=SUM({get_column_letter(5)}{r}:{get_column_letter(n - 1)}{r})"], money_from=5, zebra=i % 2 == 1)
     last = first + len(people) - 1
     tot = last + 1
@@ -545,7 +550,7 @@ def _invoice_sheet(ws, s, c, inv, lines, issuer, user):
     label_from = max(2, n - 3)
     parts = [(_L(ws, "Government Charges", "الرسوم الحكومية"), f"=SUM(E{tot}:{L(last_item)}{tot})")]
     if support:
-        parts.append((f"{_L(ws, 'Admin Support', 'الدعم الإداري')}  ({len(people)} × {support:,.3f})", f"={L(n - 1)}{tot}"))
+        parts.append((f"{_L(ws, 'Admin Support', 'الدعم الإداري')}  ({len(charged)} × {support:,.3f})", f"={L(n - 1)}{tot}"))
     r = tot + 2
     for i, (label, value) in enumerate(parts):
         ws.row_dimensions[r + i].height = 20
@@ -557,7 +562,7 @@ def _invoice_sheet(ws, s, c, inv, lines, issuer, user):
          fill=PRIMARY, h="left", border=GRID)
     _put(ws, due, n, f"=SUM({L(n)}{r}:{L(n)}{due - 1})", bold=True, size=11, color="FFFFFF", fill=PRIMARY, fmt=KWD, border=GRID)
     box.value = f"={L(n)}{due}"
-    total = sum(_amount(ln) for ln in lines) + support * len(people)
+    total = sum(_amount(ln) for ln in lines) + support * len(charged)
     row = _words_row(ws, due + 2, n, total)
     row = _note(ws, row + 1, n, _invoice_note(support))
     _signatures(ws, row + 1, n, [("Prepared By", "أعده"), ("Manager Approval", "اعتماد المدير"),
@@ -577,10 +582,12 @@ def _details_sheet(wb, s, c, inv, lines, issuer, user, lang):
     cc_en, cc_ar, _ = _cost_center(s, inv.costCenter, inv.billCompanyId)
     cc_label = f"{inv.ccCode} — {_V(ws, cc_en, cc_ar)}" if inv.ccCode else _V(ws, cc_en, cc_ar)
     r = 1
+    earlier = custody.earlier_closed(s, c, inv.closingDate)       # الدعم الإداري اتحسب لهم في تقفيل قبل كده
     for i, p in enumerate(p for _, ps in _group_people(s, lines) for p in ps):
         if i:
             ws.row_breaks.append(Break(id=r - 1))
-        r, _, _ = _closing_individual(ws, r, c, cc_label, issuer, p, float(inv.supportFee or 0), inv.closingDate,
+        fee = 0.0 if p["personId"] in earlier else float(inv.supportFee or 0)
+        r, _, _ = _closing_individual(ws, r, c, cc_label, issuer, p, fee, inv.closingDate,
                                       inv.createdBy or user, i == 0, number, inv.closingRef)
     _print_setup(ws, False, None, f"{number} · {cc_label}", user)
     ws.sheet_properties.tabColor = ACCENT

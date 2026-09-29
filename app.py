@@ -2167,7 +2167,8 @@ def update_custody_line(cid, lid):
 @app.post("/api/custodies/<cid>/close")
 @require("custody.edit")
 def close_custody(cid):
-    """تقفيل الأشخاص الجاهزين: {persons: [...], adminFee, date} ← فاتورة لكل مركز تكلفة (بانتظار موافقة الحسابات)."""
+    """تقفيل الإجراءات الجاهزة: {lines: [...], adminFee, date} (أو {persons} للطريقة القديمة) ← فاتورة لكل مركز تكلفة
+    (بانتظار موافقة الحسابات). الإجراء بيتقفل لوحده، والدعم الإداري مرة لكل موظف في أول تقفيل ليه."""
     d = body()
     when = db.parse_date(d.get("date")) or datetime.now().date()
     fee = custody.num(d.get("adminFee"))
@@ -2176,15 +2177,18 @@ def close_custody(cid):
         c = _custody_or_404(s, cid)
         if c.status != "disbursed":
             return err("التقفيل بيكون للعهدة اللي اتصرفت")
-        lines, invoices, msg = custody.close_people(s, c, d.get("persons"), fee, when, uname())
+        if "lines" in d:
+            lines, invoices, msg = custody.close_lines(s, c, d.get("lines"), fee, when, uname())
+        else:
+            lines, invoices, msg = custody.close_people(s, c, d.get("persons"), fee, when, uname())
         if msg:
             return err(msg)
         n = len({ln.personId for ln in lines})
         db.log_audit(s, "custody_close",
-                     f"تقفيل عهدة {custody.custody_no(c)}: {n} شخص — {len(invoices)} فاتورة: "
+                     f"تقفيل عهدة {custody.custody_no(c)}: {len(lines)} إجراء لـ {n} شخص — {len(invoices)} فاتورة: "
                      + "، ".join(f"{custody.invoice_no(i)} ({i.costCenter or '—'}) {i.total:g} د.ك" for i in invoices)
                      + (" — العهدة اتقفلت بالكامل" if c.status == "closed" else ""), uname())
-        return jsonify({"ok": True, "date": when.isoformat(), "count": n, "status": c.status,
+        return jsonify({"ok": True, "date": when.isoformat(), "count": n, "lines": len(lines), "status": c.status,
                         "invoices": [custody.invoice_no(i) for i in invoices]})
 
 

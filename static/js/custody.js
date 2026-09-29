@@ -77,15 +77,15 @@ function custodyPersons(c) {
   });
   return [...m.values()];
 }
-/** المطلوب، المصروف للمستلم، المنفّذ فعلًا (البنود «تم»)، الرصيد، والجاهزين للتقفيل */
+/** المطلوب، المصروف للمستلم، المنفّذ فعلًا (البنود «تم»)، الرصيد، والإجراءات الجاهزة للتقفيل («تم» ولسه ماتقفلتش) */
 function custodyTotals(c) {
   const ls = c.lines || [], people = custodyPersons(c);
   const spent = sum(ls.filter(l => l.done).map(custodyLineAmount));
   const received = ['disbursed', 'closed'].includes(c.status) ? (c.disbursedAmount || 0) : 0;
   const closed = people.filter(p => p.lines.every(l => l.closedDate));
   return { planned: c.requestedAmount ?? sum(ls.map(l => l.planned)), received, spent, remaining: received - spent,
-    persons: people.length, ready: people.filter(p => p.lines.every(l => l.done) && !p.lines.some(l => l.closedDate)).length,
-    closed: closed.length, itemsDone: ls.filter(l => l.done).length, items: ls.length };
+    persons: people.length, ready: ls.filter(l => l.done && !l.closedDate).length,
+    closed: closed.length, itemsDone: ls.filter(l => l.done).length, items: ls.length, itemsClosed: ls.filter(l => l.closedDate).length };
 }
 /** أرصدة المستلمين: اتصرف له كام، ونفّذ كام، والباقي معاه (العهد اللي اتصرفت بس) */
 function custodianBalances() {
@@ -109,7 +109,7 @@ function renderCustody() {
   const owners = STATE.custodyUsers || [];
   const kpi = [[all.filter(c => c.status === 'requested').length, 'طلبات لسه ماتصرفتش', 'orange'], [open.length, 'عهد مفتوحة', 'blue'],
     [fmtMoney(sum(open.map(x => x.received))), 'اتصرف للمستلمين', ''], [fmtMoney(sum(open.map(x => x.spent))), 'اتنفّذ فعلًا', ''],
-    [fmtMoney(sum(open.map(x => x.remaining))), 'الرصيد مع المستلمين', 'purple'], [sum(open.map(x => x.ready)), 'شخص جاهز للتقفيل', 'green'],
+    [fmtMoney(sum(open.map(x => x.remaining))), 'الرصيد مع المستلمين', 'purple'], [sum(open.map(x => x.ready)), 'إجراء جاهز للتقفيل', 'green'],
     [`${pending.length} · ${fmtMoney(sum(pending.map(i => i.total)))}`, 'فواتير بانتظار الحسابات', 'orange']];
   viewRoot().innerHTML = `<div class="page-head"><div><h1>${t('العهد والمصروفات')}</h1><div class="sub">${all.length} ${t('عهدة')}</div></div>
     <div class="actions">${custodySeeAll() ? `<select id="cu-owner" title="${esc(t('عهد مين'))}">${opt('me', '👤 ' + t('عهدي أنا'), U.owner === 'me')}${opt('all', '👥 ' + t('كل المستخدمين'), U.owner === 'all')}
@@ -163,7 +163,7 @@ function custodyListHtml() {
     <div class="table-wrap"><table class="data"><thead><tr><th>${t('الرقم')}</th>${showOwner ? `<th>${t('صاحب العهدة')}</th>` : ''}<th>${t('النوع')}</th><th>${t('المستلم')}</th><th>${t('الأشخاص')}</th>
       <th>${t('المطلوب')}</th><th>${t('اتصرف')}</th><th>${t('اتنفّذ')}</th><th>${t('الرصيد')}</th><th>${t('البنود')}</th><th>${t('الحالة')}</th><th>${t('تاريخ الطلب')}</th></tr></thead><tbody>
     ${list.map(c => { const tt = custodyTotals(c); return `<tr class="clickable" data-cu="${c.id}"><td class="num nowrap"><b>${esc(custodyNo(c))}</b></td>${showOwner ? `<td class="small">${esc(c.ownerName || '—')}</td>` : ''}<td>${esc(custodyTypeLabel(c.txType))}</td>
-      <td>${esc(c.custodian)}</td><td class="num">${tt.persons}${tt.ready ? ` <span class="small" style="color:var(--green)">(✓ ${tt.ready})</span>` : ''}</td>
+      <td>${esc(c.custodian)}</td><td class="num">${tt.persons}${tt.ready ? ` <span class="small" style="color:var(--green)" title="${esc(t('إجراء جاهز للتقفيل'))}">(✓ ${tt.ready})</span>` : ''}</td>
       <td class="num">${fmtMoney(tt.planned)}</td><td class="num">${tt.received ? fmtMoney(tt.received) : '—'}</td><td class="num">${fmtMoney(tt.spent)}</td>
       <td class="num" style="${tt.remaining < 0 ? 'color:var(--red)' : ''}">${tt.received ? fmtMoney(tt.remaining) : '—'}</td>
       <td><div class="small">${tt.itemsDone}/${tt.items}</div><div class="progress" style="width:80px"><i style="width:${tt.items ? 100 * tt.itemsDone / tt.items : 0}%"></i></div></td>
@@ -410,15 +410,16 @@ function openCustodyDetails(id) {
         ${kv('تاريخ الصرف', fmtDate(c.disbursedDate))}${kv('صاحب العهدة', esc(c.ownerName || c.createdBy))}${c.notes ? kv('ملاحظات', esc(c.notes)) : ''}</div>
       <div class="row" style="margin-top:8px">${custodyLangSelect()}</div>
       <div class="row" style="gap:6px;flex-wrap:wrap;margin:10px 0">${chip('المطلوب', fmtMoney(tt.planned))}${chip('اتصرف', tt.received ? fmtMoney(tt.received) : '—', 'blue')}
-        ${chip('اتنفّذ', fmtMoney(tt.spent))}${tt.received ? chip('الرصيد مع المستلم', fmtMoney(tt.remaining), tt.remaining < 0 ? 'red' : 'purple') : ''}${chip('جاهز للتقفيل', `${tt.ready}/${tt.persons}`, 'green')}</div>
+        ${chip('اتنفّذ', fmtMoney(tt.spent))}${tt.received ? chip('الرصيد مع المستلم', fmtMoney(tt.remaining), tt.remaining < 0 ? 'red' : 'purple') : ''}${chip('جاهز للتقفيل', `${tt.ready} ${t('إجراء')}`, 'green')}${tt.itemsClosed ? chip('اتقفل', `${tt.itemsClosed}/${tt.items} ${t('إجراء')}`) : ''}</div>
       ${c.status === 'requested' ? `<div class="notice small">${t('اطبع الطلب واعتمده من المسؤول والإدارة المالية، وبعد الصرف اضغط «💵 تم الصرف» وسجّل المبلغ.')}</div>` : ''}
       <div class="small muted" style="margin:6px 0">${t('البند بيتعلّم «تم» لوحده لما مرحلة الشخص تعدّيه، وتقدر تعلّمه وتعدّل المبلغ الفعلي ورقم الإيصال بإيدك.')}</div>
       <div class="table-wrap"><table class="data cu-lines"><thead><tr><th style="width:34px">✓</th><th>${t('البند')}</th><th>${t('الجهة')}</th><th>${t('المحدد')}</th><th>${t('الفعلي')}</th><th>${t('رقم الإيصال')}</th><th>${t('تاريخ التنفيذ')}</th></tr></thead><tbody>
-      ${custodyPersons(c).map(p => { const done = p.lines.every(l => l.done), closedOn = p.lines.every(l => l.closedDate) && p.lines[0].closedDate; return `<tr class="cu-person ${closedOn ? 'cu-closed' : ''}"><td colspan="7">${closedOn ? '🔒' : done ? '✅' : '⏳'} ${esc(p.name)}
-          ${closedOn ? `<span class="chip" style="background:var(--green-soft);color:var(--green)">${t('اتقفل')} ${fmtDate(closedOn)}</span>` : ''}
+      ${custodyPersons(c).map(p => { const done = p.lines.every(l => l.done), allClosed = p.lines.every(l => l.closedDate), someClosed = p.lines.some(l => l.closedDate);
+          const closedOn = allClosed && uniq(p.lines.map(l => l.closedDate)).sort().pop(); return `<tr class="cu-person ${allClosed ? 'cu-closed' : ''}"><td colspan="7">${allClosed ? '🔒' : done ? '✅' : '⏳'} ${esc(p.name)}
+          ${allClosed ? `<span class="chip" style="background:var(--green-soft);color:var(--green)">${t('اتقفل')} ${fmtDate(closedOn)}</span>` : someClosed ? `<span class="chip">🔒 ${t('اتقفل جزء')} (${p.lines.filter(l => l.closedDate).length}/${p.lines.length})</span>` : ''}
           <span class="small muted">${esc(p.civilId || '')}${p.costCenter ? ' · ' + esc(p.costCenter) : ''}${p.companyId ? ' · ' + esc(companyName(p.companyId)) : ''}</span>
           <span class="small" style="float:inline-end">${p.lines.filter(l => l.done).length}/${p.lines.length} · ${fmtMoney(sum(p.lines.map(l => (l.done ? custodyLineAmount(l) : l.planned || 0))))}</span></td></tr>
-        ${p.lines.map(l => { const ed = edit && !l.closedDate; return `<tr><td><input type="checkbox" data-done="${l.id}" ${l.done ? 'checked' : ''} ${ed ? '' : 'disabled'}></td><td>${esc(l.itemName)}</td><td class="small muted">${esc(l.authority || '')}</td>
+        ${p.lines.map(l => { const ed = edit && !l.closedDate; return `<tr><td><input type="checkbox" data-done="${l.id}" ${l.done ? 'checked' : ''} ${ed ? '' : 'disabled'}></td><td>${esc(l.itemName)}${l.closedDate ? ` <span class="small" style="color:var(--green)" title="${esc(t('اتقفل'))}">🔒 ${fmtDate(l.closedDate)}</span>` : ''}</td><td class="small muted">${esc(l.authority || '')}</td>
           <td class="num">${l.planned == null ? '<span class="muted">—</span>' : rptNum(l.planned)}</td>
           <td>${ed ? `<input type="number" step="0.001" min="0" data-actual="${l.id}" value="${l.actual ?? ''}" placeholder="${l.planned ?? ''}">` : (l.actual == null ? '—' : rptNum(l.actual))}</td>
           <td>${ed ? `<input class="cu-receipt" data-receipt="${l.id}" value="${esc(l.receiptNo || '')}">` : esc(l.receiptNo || '')}</td><td class="small num">${fmtDate(l.doneDate)}</td></tr>`; }).join('')}`; }).join('')}
@@ -569,7 +570,8 @@ function openCustodyTransferModal(c, after) {
 /** التقفيلات (بتاريخها) وفواتيرها: تنزيل الملخص والفواتير، اعتماد الحسابات، وإلغاء التقفيل لو كل فواتيره لسه بانتظار الحسابات */
 function custodyClosingsHtml(c) {
   const by = {};
-  custodyPersons(c).forEach(p => { const d = p.lines.every(l => l.closedDate) && p.lines[0].closedDate; if (d) (by[d] = by[d] || []).push(p); });
+  custodyPersons(c).forEach(p => uniq(p.lines.map(l => l.closedDate).filter(Boolean)).forEach(d => (by[d] = by[d] || []).push(p)));
+  const linesOn = d => (c.lines || []).filter(l => l.closedDate === d).length;
   const invs = (STATE.invoices || []).filter(i => i.custodyId === c.id);
   const dates = uniq([...Object.keys(by), ...invs.map(i => i.closingDate)]).sort();
   if (!dates.length) return '';
@@ -577,54 +579,79 @@ function custodyClosingsHtml(c) {
     const ps = by[d] || [], list = invs.filter(i => i.closingDate === d).sort((a, b) => (a.ccCode || '').localeCompare(b.ccCode || '')), locked = list.some(i => i.status === 'approved');
     const f = list[0] || {};
     return `<div class="cu-closing"><div><b>${t('تقفيل')} <span class="num">${esc(f.closingRef || '')}</span> · ${fmtDate(d)}</b>
-        <div class="small muted">${f.createdBy ? `${t('بواسطة')} ${esc(f.createdBy)}${f.createdAt ? ' · ' + fmtDateTime(f.createdAt) : ''} · ` : ''}${ps.length} ${t('شخص')} · ${list.length} ${t('فاتورة')} · ${fmtMoney(sum(list.map(i => i.total)))}</div></div>
+        <div class="small muted">${f.createdBy ? `${t('بواسطة')} ${esc(f.createdBy)}${f.createdAt ? ' · ' + fmtDateTime(f.createdAt) : ''} · ` : ''}${linesOn(d)} ${t('إجراء')} · ${ps.length} ${t('شخص')} · ${list.length} ${t('فاتورة')} · ${fmtMoney(sum(list.map(i => i.total)))}</div></div>
       <span class="spacer"></span><button class="btn sm primary" data-closing="${d}">📄 ${t('الملخص والفواتير')}</button>
       <button class="btn sm" data-closing="${d}" data-layout="individual">👤 ${t('+ كشف فردي لكل موظف')}</button>
-      ${can('custody.delete') && !locked ? `<button class="btn sm danger" data-reopen="${d}">↩️ ${t('إلغاء التقفيل')}</button>` : ''}
+      ${can('custody.delete') && !locked && d === dates[dates.length - 1] ? `<button class="btn sm danger" data-reopen="${d}">↩️ ${t('إلغاء التقفيل')}</button>` : ''}
       ${locked ? `<span class="small muted" title="${esc(t('الحسابات اعتمدت فاتورة من التقفيل ده'))}">🔐 ${t('نهائي')}</span>` : ''}
       <div class="cu-invoices">${list.map(i => `<div class="cu-invoice"><b class="num">${esc(i.number)}</b>${i.ccCode ? `<span class="chip on num">${esc(i.ccCode)}</span>` : ''}<span>${esc(i.costCenter || t('بدون مركز تكلفة'))}</span>
         <span class="small muted">${i.employees} ${t('موظف')}${i.supportAmount ? '' : ' · ' + t('من غير دعم إداري')}</span><b class="num">${fmtMoney(i.total)}</b>${invoiceStatusChip(i)}
         <span class="spacer"></span>${invoiceButtons(i)}</div>`).join('')}</div></div>`; }).join('')}</div>`;
 }
-/** تقفيل الجاهزين (كل بنودهم «تم»): اختيارهم، الدعم الإداري، التاريخ وشكل الكشف ← تقفيل وتنزيل الكشف */
+/** تقفيل بالإجراء: كل إجراء «تم» بيتقفل لوحده (مش لازم الشخص يخلّص كل إجراءاته).
+    الدعم الإداري مرة لكل موظف في العهدة — في أول تقفيل فيه إجراء ليه. */
 function openCustodyCloseModal(c, after) {
-  const ready = custodyPersons(c).filter(p => p.lines.every(l => l.done) && !p.lines.some(l => l.closedDate));
+  const persons = custodyPersons(c).filter(p => p.lines.some(l => l.done && !l.closedDate));
+  const ready = l => l.done && !l.closedDate;
+  const charged = p => !p.lines.some(l => l.closedDate);          // لسه ماتحسبلوش دعم في تقفيل قبل كده
+  const lastClosed = uniq((c.lines || []).map(l => l.closedDate).filter(Boolean)).sort().pop() || '';
   const groups = new Map();
-  ready.forEach(p => { const k = p.costCenter || t('بدون مركز تكلفة'); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(p); });
-  const gov = p => sum(p.lines.map(custodyLineAmount));
+  persons.forEach(p => { const k = p.costCenter || t('بدون مركز تكلفة'); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(p); });
+  const items = uniq(persons.flatMap(p => p.lines.filter(ready).map(l => l.itemName)));
   const m = openModal({
     title: `🔒 ${t('تقفيل العهدة')} ${esc(custodyNo(c))}`, size: 'wide',
     body: `<div class="form" id="cl-form">
         <label>${t('الدعم الإداري لكل موظف (د.ك)')}<input type="number" step="0.001" min="0" name="adminFee" value="${esc(custodySettings().supportFee ?? 20)}"></label>
-        <label>${t('تاريخ التقفيل')}<input type="date" name="date" value="${todayISO()}"></label>
-        <label>${t('الملف')}<select name="layout">${opt('', t('الملخص + فاتورة لكل مركز تكلفة'), true)}${opt('individual', t('+ كشف فردي لكل موظف (ملحق)'), false)}</select></label></div>
-      <div class="notice small" style="margin:8px 0">${t('التقفيل بيطلّع فاتورة من الشركة المُصدِرة لكل مركز تكلفة (الرسوم الحكومية + الدعم الإداري مرة لكل موظف)، و«الملخص» فيه تسوية العهدة مع المستلم. الفاتورة «بانتظار الحسابات» لحد ما تعلّمها «اعتمدتها الحسابات» — قبلها تقدر تلغي التقفيل (والفواتير بتتمسح)، وبعدها لأ.')}</div>
-      <div class="table-wrap"><table class="data"><thead><tr><th style="width:34px"><input type="checkbox" id="cl-all" checked></th><th>${t('الاسم')}</th><th>${t('الرقم المدني')}</th><th>${t('البنود')}</th><th>${t('الرسوم الحكومية')}</th></tr></thead><tbody>
-      ${[...groups.entries()].map(([cc, ps]) => `<tr class="cu-person"><td colspan="5">🧾 ${esc(cc)} <span class="small muted">(${ps.length})</span>${custodyNoSupport(ps[0].costCenter) ? ` <span class="chip">${t('من غير دعم إداري')}</span>` : ''}</td></tr>
-        ${ps.map(p => `<tr><td><input type="checkbox" data-cl="${esc(p.id)}" checked></td><td>${esc(p.name)}</td><td class="num">${esc(p.civilId || '')}</td>
-          <td class="small">${p.lines.map(l => esc(l.itemName)).join('، ')}</td><td class="num">${fmtMoney(gov(p))}</td></tr>`).join('')}`).join('')}
+        <label>${t('تاريخ التقفيل')}<input type="date" name="date" value="${todayISO() > lastClosed ? todayISO() : ''}" ${lastClosed ? `min="${lastClosed}"` : ''}></label>
+        <label>${t('الملف')}<select name="layout">${opt('', t('الملخص + فاتورة لكل مركز تكلفة'), true)}${opt('individual', t('+ كشف فردي لكل موظف (ملحق)'), false)}</select></label>
+        <label>${t('اختيار سريع')}<select id="cl-pick">${opt('', t('— اختيار —'), true)}${opt('__all', t('كل الجاهز'), false)}${opt('__none', t('مسح الاختيار'), false)}${items.map(i => opt(i, `${t('كل')} «${i}»`, false)).join('')}</select></label></div>
+      <div class="notice small" style="margin:8px 0">${t('كل إجراء «تم» بيتقفل لوحده — مش لازم الموظف يخلّص كل إجراءاته. التقفيل بيطلّع فاتورة لكل مركز تكلفة (الرسوم الحكومية + الدعم الإداري مرة واحدة لكل موظف في العهدة، في أول تقفيل فيه إجراء ليه). الفاتورة «بانتظار الحسابات» لحد ما تتعلّم «اعتمدتها الحسابات» — قبلها تقدر تلغي التقفيل (الأحدث بس)، وبعدها لأ.')}</div>
+      ${lastClosed ? `<div class="small muted" style="margin-bottom:6px">${t('آخر تقفيل للعهدة دي')}: ${fmtDate(lastClosed)} — ${t('التاريخ الجديد لازم يكون بعده.')}</div>` : ''}
+      <div class="table-wrap"><table class="data"><thead><tr><th style="width:34px"><input type="checkbox" id="cl-all" checked></th><th>${t('الإجراء')}</th><th>${t('الجهة')}</th><th>${t('الرسوم الحكومية')}</th></tr></thead><tbody>
+      ${[...groups.entries()].map(([cc, ps]) => `<tr class="cu-person"><td colspan="4">🧾 ${esc(cc)} <span class="small muted">(${ps.length})</span>${custodyNoSupport(ps[0].costCenter) ? ` <span class="chip">${t('من غير دعم إداري')}</span>` : ''}</td></tr>
+        ${ps.map(p => `<tr class="cu-cl-person"><td><input type="checkbox" data-clp="${esc(p.key)}" checked></td><td colspan="3"><b>${esc(p.name)}</b> <span class="small muted num">${esc(p.civilId || '')}</span>
+            ${charged(p) ? '' : ` <span class="chip" title="${esc(t('اتقفل له إجراء قبل كده — الدعم الإداري اتحسب في أول تقفيل'))}">${t('الدعم اتحسب قبل كده')}</span>`}</td></tr>
+          ${p.lines.map(l => ready(l)
+            ? `<tr><td><input type="checkbox" data-cl="${l.id}" data-person="${esc(p.key)}" data-item="${esc(l.itemName)}" checked></td><td>${esc(l.itemName)}</td><td class="small muted">${esc(l.authority || '')}</td><td class="num">${fmtMoney(custodyLineAmount(l))}</td></tr>`
+            : `<tr class="muted"><td></td><td>${esc(l.itemName)}</td><td class="small">${l.closedDate ? `🔒 ${t('اتقفل')} ${fmtDate(l.closedDate)}` : `⏳ ${t('لسه ماخلصش')}`}</td><td></td></tr>`).join('')}`).join('')}`).join('')}
       </tbody></table></div>
       <div class="row cu-cl-sum" id="cl-sum"></div>`,
     foot: `<button class="btn primary" data-go>🔒 ${t('تقفيل ومعاينة الفواتير')}</button><span class="spacer"></span><button class="btn" data-close>${t('إلغاء')}</button>`,
   });
   const E = m.el;
-  const chosen = () => $$('[data-cl]', E).filter(x => x.checked).map(x => x.dataset.cl);
+  const lineById = new Map(persons.flatMap(p => p.lines.map(l => [String(l.id), l])));
+  const boxes = () => $$('[data-cl]', E);
+  const chosen = () => boxes().filter(x => x.checked).map(x => lineById.get(x.dataset.cl).id);
   const sumUp = () => {
-    const fee = Number($('[name="adminFee"]', E).value) || 0, ids = chosen(), ps = ready.filter(p => ids.includes(p.id));
-    const g = sum(ps.map(gov)), sup = fee * ps.filter(p => !custodyNoSupport(p.costCenter)).length;
-    $('#cl-sum', E).innerHTML = `<span class="chip">${t('الأشخاص')}: <b>${ps.length}</b></span><span class="chip">${t('الفواتير')}: <b>${uniq(ps.map(p => p.costCenter || '')).length}</b></span>
+    const fee = Number($('[name="adminFee"]', E).value) || 0, ids = new Set(chosen().map(String));
+    const ls = persons.flatMap(p => p.lines.filter(l => ids.has(String(l.id))).map(l => ({ l, p })));
+    const ps = uniq(ls.map(x => x.p.key)).map(k => persons.find(p => p.key === k));
+    const g = sum(ls.map(x => custodyLineAmount(x.l)));
+    const sup = fee * ps.filter(p => charged(p) && !custodyNoSupport(p.costCenter)).length;
+    $$('[data-clp]', E).forEach(b => { const mine = boxes().filter(x => x.dataset.person === b.dataset.clp); b.checked = mine.every(x => x.checked); b.indeterminate = !b.checked && mine.some(x => x.checked); });
+    $('#cl-all', E).checked = boxes().every(x => x.checked);
+    $('#cl-sum', E).innerHTML = `<span class="chip">${t('الإجراءات')}: <b>${ls.length}</b></span><span class="chip">${t('الأشخاص')}: <b>${ps.length}</b></span>
+      <span class="chip">${t('الفواتير')}: <b>${uniq(ps.map(p => p.costCenter || '')).length}</b></span>
       <span class="chip">${t('الرسوم الحكومية')}: <b>${fmtMoney(g)}</b></span>
       <span class="chip">${t('الدعم الإداري')}: <b>${fmtMoney(sup)}</b></span><span class="chip on">${t('إجمالي الفواتير')}: <b>${fmtMoney(g + sup)}</b></span>`;
   };
-  $('#cl-all', E).onchange = ev => { $$('[data-cl]', E).forEach(x => { x.checked = ev.target.checked; }); sumUp(); };
+  $('#cl-all', E).onchange = ev => { boxes().forEach(x => { x.checked = ev.target.checked; }); sumUp(); };
+  $$('[data-clp]', E).forEach(b => b.onchange = () => { boxes().filter(x => x.dataset.person === b.dataset.clp).forEach(x => { x.checked = b.checked; }); sumUp(); });
+  $('#cl-pick', E).onchange = ev => {
+    const v = ev.target.value; ev.target.value = '';
+    if (v) boxes().forEach(x => { x.checked = v === '__all' ? true : v === '__none' ? false : x.dataset.item === v; });
+    sumUp();
+  };
   E.addEventListener('change', sumUp);
   E.addEventListener('input', sumUp);
   sumUp();
   $('[data-go]', E).onclick = async () => {
-    const d = formValues($('#cl-form', E)), persons = chosen();
-    if (!persons.length) return openBlockAlert(t('اختار شخص واحد على الأقل'));
+    const d = formValues($('#cl-form', E)), lines = chosen();
+    if (!lines.length) return openBlockAlert(t('اختار إجراء واحد على الأقل'));
+    if (!d.date) return openBlockAlert(t('اختار تاريخ التقفيل'));
+    if (lastClosed && d.date < lastClosed) return openBlockAlert(`${t('تاريخ التقفيل لازم يكون بعد آخر تقفيل للعهدة دي')} (${fmtDate(lastClosed)})`);
     try {
-      const r = await persist('POST', `/api/custodies/${c.id}/close`, { persons, adminFee: d.adminFee, date: d.date }, 'تم التقفيل');
+      const r = await persist('POST', `/api/custodies/${c.id}/close`, { lines, adminFee: d.adminFee, date: d.date }, 'تم التقفيل');
       m.close();
       await custodyPreview(`/api/custodies/${c.id}/closing.pdf?date=${r.date}${d.layout ? '&layout=' + d.layout : ''}`);
       if (after) after();

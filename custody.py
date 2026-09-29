@@ -303,6 +303,17 @@ def busy(s):
 # ---------------------------------------------------------------------------
 # التقفيل والفواتير
 # ---------------------------------------------------------------------------
+def ready_lines(s, c):
+    """الإجراءات «تم» اللي لسه ماتقفلتش — كل إجراء بيتقفل لوحده (مش لازم الشخص يخلّص كل إجراءاته)."""
+    return [ln for ln in s.scalars(select(M.CustodyLine).where(M.CustodyLine.custodyId == c.id).order_by(M.CustodyLine.position))
+            if ln.done and not ln.closedDate]
+
+
+def earlier_closed(s, c, when):
+    """الأشخاص اللي اتقفل لهم إجراء في تقفيل قبل `when` في نفس العهدة ← الدعم الإداري اتحسب لهم خلاص (مرة لكل موظف)."""
+    return set(s.scalars(select(M.CustodyLine.personId).where(M.CustodyLine.custodyId == c.id, M.CustodyLine.closedDate < when)))
+
+
 def ready_people(s, c):
     """الأشخاص اللي كل بنودهم «تم» ولسه ماتقفلوش ← {رقم الشخص: [بنوده]}."""
     by = {}
@@ -359,18 +370,21 @@ def cc_code_for(s, name):
 
 
 def make_invoices(s, c, lines, fee, when, user):
-    """فاتورة لكل مركز تكلفة في التقفيل: الرسوم الفعلية + الدعم الإداري مرة لكل موظف (إلا مراكز الشركة نفسها).
+    """فاتورة لكل مركز تكلفة في التقفيل: الرسوم الفعلية + الدعم الإداري مرة لكل موظف في العهدة — في أول تقفيل
+    فيه إجراء ليه، والتقفيلات اللي بعد كده لنفس الموظف مافيهاش دعم (إلا مراكز الشركة نفسها مالهاش دعم أصلًا).
     رقمها «INV-رمز المركز-السنة-مسلسل المركز في السنة»، وكلهم بياخدوا رقم التقفيل «AA-0001/1»."""
     seq = (s.scalar(select(func.max(M.Invoice.closingSeq)).where(M.Invoice.custodyId == c.id)) or 0) + 1
     ref = f"{custody_no(c)}/{seq}"
     st = settings(s)
     cc_co = db.cost_center_companies(s)
+    earlier = earlier_closed(s, c, when)
     by_cc = {}
     for ln in lines:
         by_cc.setdefault(ln.costCenter or "", []).append(ln)
     out = []
     for cc, ls in sorted(by_cc.items()):
         people = len({ln.personId for ln in ls})
+        charged = len({ln.personId for ln in ls} - earlier)          # أول مرة يتقفل لهم إجراء في العهدة دي
         gov = round(sum(amount(ln) for ln in ls), 3)
         support = 0.0 if cc in st["noSupportCostCenters"] else float(fee)
         code = cc_code_for(s, cc)
@@ -379,7 +393,7 @@ def make_invoices(s, c, lines, fee, when, user):
                         custodyId=c.id, closingDate=when, costCenter=cc or None,
                         billCompanyId=cc_co.get(cc) or next((ln.companyId for ln in ls if ln.companyId), None),
                         issuerCompanyId=st["issuerCompanyId"], employees=people, govAmount=gov, supportFee=support,
-                        supportAmount=round(support * people, 3), total=round(gov + support * people, 3), status="pending",
+                        supportAmount=round(support * charged, 3), total=round(gov + support * charged, 3), status="pending",
                         createdBy=user, createdAt=db.now())
         s.add(inv)
         s.flush()
@@ -387,29 +401,44 @@ def make_invoices(s, c, lines, fee, when, user):
     return out
 
 
+def _line_key(ln):
+    return ln.feeItemId or ln.itemName
+
+
 def close_people(s, c, person_ids, fee, when, user):
-    """تقفيل الأشخاص دول (لازم يكونوا جاهزين) ← بنودهم closed_date = when، وفاتورة لكل مركز تكلفة.
-    العهدة بتتقفل لما كل الناس تتقفل. بيرجّع (البنود، الفواتير، رسالة خطأ)."""
-    ready = ready_people(s, c)
-    chosen = [pid for pid in dict.fromkeys(person_ids or []) if pid in ready]
-    if not chosen:
-        return None, None, "مفيش أشخاص جاهزين للتقفيل (كل بنود الشخص لازم تكون «تم»)"
+    """(الطريقة القديمة) تقفيل كل الإجراءات الجاهزة للأشخاص دول ← close_lines."""
+    ids = set(person_ids or [])
+    return close_lines(s, c, [ln.id for ln in ready_lines(s, c) if ln.personId in ids], fee, when, user)
+
+
+def close_lines(s, c, line_ids, fee, when, user):
+    """تقفيل الإجراءات دي (لازم تكون «تم» ولسه ماتقفلتش) ← closed_date = when، وفاتورة لكل مركز تكلفة.
+    الإجراء بيتقفل لوحده (مش لازم الشخص يخلّص كل إجراءاته)، والعهدة بتتقفل لما كل إجراءاتها تتقفل.
+    بيرجّع (البنود، الفواتير، رسالة خطأ)."""
+    ready = {str(ln.id): ln for ln in ready_lines(s, c)}          # الأرقام بتيجي من الواجهة نص أو رقم
+    lines = [ready[str(i)] for i in dict.fromkeys(line_ids or []) if str(i) in ready]
+    if not lines:
+        return None, None, "مفيش إجراءات جاهزة للتقفيل (الإجراء لازم يكون «تم» ولسه ماتقفلش)"
     if s.scalar(select(func.count()).select_from(M.Invoice).where(M.Invoice.custodyId == c.id, M.Invoice.closingDate == when)):
         return None, None, "فيه تقفيل بنفس التاريخ للعهدة دي — اختار تاريخ تاني أو ألغي التقفيل القديم"
-    # فحص أمان: نفس الشخص ونفس النوع اتقفل (اتفوتر) في عهدة تانية في آخر 90 يوم ← مايتفوترش مرتين
+    last = s.scalar(select(func.max(M.CustodyLine.closedDate)).where(M.CustodyLine.custodyId == c.id))
+    if last and when < last:        # الترتيب مهم: الدعم الإداري بيتحسب في أول تقفيل للموظف
+        return None, None, f"تاريخ التقفيل لازم يكون بعد آخر تقفيل للعهدة دي ({last.strftime('%d/%m/%Y')})"
+    # فحص أمان: نفس الشخص ونفس الإجراء اتقفل (اتفوتر) في عهدة تانية في آخر 90 يوم ← مايتفوترش مرتين
     # (إلا لو اتطلب تاني بتأكيد — dup_ok)
-    check = [pid for pid in chosen if not any(ln.dupOk for ln in ready[pid])]
+    check = [ln for ln in lines if not ln.dupOk]
     since, dup = when - timedelta(days=DUP_DAYS), {}
     if check:
+        keys = {(ln.personKind, ln.personId, _line_key(ln)) for ln in check}
         q = select(M.CustodyLine, M.Custody).join(M.Custody, M.Custody.id == M.CustodyLine.custodyId).where(
-            M.Custody.id != c.id, M.Custody.txType == c.txType, M.CustodyLine.personKind == TX_TYPES[c.txType]["kind"],
-            M.CustodyLine.personId.in_(check), M.CustodyLine.closedDate >= since)
+            M.Custody.id != c.id, M.CustodyLine.personId.in_({ln.personId for ln in check}), M.CustodyLine.closedDate >= since)
         for ln, other in s.execute(q):
-            dup.setdefault(ln.personId, f"{ln.personName} ({custody_no(other)} — {ln.closedDate.strftime('%d/%m/%Y')})")
+            if (ln.personKind, ln.personId, _line_key(ln)) in keys:
+                dup.setdefault((ln.personId, _line_key(ln)),
+                               f"{ln.personName} — {ln.itemName} ({custody_no(other)} — {ln.closedDate.strftime('%d/%m/%Y')})")
     if dup:
-        return None, None, (f"اتقفل لهم نفس النوع في عهدة تانية خلال آخر {DUP_DAYS} يوم (علشان مايتفوتروش مرتين): "
+        return None, None, (f"الإجراء ده اتقفل لنفس الشخص في عهدة تانية خلال آخر {DUP_DAYS} يوم (علشان مايتفوترش مرتين): "
                             + "، ".join(dup.values()))
-    lines = [ln for pid in chosen for ln in ready[pid]]
     for ln in lines:
         ln.closedDate = when
     c.adminFee = fee
@@ -428,6 +457,9 @@ def reopen(s, c, when):
     approved = [invoice_no(i) for i in invoices if i.status == "approved"]
     if approved:
         return 0, f"الحسابات اعتمدت {'، '.join(approved)} — مينفعش التقفيل يتلغي"
+    later = s.scalar(select(func.max(M.CustodyLine.closedDate)).where(M.CustodyLine.custodyId == c.id, M.CustodyLine.closedDate > when))
+    if later:                        # الدعم الإداري في التقفيلات اللي بعده متحسوب على أساسه
+        return 0, f"ألغي التقفيل الأحدث الأول ({later.strftime('%d/%m/%Y')}) — الإلغاء بيبقى للأحدث بس"
     for inv in invoices:
         s.delete(inv)
     n = s.query(M.CustodyLine).filter(M.CustodyLine.custodyId == c.id, M.CustodyLine.closedDate == when) \
