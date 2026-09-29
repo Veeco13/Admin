@@ -147,7 +147,7 @@ function renderDashboard() {
   const byNat = {};
   active.forEach(e => { const k = e.nationality || '—'; byNat[k] = (byNat[k] || 0) + 1; });
   const natSorted = Object.entries(byNat).sort((a, b) => b[1] - a[1]);
-  const natRows = natSorted.slice(0, 6).map(([n, c]) => ({ label: n, n: c, attrs: `data-nat="${esc(n)}"` }));
+  const natRows = natSorted.slice(0, 6).map(([n, c]) => ({ label: n === '—' ? n : natLabel(n), n: c, attrs: `data-nat="${esc(n)}"` }));
   const rest = sum(natSorted.slice(6).map(x => x[1]));
   if (rest) natRows.push({ label: t('أخرى'), n: rest, tip: `${t('أخرى')} (${natSorted.length - 6} ${t('جنسية')}): ${rest}` });
   const natCard = dbCard('db-span-4', 'الجنسيات', dbBars(natRows), { sub: `${natSorted.length} ${t('جنسية')}` });

@@ -86,7 +86,7 @@ function renderRecruitment() {
       const steps = recruitStagesForSource(c.source).filter(s => !s.rejected).length;
       const idx = recruitStageIndex(c) + 1;
       const dl = candidateDeadline(c);
-      return `<tr class="clickable" data-id="${c.id}"><td><b>${esc(c.name)}</b>${c.nameEn ? `<div class="small muted">${esc(c.nameEn)}</div>` : ''}</td><td>${esc(c.nationality || '')}</td><td>${esc(c.profession || '')}</td>
+      return `<tr class="clickable" data-id="${c.id}"><td><b>${esc(c.name)}</b>${c.nameEn ? `<div class="small muted">${esc(c.nameEn)}</div>` : ''}</td><td>${esc(personNat(c) || '')}</td><td>${esc(personProf(c) || '')}</td>
         <td><span class="chip">${recruitSourceLabel(c.source, true)}</span></td>
         <td>${st ? `<span class="chip ${st.final ? 'on' : ''}" style="${st.rejected ? 'background:var(--red-soft);color:var(--red)' : ''}">${esc(t(st.label))}</span>${candidateContractStage(c.stage) && canCandidateContract() ? ` <button class="btn sm ghost" data-contract="${c.id}" title="${esc(t('طباعة عقد العمل'))}">📄</button>` : ''}${!st.rejected ? `<div class="progress" style="width:90px;margin-top:3px"><i style="width:${100 * idx / steps}%"></i></div>` : ''}` : '—'}</td>
         <td>${esc(companyName(c.targetCompanyId))}</td><td class="num" data-p="sensitive.salary">${c.salary ? fmtMoney(c.salary) : '—'}${c.housingAllowance ? ' 🏠' : ''}</td><td class="num small">${fmtDate(c.appliedDate)}</td>

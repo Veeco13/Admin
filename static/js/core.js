@@ -380,7 +380,10 @@ async function api(method, url, body) {
     const r = await fetch(url, opt);
     if (r.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) { const e = new Error(j.error || r.statusText); e.data = j; e.status = r.status; throw e; }
+    if (!r.ok) {
+      if (j.mustChangePassword) openForcedPasswordModal();       // كلمة سر افتراضية / ضعيفة ← لازم تتغيّر الأول
+      const e = new Error(j.error || r.statusText); e.data = j; e.status = r.status; throw e;
+    }
     return j;
   } catch (e) {
     if (e instanceof TypeError) e.message = t('تعذّر الاتصال بالسيرفر — تأكد إن البرنامج شغّال والشبكة متصلة');
@@ -408,6 +411,33 @@ function persist(method, url, body, okMsg) {
   if (key) IN_FLIGHT.set(key, run);
   return run;
 }
+/** كلمة السر الافتراضية أو الضعيفة: نافذة مابتتقفلش لحد ما تتغيّر (السيرفر كمان مانع أي عملية تانية) */
+function openForcedPasswordModal() {
+  if ($('#force-pw')) return;
+  const ov = document.createElement('div');
+  ov.className = 'overlay'; ov.id = 'force-pw';
+  ov.innerHTML = `<div class="modal narrow" role="dialog"><div class="modal-head"><h2>🔒 ${t('لازم تغيّر كلمة السر')}</h2></div>
+    <div class="modal-body"><div class="notice warn">${t('كلمة السر الحالية افتراضية أو سهلة جدًا. غيّرها عشان تكمّل: 8 حروف على الأقل، ومش زي اسم المستخدم.')}</div>
+      <div class="form" style="margin-top:10px"><label class="full">${t('كلمة المرور الحالية')}<input type="password" name="old" autocomplete="current-password"></label>
+      <label class="full">${t('كلمة المرور الجديدة')}<input type="password" name="new" autocomplete="new-password" minlength="8"></label>
+      <label class="full">${t('تأكيد كلمة المرور الجديدة')}<input type="password" name="confirm" autocomplete="new-password" minlength="8"></label></div></div>
+    <div class="modal-foot"><button class="btn primary" data-save>${t('حفظ وكمّل')}</button><span class="spacer"></span><button class="btn" data-logout>🚪 ${t('تسجيل الخروج')}</button></div></div>`;
+  $('#modal-root').appendChild(ov);
+  translateDomText(ov);
+  $('[name=old]', ov).focus();
+  $('[data-logout]', ov).onclick = () => { location.href = '/logout'; };
+  $('[data-save]', ov).onclick = async () => {
+    const d = formValues(ov);
+    if (!d.new || d.new.length < 8) return openBlockAlert(t('كلمة المرور لازم 8 أحرف على الأقل'));
+    if (d.new !== d.confirm) return openBlockAlert(t('كلمة المرور الجديدة وتأكيدها مش زي بعض'));
+    try {
+      await api('POST', '/api/me/password', { old: d.old, new: d.new });
+      ov.remove();
+      toast('تم تغيير كلمة المرور', 'ok');
+      await reload();
+    } catch (e) { openBlockAlert(e.message); }
+  };
+}
 async function reload(noRender) {
   STATE = await api('GET', '/api/state');
   buildIndex();
@@ -415,6 +445,7 @@ async function reload(noRender) {
   document.body.classList.toggle('readonly', isReadOnly());
   $('#user-name').textContent = STATE.me.displayName || STATE.me.username;
   if (!noRender) render();
+  if (STATE.me.mustChangePassword) openForcedPasswordModal();
 }
 
 /* ---------- Toast ---------- */
@@ -1060,13 +1091,14 @@ function renderUserMenu() {
   m.innerHTML = `<div class="info">${esc(me.displayName || me.username)}${sub ? `<br><span class="small muted">${esc(sub)}</span>` : ''}</div>
     ${me.isAdmin && canAll(BACKUP_PERMS) ? `<button data-a="backup">💾 ${t('تنزيل نسخة احتياطية')}</button>` : ''}
     ${me.isAdmin ? `<button data-a="restore">♻️ ${t('استعادة نسخة احتياطية')}</button><button data-a="users">🔑 ${t('المستخدمين والصلاحيات')}</button>
-      <button data-a="exportpw">🔐 ${t('كلمة سر التصدير')}${STATE.exportPasswordSet ? '' : ' ⚠️'}</button>` : ''}
+      <button data-a="exportpw">🔐 ${t('كلمة سر التصدير')}${STATE.exportPasswordSet ? '' : ' ⚠️'}</button>
+      <button data-a="dq">📋 ${t('جودة البيانات')}</button>` : ''}
     <button data-a="viewperms">👁️ ${t('إعدادات العرض')}</button>
     <button data-a="password">🔒 ${t('تغيير كلمة المرور')}</button>
     <button data-a="logout">🚪 ${t('تسجيل الخروج')}</button>`;
   $$('button', m).forEach(b => b.onclick = () => {
     m.hidden = true;
-    ({ backup: takeBackup, restore: restoreBackup, users: () => openUsersModal(), viewperms: renderViewSettingsModal, exportpw: openExportPasswordModal,
+    ({ backup: takeBackup, restore: restoreBackup, users: () => openUsersModal(), viewperms: renderViewSettingsModal, exportpw: openExportPasswordModal, dq: openDataQualityModal,
        password: openPasswordModal, logout: () => location.href = '/logout' })[b.dataset.a]();
   });
 }
@@ -1087,12 +1119,65 @@ function renderViewSettingsModal() {
 function openPasswordModal() {
   const m = openModal({
     title: t('تغيير كلمة المرور'), size: 'narrow',
-    body: `<div class="form"><label class="full">كلمة المرور الحالية<input type="password" name="old"></label><label class="full">كلمة المرور الجديدة<input type="password" name="new"></label></div>`,
-    foot: `<button class="btn primary" data-save>حفظ</button><button class="btn" data-close>إلغاء</button>`,
+    body: `<div class="form"><label class="full">${t('كلمة المرور الحالية')}<input type="password" name="old" autocomplete="current-password"></label>
+      <label class="full">${t('كلمة المرور الجديدة')}<input type="password" name="new" autocomplete="new-password" minlength="8"></label>
+      <label class="full">${t('تأكيد كلمة المرور الجديدة')}<input type="password" name="confirm" autocomplete="new-password" minlength="8"></label></div>
+      <div class="small muted" style="margin-top:6px">${t('8 حروف على الأقل، ومش زي اسم المستخدم.')}</div>`,
+    foot: `<button class="btn primary" data-save>${t('حفظ')}</button><button class="btn" data-close>${t('إلغاء')}</button>`,
   });
   m.el.querySelector('[data-save]').onclick = async () => {
-    try { await api('POST', '/api/me/password', formValues(m.el)); m.close(); toast('تم تغيير كلمة المرور', 'ok'); } catch (e) { toast(e.message, 'err'); }
+    const d = formValues(m.el);
+    if (!d.new || d.new.length < 8) return openBlockAlert(t('كلمة المرور لازم 8 أحرف على الأقل'));
+    if (d.new !== d.confirm) return openBlockAlert(t('كلمة المرور الجديدة وتأكيدها مش زي بعض'));
+    try { await api('POST', '/api/me/password', { old: d.old, new: d.new }); m.close(); toast('تم تغيير كلمة المرور', 'ok'); } catch (e) { openBlockAlert(e.message); }
   };
+}
+
+/* =====================================================================
+   تقرير جودة البيانات (مدير النظام) — /api/data-quality
+   ===================================================================== */
+const DQ_SEV = { high: ['🔴', 'مهم'], medium: ['🟠', 'متوسط'], low: ['🟡', 'بسيط'] };
+async function openDataQualityModal() {
+  let r;
+  try { r = await api('GET', '/api/data-quality'); } catch (e) { return toast(e.message, 'err'); }
+  const secs = r.sections;
+  const count = sev => sum(secs.filter(x => x.severity === sev).map(x => x.items.length));
+  const m = openModal({
+    title: '📋 ' + t('جودة البيانات'), size: 'wide',
+    body: `<div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:10px">${Object.entries(DQ_SEV).map(([k, [ico, l]]) => `<span class="chip">${ico} ${t(l)} <b class="num">${count(k)}</b></span>`).join('')}
+        <span class="small muted">${t('النواقص اللي بتوقف التنبيهات والنماذج والتقارير — اضغط على أي سطر عشان تفتحه وتصلّحه.')}</span></div>
+      ${secs.length ? secs.map((x, i) => `<details class="dq" ${x.severity === 'high' ? 'open' : ''}><summary>${DQ_SEV[x.severity][0]} <b>${esc(t(x.title))}</b> <span class="chip">${x.items.length}</span>${x.hint ? ` <span class="small muted">— ${esc(t(x.hint))}</span>` : ''}</summary>
+        <table class="data"><tbody>${x.items.slice(0, 300).map((it, j) => `<tr class="clickable" data-dq="${i}:${j}"><td>${esc(it.label)}</td><td class="small muted">${esc(it.detail || '')}</td></tr>`).join('')}
+        ${x.items.length > 300 ? `<tr><td colspan="2" class="muted small">+${x.items.length - 300} ${t('في التقرير المطبوع')}</td></tr>` : ''}</tbody></table></details>`).join('')
+        : `<div class="notice">✅ ${t('مفيش نواقص — البيانات كاملة')}</div>`}`,
+    foot: `<button class="btn" data-print>🖨️ ${t('طباعة')}</button><button class="btn" data-refresh>🔄 ${t('فحص تاني')}</button><span class="spacer"></span><button class="btn" data-close>${t('إغلاق')}</button>`,
+  });
+  $$('[data-dq]', m.el).forEach(tr => tr.onclick = () => { const [i, j] = tr.dataset.dq.split(':').map(Number); dqOpen(secs[i].items[j]); });
+  $('[data-refresh]', m.el).onclick = () => { m.close(); openDataQualityModal(); };
+  $('[data-print]', m.el).onclick = () => printDataQuality(r);
+}
+function dqOpen(it) {
+  if (it.kind === 'employee') { if (IDX.employee[it.id]) openProfileCard(it.id); else toast('الموظف ده مش ظاهر عندك', 'err'); }
+  else if (it.kind === 'company') openCompanyDetails(it.id, 'info');
+  else if (it.kind === 'vehicle') { closeAllModals(); setView('vehicles'); setTimeout(() => openVehicleModal(it.id), 50); }
+  else if (it.kind === 'cc') { closeAllModals(); UI.co.tab = 'costcenters'; setView('companies'); setTimeout(() => openCostCenterModal(it.id), 50); }
+  else if (it.kind === 'user') openUsersModal();
+  else if (it.id === 'exportpw') openExportPasswordModal();
+}
+function printDataQuality(r) {
+  let body = '', n = 0;
+  r.sections.forEach(x => {
+    body += `<tr class="grp"><td colspan="3">${DQ_SEV[x.severity][0]} ${esc(t(x.title))}<small>${x.items.length}</small></td></tr>`
+      + x.items.map((it, j) => `<tr class="${j % 2 ? 'z' : ''}"><td class="idx">${++n}</td><td class="txt">${esc(it.label)}</td><td class="txt">${esc(it.detail || '')}</td></tr>`).join('');
+  });
+  const count = sev => sum(r.sections.filter(x => x.severity === sev).map(x => x.items.length));
+  openReportWindow({
+    title: t('تقرير جودة البيانات'), landscape: false,
+    summary: [[n, t('ملاحظة')], ...Object.entries(DQ_SEV).map(([k, [ico, l]]) => [count(k), `${ico} ${t(l)}`])],
+    body: r.sections.length ? `<table class="rpt"><thead><tr><th>#</th><th class="txt">${t('السجل')}</th><th class="txt">${t('التفاصيل')}</th></tr></thead><tbody>${body}</tbody></table>` : `<p>✅ ${t('مفيش نواقص — البيانات كاملة')}</p>`,
+    meta: [[t('عدد السجلات'), String(n)]],
+  });
+  printLog(t('تقرير جودة البيانات'), 'employee');
 }
 
 /* =====================================================================
@@ -1103,6 +1188,7 @@ const PERM_LABELS = {
   modules: {
     employees: 'الإقامات والموظفين', companies: 'الشركات والمشاريع والمفوّضين', vehicles: 'السيارات', costcenters: 'مراكز التكلفة',
     recruitment: 'الاستقدام والتوظيف', contract: 'عقود العمل والقوالب', companylog: 'السجل التاريخي والتدقيق',
+    custody: 'العهد والمصروفات', permits: 'التصاريح',
   },
   actions: { view: 'عرض', edit: 'إضافة وتعديل', delete: 'حذف' },
   other: {
@@ -1190,7 +1276,7 @@ function openUserEditModal(u, roles, done) {
         <span class="small muted">${u.custodyCodeLocked ? '🔒 ' + t('الرمز مايتغيّرش') : t('الرمز بيتحدد مرة واحدة ومش هيتغيّر بعد الحفظ.')}</span></label>
       <label>${t('البريد')}<input name="email" value="${v('email')}" dir="ltr"></label>
       <label>${t('الهاتف')}<input name="phone" value="${v('phone')}" dir="ltr"></label>
-      <label>${isNew ? `<span class="req">${t('كلمة المرور')}</span>` : t('كلمة مرور جديدة (سيبها فاضية لو مش هتغيّرها)')}<input name="password" type="password" autocomplete="new-password" minlength="6"></label>
+      <label>${isNew ? `<span class="req">${t('كلمة المرور')}</span>` : t('كلمة مرور جديدة (سيبها فاضية لو مش هتغيّرها)')}<input name="password" type="password" autocomplete="new-password" minlength="8"></label>
       <label class="check"><input type="checkbox" name="active" ${u.active ? 'checked' : ''} ${isSelf ? 'disabled' : ''}> ${t('الحساب نشط (يقدر يدخل)')}</label>
       <h4>${t('الدور والصلاحيات')}</h4>
       <label class="full"><span class="req">${t('الدور')}</span><select name="roleId" ${isSelf ? 'disabled' : ''}>${roles.map(r => opt(r.id, r.name, r.id === u.roleId)).join('')}</select><div id="role-help">${roleHelp(u.roleId)}</div></label>

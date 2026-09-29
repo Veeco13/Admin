@@ -6,7 +6,7 @@
   <title>Lunx — أبراج انرجي</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;600&display=swap">
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}?v={{ version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}?v={{ asset_ver }}">
   <script>
     // تطبيق الثيم واللغة قبل الرسم لتجنب الوميض
     try {
@@ -39,14 +39,14 @@
   <div id="toast"></div>
   <input type="file" id="hidden-file" hidden>
 
-  <script src="{{ url_for('static', filename='i18n.js') }}?v={{ version }}"></script>
-  <script src="{{ url_for('static', filename='js/core.js') }}?v={{ version }}"></script>
-  <script src="{{ url_for('static', filename='js/dashboard.js') }}?v={{ version }}"></script>
-  <script src="{{ url_for('static', filename='js/employees.js') }}?v={{ version }}"></script>
-  <script src="{{ url_for('static', filename='js/org.js') }}?v={{ version }}"></script>
-  <script src="{{ url_for('static', filename='js/permits.js') }}?v={{ version }}"></script>
-  <script src="{{ url_for('static', filename='js/contract.js') }}?v={{ version }}"></script>
-  <script src="{{ url_for('static', filename='js/recruit.js') }}?v={{ version }}"></script>
-  <script src="{{ url_for('static', filename='js/custody.js') }}?v={{ version }}"></script>
+  <script src="{{ url_for('static', filename='i18n.js') }}?v={{ asset_ver }}"></script>
+  <script src="{{ url_for('static', filename='js/core.js') }}?v={{ asset_ver }}"></script>
+  <script src="{{ url_for('static', filename='js/dashboard.js') }}?v={{ asset_ver }}"></script>
+  <script src="{{ url_for('static', filename='js/employees.js') }}?v={{ asset_ver }}"></script>
+  <script src="{{ url_for('static', filename='js/org.js') }}?v={{ asset_ver }}"></script>
+  <script src="{{ url_for('static', filename='js/permits.js') }}?v={{ asset_ver }}"></script>
+  <script src="{{ url_for('static', filename='js/contract.js') }}?v={{ asset_ver }}"></script>
+  <script src="{{ url_for('static', filename='js/recruit.js') }}?v={{ asset_ver }}"></script>
+  <script src="{{ url_for('static', filename='js/custody.js') }}?v={{ asset_ver }}"></script>
 </body>
 </html>

@@ -8,6 +8,8 @@ Flask + SQLAlchemy. الواجهة صفحة واحدة (SPA) في static/ ، و�
 نوع قاعدة البيانات: متغير البيئة LUNX_DATABASE_URL (الافتراضي SQLite: lunx.db)
 """
 import base64
+import gzip
+import hashlib
 import io
 import json
 import os
@@ -81,6 +83,99 @@ app.secret_key = os.environ.get("LUNX_SECRET") or _secret_key()
 
 
 # ---------------------------------------------------------------------------
+# حماية المتصفح + الكوكي الآمنة على https + الضغط (gzip) + كاش ملفات الشاشات
+# ---------------------------------------------------------------------------
+CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+       "font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; frame-src 'self' blob:; "
+       "connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'")
+GZIP_TYPES = {"application/json", "text/html", "text/css", "application/javascript", "text/javascript"}
+
+
+@app.after_request
+def _harden(resp):
+    h = resp.headers
+    h.setdefault("X-Content-Type-Options", "nosniff")          # المتصفح مايخمّنش نوع الملف
+    h.setdefault("X-Frame-Options", "SAMEORIGIN")               # البرنامج مايتفتحش جوّه موقع تاني
+    h.setdefault("Referrer-Policy", "same-origin")
+    if resp.mimetype == "text/html":
+        h.setdefault("Content-Security-Policy", CSP)            # مفيش سكريبتات غير من البرنامج نفسه
+    if request.is_secure and not app.config["SESSION_COOKIE_SECURE"]:     # https ← الكوكي آمنة لوحدها
+        cookies = h.getlist("Set-Cookie")
+        if any("; secure" not in c.lower() for c in cookies):
+            h.remove("Set-Cookie")
+            for c in cookies:
+                h.add("Set-Cookie", c if "; secure" in c.lower() else c + "; Secure")
+    if request.path.startswith("/static/") and request.args.get("v") and resp.status_code in (200, 304):
+        h["Cache-Control"] = "public, max-age=31536000, immutable"   # الرابط بيتغيّر مع أي تحديث (ASSET_VER)
+    return _gzip(resp)
+
+
+def _gzip(resp):
+    if (resp.status_code != 200 or resp.mimetype not in GZIP_TYPES or resp.headers.get("Content-Encoding")
+            or "gzip" not in request.headers.get("Accept-Encoding", "").lower()):
+        return resp
+    if resp.direct_passthrough:                      # ملفات static بتتقري من الديسك
+        if not request.path.startswith("/static/"):
+            return resp
+        resp.direct_passthrough = False
+    data = resp.get_data()
+    if len(data) < 1024:
+        return resp
+    resp.set_data(gzip.compress(data, 6))
+    resp.headers["Content-Encoding"] = "gzip"
+    resp.vary.add("Accept-Encoding")
+    return resp
+
+
+def _asset_version():
+    """رقم نسخة ملفات الشاشات من محتواها ← أي تعديل بيغيّر الرابط، فالمتصفح مايفضلش على نسخة قديمة."""
+    h = hashlib.sha1(APP_VERSION.encode())
+    for root, _, files in os.walk(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")):
+        for fn in sorted(files):
+            if fn.endswith((".js", ".css")):
+                with open(os.path.join(root, fn), "rb") as fh:
+                    h.update(fn.encode() + fh.read())
+    return h.hexdigest()[:10]
+
+
+ASSET_VER = _asset_version()
+
+
+# ---------------------------------------------------------------------------
+# كلمات السر: 8 حروف على الأقل، والافتراضية / الضعيفة لازم تتغيّر قبل أي حاجة
+# ---------------------------------------------------------------------------
+PW_MIN = 8
+WEAK_PASSWORDS = {"admin123", "admin", "123456", "1234567", "12345678", "123456789", "1234567890", "password", "123123",
+                  "111111", "000000", "qwerty", "lunx", "lunx123"}
+MUST_CHANGE_MSG = "لازم تغيّر كلمة السر الأول (الحالية افتراضية أو سهلة جدًا)"
+
+
+def weak_password(username, pw):
+    p, u = (pw or "").strip().lower(), (username or "").strip().lower()
+    return p in WEAK_PASSWORDS or p == u or p in (u + "123", u + "1234", "123" + u)
+
+
+def password_problem(username, pw):
+    """كلمة سر جديدة ← رسالة خطأ أو None."""
+    if len(pw or "") < PW_MIN:
+        return f"كلمة المرور لازم {PW_MIN} أحرف على الأقل"
+    if weak_password(username, pw):
+        return "كلمة المرور دي سهلة التخمين (افتراضية أو زي اسم المستخدم) — اختار واحدة تانية"
+    return None
+
+
+PW_OPEN_PATHS = ("/api/state", "/api/me/password", "/logout", "/login", "/healthz")
+
+
+@app.before_request
+def _force_password_change():
+    """اللي دخل بكلمة سر افتراضية أو ضعيفة: مفيش أي عملية غير تغييرها (الشاشة بتفتح على نافذة التغيير)."""
+    if session.get("pw_change") and (request.path.startswith("/api/") or request.path.startswith("/files/")) \
+            and request.path not in PW_OPEN_PATHS and not request.path.startswith("/files/logo/"):
+        return jsonify({"error": MUST_CHANGE_MSG, "mustChangePassword": True}), 403
+
+
+# ---------------------------------------------------------------------------
 # التهيئة
 # ---------------------------------------------------------------------------
 def bootstrap():
@@ -118,6 +213,55 @@ def body():
 
 def err(msg, code=400, **extra):
     return jsonify({"error": msg, **extra}), code
+
+
+# ---------------------------------------------------------------------------
+# المرفقات: PDF وصور بس (بنتأكد من محتوى الملف نفسه مش اسمه) — وبتتعرض بنوعها الحقيقي
+# ---------------------------------------------------------------------------
+VIEW_TYPES = {".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg", ".gif": "image/gif",
+              ".webp": "image/webp", ".bmp": "image/bmp"}
+IMAGE_TYPES = (".png", ".jpg", ".gif", ".webp", ".bmp")
+UPLOAD_ONLY_VIEWABLE = "المرفق لازم يكون PDF أو صورة (PNG / JPG / WEBP / GIF / BMP) — بيتعرض جوّه البرنامج بس"
+UPLOAD_ONLY_IMAGE = "الشعار لازم يكون صورة (PNG / JPG / WEBP / GIF / BMP)"
+
+
+def sniff_type(head):
+    """أول بايتات الملف ← امتداده الحقيقي (أو None لو مش PDF ولا صورة)."""
+    if head.startswith(b"%PDF"):
+        return ".pdf"
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if head[:3] == b"\xff\xd8\xff":
+        return ".jpg"
+    if head[:6] in (b"GIF87a", b"GIF89a"):
+        return ".gif"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return ".webp"
+    if head[:2] == b"BM":
+        return ".bmp"
+    return None
+
+
+def check_upload(f, images_only=False):
+    """ملف مرفوع ← (امتداده الحقيقي، رسالة خطأ أو None). الاسم مش كفاية: ملف HTML اسمه x.pdf بيترفض."""
+    head = f.stream.read(16)
+    f.stream.seek(0)
+    kind = sniff_type(head)
+    if kind is None or (images_only and kind not in IMAGE_TYPES):
+        return None, (UPLOAD_ONLY_IMAGE if images_only else UPLOAD_ONLY_VIEWABLE)
+    return kind, None
+
+
+def send_viewable(path, name=None):
+    """عرض مرفق جوّه البرنامج (مش تنزيل): PDF أو صورة بنوعها الحقيقي — أي نوع تاني (ملفات قديمة) مابيتعرضش."""
+    try:
+        with open(path, "rb") as fh:
+            kind = sniff_type(fh.read(16))
+    except OSError:
+        abort(404)
+    if kind is None:
+        return err("الملف ده مايتعرضش جوّه البرنامج (PDF وصور بس) — والتنزيل مقفول", 415)
+    return send_file(path, mimetype=VIEW_TYPES[kind], download_name=name or os.path.basename(path), as_attachment=False)
 
 
 # ---------------------------------------------------------------------------
@@ -233,6 +377,11 @@ def login():
                     session.clear()
                     session["uid"] = u.id
                     session.permanent = True
+                    weak = weak_password(u.username, request.form.get("password", ""))
+                    _mark_weak(s, u.username, weak)          # بيظهر في تقرير جودة البيانات لحد ما تتغيّر
+                    if weak:
+                        session["pw_change"] = True
+                        db.log_audit(s, "login_weak", f"دخول بكلمة سر افتراضية / ضعيفة ← لازم تتغيّر: {u.username}", u.username)
                     return redirect(url_for("index"))
             else:
                 error = "اسم المستخدم أو كلمة المرور غير صحيحة"
@@ -248,7 +397,7 @@ def logout():
 @app.route("/")
 @login_required
 def index():
-    return render_template("index.html", version=APP_VERSION)
+    return render_template("index.html", version=APP_VERSION, asset_ver=ASSET_VER)
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +439,7 @@ def api_state():
         fields = contracts.template_fields(path) if os.path.exists(path) else set()
         t["signFirst"], t["signSecond"] = "sig_first_party" in fields, "sig_second_party" in fields
     state["me"] = u.to_api()
+    state["me"]["mustChangePassword"] = bool(session.get("pw_change"))
     state["version"] = APP_VERSION
     state["pdfAvailable"] = bool(contracts.backend())
     state["sheetPdfAvailable"] = bool(contracts._soffice() or contracts._excel_installed())   # معاينة كشوف العهد
@@ -874,10 +1024,13 @@ def upload_emp_file(emp_id):
             return err("الموظف غير موجود", 404)
         if not emp_ok(s, emp_id):
             return forbidden(OUT_OF_SCOPE)
+    kind, problem = check_upload(f)
+    if problem:
+        return err(problem)
     folder = os.path.join(UPLOADS, "employees", emp_id)
     os.makedirs(folder, exist_ok=True)
     fid = db.new_id("f")
-    path = os.path.join(folder, fid + "_" + (secure_filename(f.filename) or "file"))
+    path = os.path.join(folder, fid + "_" + os.path.splitext(secure_filename(f.filename) or "file")[0] + kind)
     f.save(path)
     with db.session_scope() as s:
         s.add(M.EmployeeFile(id=fid, employeeId=emp_id, name=f.filename, path=db.rel_file(path),
@@ -912,7 +1065,7 @@ def get_emp_file(fid):
             abort(403)
     if not r:
         abort(404)
-    return send_file(db.resolve_file(r.path), download_name=r.name, as_attachment=False)    # عرض بس
+    return send_viewable(db.resolve_file(r.path), r.name)    # عرض بس
 
 
 # ---------------------------------------------------------------------------
@@ -1003,8 +1156,12 @@ def upload_company_doc(cid, kind):
     f = request.files.get("file")
     if not f:
         return err("لا يوجد ملف")
+    ext, problem = check_upload(f, images_only=kind == "logo")
+    if problem:
+        return err(problem)
     folder = os.path.join(UPLOADS, "logos" if kind == "logo" else "companies")
-    path = os.path.join(folder, f"{cid}_{kind}{os.path.splitext(f.filename)[1].lower()}")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, f"{cid}_{kind}{ext}")
     f.save(path)
     rel = db.rel_file(path)
     with db.session_scope() as s:
@@ -1038,7 +1195,7 @@ def get_company_doc(cid, kind):
         r = s.get(M.CompanyDoc, (cid, kind))
     if not r or not r.path:
         abort(404)
-    return send_file(db.resolve_file(r.path), download_name=r.name)
+    return send_viewable(db.resolve_file(r.path), r.name)
 
 
 @app.get("/files/logo/<cid>")
@@ -1048,7 +1205,7 @@ def get_logo(cid):
         c = s.get(M.Company, cid)
     if not c or not c.logoPath:
         abort(404)
-    return send_file(db.resolve_file(c.logoPath))
+    return send_viewable(db.resolve_file(c.logoPath))
 
 
 def _sig_ok(s, sid, new_company=None):
@@ -1113,7 +1270,11 @@ def upload_signatory_doc(civil_id):
             return forbidden(OUT_OF_SCOPE)
         doc = s.get(M.SignatoryDoc, civil_id) or M.SignatoryDoc(civilId=civil_id)
         if f and f.filename:
-            path = os.path.join(UPLOADS, "signatories", f"{civil_id}{os.path.splitext(f.filename)[1].lower()}")
+            ext, problem = check_upload(f)
+            if problem:
+                return err(problem)
+            os.makedirs(os.path.join(UPLOADS, "signatories"), exist_ok=True)
+            path = os.path.join(UPLOADS, "signatories", f"{civil_id}{ext}")
             f.save(path)
             doc.name, doc.path = f.filename, db.rel_file(path)
         doc.expiryDate = db.parse_date(request.form.get("expiryDate"))
@@ -1131,7 +1292,7 @@ def get_signatory_doc(civil_id):
         r = s.get(M.SignatoryDoc, civil_id)
     if not r or not r.path:
         abort(404)
-    return send_file(db.resolve_file(r.path), download_name=r.name)
+    return send_viewable(db.resolve_file(r.path), r.name)
 
 
 # ---------------------------------------------------------------------------
@@ -1596,15 +1757,16 @@ def upload_permit_file(pid):
     f = request.files.get("file")
     if not f:
         return err("لا يوجد ملف")
-    if os.path.splitext(f.filename or "")[1].lower() not in PERMIT_FILE_EXT:
-        return err("المرفق لازم يكون صورة أو PDF (بيتعرض جوّه البرنامج بس)")
+    ext, problem = check_upload(f)
+    if problem:
+        return err(problem)
     with db.session_scope() as s:
         p, who, e = _permit_of(s, pid, "edit")
         if e:
             return e
         folder = os.path.join(UPLOADS, "permits")
         os.makedirs(folder, exist_ok=True)
-        path = os.path.join(folder, f"{pid}_{db.new_id('f')}_{secure_filename(f.filename) or 'file'}")
+        path = os.path.join(folder, f"{pid}_{db.new_id('f')}_{os.path.splitext(secure_filename(f.filename) or 'file')[0]}{ext}")
         f.save(path)
         _drop_permit_file(p)
         p.filePath, p.fileName = db.rel_file(path), f.filename
@@ -1638,7 +1800,7 @@ def get_permit_file(pid):
         path, name = db.resolve_file(p.filePath), p.fileName
     if not os.path.exists(path):
         abort(404)
-    return send_file(path, download_name=name, as_attachment=False)    # عرض بس
+    return send_viewable(path, name)    # عرض بس
 
 
 def _save_permit_list(model, prefix, rid, extra=None):
@@ -2666,9 +2828,11 @@ def _set_user_fields(s, u, d):
             or s.scalar(select(func.count()).select_from(M.UserCostCenter).where(M.UserCostCenter.userId == u.id))):
         return "اختار شركة أو مركز تكلفة واحد على الأقل، أو فعّل «كل الشركات»"
     if d.get("password"):
-        if len(d["password"]) < 6:
-            return "كلمة المرور لازم 6 أحرف على الأقل"
+        problem = password_problem(u.username, d["password"])
+        if problem:
+            return problem
         u.passwordHash = generate_password_hash(d["password"])
+        _mark_weak(s, u.username, False)
     return None
 
 
@@ -2875,10 +3039,155 @@ def change_my_password():
         u = s.get(M.User, session["uid"])
         if not check_password_hash(u.passwordHash, d.get("old", "")):
             return err("كلمة المرور الحالية غير صحيحة")
-        if len(d.get("new", "")) < 6:
-            return err("كلمة المرور الجديدة لازم 6 أحرف على الأقل")
+        problem = password_problem(u.username, d.get("new", ""))
+        if problem:
+            return err(problem)
+        if d.get("new") == d.get("old"):
+            return err("كلمة المرور الجديدة لازم تختلف عن الحالية")
         u.passwordHash = generate_password_hash(d["new"])
+        _mark_weak(s, u.username, False)
+        db.log_audit(s, "user_password", f"تغيير كلمة المرور: {u.username}", u.username)
+    session.pop("pw_change", None)
     return jsonify({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# تقرير جودة البيانات (مدير النظام) — النواقص والتعارضات اللي بتوقف التنبيهات والنماذج والتقارير
+# كل بند: {key, title, severity: high|medium|low, hint, items: [{kind, id, label, detail}]}
+# ---------------------------------------------------------------------------
+WEAK_PW_KEY = "weak_password_users"          # اللي دخلوا بكلمة سر افتراضية / ضعيفة ولسه ماغيّروهاش
+
+
+def _weak_users(s):
+    try:
+        return set(json.loads(db.get_meta(s, WEAK_PW_KEY) or "[]"))
+    except ValueError:
+        return set()
+
+
+def _mark_weak(s, username, weak):
+    users = _weak_users(s)
+    (users.add if weak else users.discard)(username)
+    db.set_meta(s, WEAK_PW_KEY, json.dumps(sorted(users), ensure_ascii=False))
+
+
+def data_quality(s):
+    today = datetime.now().date()
+    ENDED = ("resigned", "terminated")
+    emps = s.scalars(select(M.Employee)).all()
+    affs = {}
+    for a in s.scalars(select(M.EmployeeAffiliation).order_by(M.EmployeeAffiliation.position)):
+        affs.setdefault(a.employeeId, []).append(a)
+    ccs = {c.name: c for c in s.scalars(select(M.CostCenter))}
+    cos = {c.id: c for c in s.scalars(select(M.Company))}
+    active = [e for e in emps if (e.employmentStatus or "active") not in ENDED]
+    E = {e.id: e for e in emps}
+
+    def emp(e, detail=""):
+        return {"kind": "employee", "id": e.id, "label": f"{e.name} ({e.id})", "detail": detail}
+
+    def fmt(d):
+        return d.strftime("%d/%m/%Y") if d else ""
+
+    out = []
+
+    def add(key, title, severity, items, hint=""):
+        if items:
+            out.append({"key": key, "title": title, "severity": severity, "hint": hint, "items": items})
+
+    # ---------- الموظفين ----------
+    add("emp_no_company", "موظفين من غير شركة", "high", [emp(e) for e in emps if not affs.get(e.id)],
+        "مش هيظهروا في فلاتر الشركات ونطاق المستخدمين.")
+    add("emp_ended_no_date", "خدمتهم منتهية من غير تاريخ انتهاء خدمة", "high",
+        [emp(e, e.serviceEndReason or "") for e in emps if (e.employmentStatus in ENDED) and not e.serviceEndDate],
+        "التاريخ لازم في نماذج التأمينات وإقرار المخالصة.")
+    for f, lab in (("residencyExp", "الإقامة"), ("workPermitExp", "إذن العمل")):
+        add(f"emp_expired_{f}", f"{lab} منتهية لموظفين في الخدمة", "high",
+            [emp(e, fmt(getattr(e, f))) for e in active if getattr(e, f) and getattr(e, f) < today])
+    need_res = [e for e in active if pdf_forms.needs_residency(e.nationality)]
+    add("emp_no_residency", "من غير تاريخ انتهاء الإقامة أو إذن العمل", "medium",
+        [emp(e, "، ".join(x for x, v in (("الإقامة", e.residencyExp), ("إذن العمل", e.workPermitExp)) if not v)) for e in need_res
+         if not e.residencyExp or not e.workPermitExp], "من غيرهم مفيش تنبيه قبل الانتهاء.")
+    add("emp_no_passport", "من غير رقم جواز", "medium", [emp(e) for e in need_res if not (e.passportNo or "").strip()],
+        "رقم الجواز لازم لنموذج الإقامة ومنع التكرار.")
+    add("emp_no_passport_exp", "من غير تاريخ انتهاء الجواز", "low", [emp(e) for e in need_res if not e.passportExp])
+    add("emp_no_health", "من غير تاريخ البطاقة الصحية", "low", [emp(e) for e in need_res if not e.healthCardExp])
+    add("emp_no_name_en", "من غير الاسم بالإنجليزي", "low", [emp(e) for e in active if not (e.nameEn or "").strip()],
+        "بيطلع فاضي في التقارير الإنجليزي والنماذج الرسمية.")
+    add("emp_no_cc", "من غير مركز تكلفة", "medium", [emp(e) for e in active if not e.costCenter])
+    add("emp_bad_cc", "مركز تكلفة مش موجود في القايمة", "medium",
+        [emp(e, e.costCenter) for e in emps if e.costCenter and e.costCenter not in ccs])
+    add("emp_driver_no_license", "سواقين من غير تاريخ رخصة القيادة", "medium",
+        [emp(e) for e in active if e.isDriver and not e.drivingLicenseExp])
+    add("emp_bad_civil", "رقم مدني مش 12 رقم", "medium", [emp(e) for e in emps if not re.fullmatch(r"\d{12}", e.id or "")])
+    add("emp_end_before_hire", "تاريخ انتهاء الخدمة قبل تاريخ التعيين", "medium",
+        [emp(e, f"{fmt(e.dateOfHire)} ← {fmt(e.serviceEndDate)}") for e in emps if e.dateOfHire and e.serviceEndDate and e.serviceEndDate < e.dateOfHire])
+    pp = {}
+    for e in emps:
+        k = (e.passportNo or "").strip().upper()
+        if k:
+            pp.setdefault(k, []).append(e)
+    add("emp_dup_passport", "رقم جواز متكرر", "high", [emp(e, e.passportNo) for v in pp.values() if len(v) > 1 for e in v])
+    nn = {}
+    for e in emps:
+        nn.setdefault((norm_name(e.name), norm_name(e.nationality)), []).append(e)
+    add("emp_dup_name", "نفس الاسم والجنسية (احتمال موظف متسجّل مرتين)", "medium",
+        [emp(e, e.nationality or "") for v in nn.values() if len(v) > 1 for e in v])
+
+    # ---------- الشركات ----------
+    sigs = {x.companyId for x in s.scalars(select(M.Signatory))}
+    docs = (("commercialLicenseExpiry", "الرخصة التجارية"), ("trafficAuthExpiry", "تفويض المرور"), ("civilAffairsAuthExpiry", "تفويض الشؤون المدنية"))
+    add("co_expired_docs", "مستندات شركات منتهية", "high",
+        [{"kind": "company", "id": c.id, "label": c.nameAr, "detail": "، ".join(f"{lab} {fmt(getattr(c, f))}" for f, lab in docs if getattr(c, f) and getattr(c, f) < today)}
+         for c in cos.values() if any(getattr(c, f) and getattr(c, f) < today for f, _ in docs)])
+    add("co_missing_docs", "شركات ناقصها تواريخ مستندات", "medium",
+        [{"kind": "company", "id": c.id, "label": c.nameAr, "detail": "، ".join(lab for f, lab in docs if not getattr(c, f))}
+         for c in cos.values() if any(not getattr(c, f) for f, _ in docs)], "من غيرها مفيش تنبيه قبل الانتهاء.")
+    add("co_no_signatory", "شركات من غير مفوّض بالتوقيع", "medium",
+        [{"kind": "company", "id": c.id, "label": c.nameAr, "detail": ""} for c in cos.values() if c.id not in sigs],
+        "عقود العمل ونماذج الشركة محتاجة مفوّض.")
+
+    # ---------- مراكز التكلفة ----------
+    add("cc_no_company", "مراكز تكلفة مش مربوطة بشركة", "medium",
+        [{"kind": "cc", "id": c.id, "label": c.name, "detail": ""} for c in ccs.values() if not c.companyId],
+        "نطاق الشركات للمستخدمين بيعتمد على الربط ده.")
+    add("cc_no_code", "مراكز تكلفة من غير رمز", "low", [{"kind": "cc", "id": c.id, "label": c.name, "detail": ""} for c in ccs.values() if not c.code])
+
+    # ---------- السيارات ----------
+    vitems = {"veh_expired": [], "veh_no_dates": [], "veh_driver": [], "veh_no_company": []}
+    for v in s.scalars(select(M.Vehicle)):
+        it = lambda d="": {"kind": "vehicle", "id": v.id, "label": v.plate, "detail": d}
+        exp = [f"{lab} {fmt(getattr(v, f))}" for f, lab in (("insuranceExpiry", "التأمين"), ("govLicenseExpiry", "الدفتر")) if getattr(v, f) and getattr(v, f) < today]
+        if exp:
+            vitems["veh_expired"].append(it("، ".join(exp)))
+        miss = [lab for f, lab in (("insuranceExpiry", "التأمين"), ("govLicenseExpiry", "الدفتر")) if not getattr(v, f)]
+        if miss:
+            vitems["veh_no_dates"].append(it("، ".join(miss)))
+        d = E.get(v.driverId) if v.driverId else None
+        if d is not None and d.employmentStatus in ENDED:
+            vitems["veh_driver"].append(it(f"السائق خدمته منتهية: {d.name}"))
+        if not v.companyId:
+            vitems["veh_no_company"].append(it())
+    add("veh_expired", "سيارات تأمينها أو دفترها منتهي", "high", vitems["veh_expired"])
+    add("veh_driver", "سيارات سايقها خدمته منتهية", "medium", vitems["veh_driver"])
+    add("veh_no_company", "سيارات من غير شركة", "medium", vitems["veh_no_company"])
+    add("veh_no_dates", "سيارات من غير تاريخ تأمين أو دفتر", "low", vitems["veh_no_dates"])
+
+    # ---------- الحسابات ----------
+    active_users = {u.username: u for u in s.scalars(select(M.User)) if u.active}
+    add("users_weak_pw", "حسابات بكلمة سر افتراضية أو سهلة", "high",
+        [{"kind": "user", "id": u, "label": u, "detail": "دخل بيها ولسه ماغيّرهاش"} for u in sorted(_weak_users(s)) if u in active_users],
+        "بتتكشف وقت الدخول، وصاحبها بيتجبر يغيّرها.")
+    if not db.get_meta(s, EXPORT_KEY):
+        add("export_pw", "كلمة سر التصدير لسه ماتحددتش", "medium", [{"kind": "system", "id": "exportpw", "label": "كلمة سر التصدير", "detail": "تصدير CSV مقفول لحد ما تتحدد"}])
+    return out
+
+
+@app.get("/api/data-quality")
+@admin_required
+def api_data_quality():
+    with db.session_scope(commit=False) as s:
+        return jsonify({"sections": data_quality(s), "at": db.now_iso()})
 
 
 @app.get("/healthz")

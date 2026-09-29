@@ -458,3 +458,6 @@ table.kids input:not([type=checkbox]), table.kids select { width: 100%; min-widt
 #emp-table td:nth-child(2) { min-width: 200px; }
 #emp-table td:nth-child(2) .small { max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #emp-table td:nth-child(5) { min-width: 110px; }
+
+/* تقرير جودة البيانات */
+.dq{border:1px solid var(--border);border-radius:8px;margin:6px 0;padding:6px 10px}.dq summary{cursor:pointer;padding:2px 0}.dq table{margin-top:6px}
