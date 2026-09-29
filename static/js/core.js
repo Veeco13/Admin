@@ -799,7 +799,7 @@ async function restoreBackup() {
    UI STATE — حفظ الفلاتر والصفحة
    ===================================================================== */
 let UI = Object.assign({
-  emp: { q: '', company: [], link: '', project: [], agency: [], status: [], stage: [], nationality: [], costCenter: [], profession: [], tier: '', tierField: 'any', driver: false, outside: false, sort: 'name', dir: 1, page: 1, perPage: 50 },
+  emp: { q: '', company: [], link: '', project: [], agency: [], status: [], stage: [], nationality: [], costCenter: [], profession: [], tier: '', tierField: 'any', driver: false, sort: 'name', dir: 1, page: 1, perPage: 50 },
   cand: { q: '', source: '', stage: '', company: '' },
   log: { tab: 'history', company: '', category: '', q: '' },
   vehicles: { q: '', project: '', agency: '', type: '', cc: '' },

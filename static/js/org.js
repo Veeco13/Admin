@@ -180,7 +180,7 @@ function projectsTable(projs, withCompany) {
       <td class="num">${esc(p.fileNumber || '')}</td><td class="num">${esc(p.contractNo || '')}</td>
       <td class="num small">${fmtDate(p.startDate)}</td><td class="nowrap">${datePill(p.expiryDate)}${dl !== null ? `<div class="small muted">${esc(daysText(dl))}</div>` : ''}</td>
       <td class="num"><a href="#" data-proj-emps="${p.id}">${pe.length}</a></td><td class="num"><a href="#" data-proj-veh="${p.id}">${pv.length}</a></td>
-      <td class="num ${out ? 'warn-cell' : ''}">${out ? `<a href="#" data-proj-out="${p.id}">⚠️ ${out}</a>` : '<span class="muted">—</span>'}</td>
+      <td class="num ${out ? 'warn-cell' : ''}">${out || '<span class="muted">—</span>'}</td>
       <td class="num ${beyond ? 'warn-cell' : ''}" title="${esc(t('إقامة أو إذن عمل بعد نهاية العقد'))}">${beyond || '<span class="muted">—</span>'}</td>
       <td class="row"><button class="btn sm write-only" data-p="companies.edit" data-proj-edit="${p.id}">✏️</button><button class="btn sm danger write-only" data-p="companies.delete" data-proj-del="${p.id}">✕</button></td></tr>`;
   });
@@ -192,7 +192,6 @@ function projectsTable(projs, withCompany) {
 function goVehicles(filters) { UI.vehicles = Object.assign({ q: '', project: '', agency: '', type: '', cc: '' }, filters); saveUiStateToLocalStorage(); setView('vehicles'); }
 function bindProjectsTable(root, beforeLeave = () => {}) {
   $$('[data-proj-emps]', root).forEach(b => b.onclick = (e) => { e.preventDefault(); const p = IDX.project[b.dataset.projEmps]; beforeLeave(); goEmployees({ company: p.companyId, project: p.id }); });
-  $$('[data-proj-out]', root).forEach(b => b.onclick = (e) => { e.preventDefault(); const p = IDX.project[b.dataset.projOut]; beforeLeave(); goEmployees({ company: p.companyId, project: p.id, outside: true }); });
   $$('[data-proj-veh]', root).forEach(b => b.onclick = (e) => { e.preventDefault(); beforeLeave(); goVehicles({ project: b.dataset.projVeh }); });
   $$('[data-proj-co]', root).forEach(b => b.onclick = (e) => { e.preventDefault(); openCompanyDetails(b.dataset.projCo, 'projects'); });
   $$('[data-proj-edit]', root).forEach(b => b.onclick = () => { const p = IDX.project[b.dataset.projEdit]; openProjectModal(p.companyId, p); });

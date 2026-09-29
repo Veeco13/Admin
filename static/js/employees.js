@@ -126,7 +126,6 @@ function renderEmployees() {
       <select id="f-tierfield">${opt('any', t('أي مستند'), f.tierField === 'any')}${EMP_DATE_FIELDS.map(x => opt(x.key, t(x.label), x.key === f.tierField)).join('')}</select>
       <select id="f-tier">${opt('', t('— كل المستويات —'), !f.tier)}${TIER_FILTERS.map(k => opt(k, t(TIERS[k].label), k === f.tier)).join('')}</select>
       <label class="chip clickable ${f.driver ? 'on' : ''}"><input type="checkbox" id="f-driver" ${f.driver ? 'checked' : ''} hidden>🚚 ${t('السائقين فقط')}</label>
-      ${(STATE.agencies || []).length ? `<label class="chip clickable ${f.outside ? 'on' : ''}" title="${esc(t('مكان الشغل الفعلي (مركز التكلفة) مش من وكالة العقد اللي مسجّل عليه'))}"><input type="checkbox" id="f-outside" ${f.outside ? 'checked' : ''} hidden>⚠️ ${t('برّه وكالة عقده')}</label>` : ''}
       <button class="btn sm ghost" id="f-clear">✕ ${t('مسح الفلاتر')}</button>
     </div>
     ${linkBar}
@@ -179,8 +178,7 @@ function renderEmployees() {
   $('#f-tierfield').onchange = e => upd({ tierField: e.target.value });
   $('#f-tier').onchange = e => upd({ tier: e.target.value });
   $('#f-driver').onchange = e => upd({ driver: e.target.checked });
-  const fo = $('#f-outside'); if (fo) fo.onchange = e => upd({ outside: e.target.checked });
-  $('#f-clear').onclick = () => { msClose(); upd({ q: '', company: [], link: '', project: [], agency: [], status: [], stage: [], nationality: [], costCenter: [], profession: [], tier: '', tierField: 'any', driver: false, outside: false }); };
+  $('#f-clear').onclick = () => { msClose(); upd({ q: '', company: [], link: '', project: [], agency: [], status: [], stage: [], nationality: [], costCenter: [], profession: [], tier: '', tierField: 'any', driver: false }); };
   $$('#emp-table th[data-sort]').forEach(th => th.onclick = () => { const k = th.dataset.sort; UI.emp.dir = UI.emp.sort === k ? -UI.emp.dir : 1; UI.emp.sort = k; saveUiStateToLocalStorage(); render(); });
   $('#pg-prev').onclick = () => upd({ page: f.page - 1 });
   $('#pg-next').onclick = () => upd({ page: f.page + 1 });
