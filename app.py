@@ -26,6 +26,7 @@ import db
 import contracts
 import custody
 import custody_excel
+import value_i18n
 import docx_engine
 import history
 import importer
@@ -264,6 +265,7 @@ def api_state():
         state = db.dump_state(s, u)
         state.update(custody.dump(s, u) if u.can("custody.view")
                      else {"custodies": [], "invoices": [], "feeItems": [], "custodySettings": None})
+        state["valueTranslations"] = value_i18n.merged(s)       # الجنسيات والمهن للتقارير الإنجليزية
     for t in state.get("templates", []):     # خيارات التوقيع بتظهر بس لو القالب فيه مكانها
         path = os.path.join(TEMPLATE_DOCS, t["filename"])
         fields = contracts.template_fields(path) if os.path.exists(path) else set()
@@ -1591,6 +1593,17 @@ def cancel_custody(cid):
         c.status = "cancelled"
         db.log_audit(s, "custody_delete", f"إلغاء عهدة رقم {c.no} — المستلم: {c.custodian}", uname())
     return jsonify({"ok": True})
+
+
+@app.put("/api/value-translations")
+@require("employees.edit")
+def save_value_translations():
+    """ترجمة الجنسيات والمهن للتقارير الإنجليزية: {nationality: {عربي: إنجليزي}, profession: {...}}"""
+    with db.session_scope() as s:
+        n = value_i18n.save(s, body())
+        if n:
+            db.log_audit(s, "employee_edit", f"تعديل ترجمة الجنسيات والمهن للتقارير الإنجليزية ({n})", uname())
+    return jsonify({"ok": True, "changed": n})
 
 
 @app.put("/api/fee-items/<tx>")

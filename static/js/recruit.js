@@ -126,11 +126,13 @@ function renderCandidatesReportModal() {
     body: `<div class="row" style="margin-bottom:10px"><span class="chip">${t('الإجمالي')}: ${list.length}</span>${Object.keys(RECRUIT_SOURCES).map(k => `<span class="chip">${recruitSourceLabel(k, true)}: ${bySource(k)}</span>`).join('')}
       <span class="chip" data-p="sensitive.salary">${t('إجمالي الرواتب المتفق عليها')}: ${fmtMoney(sum(list.filter(c => c.stage !== 'rejected').map(c => c.salary)))}</span></div>
       <div class="table-wrap"><table class="data"><thead><tr><th>#</th><th>${t('الاسم')}</th><th>${t('الجنسية')}</th><th>${t('المهنة')}</th><th>${t('المصدر')}</th><th>${t('المرحلة')}</th><th>${t('الشركة المستهدفة')}</th><th data-p="sensitive.salary">${t('الراتب')}</th><th>${t('بدل السكن')}</th><th>${t('المهلة')}</th></tr></thead><tbody>
-      ${rows.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.c.name)}</td><td>${esc(r.c.nationality || '')}</td><td>${esc(r.c.profession || '')}</td><td>${recruitSourceLabel(r.c.source, true)}</td><td>${esc(r.st)}</td><td>${esc(companyName(r.c.targetCompanyId))}</td><td class="num" data-p="sensitive.salary">${r.c.salary ? fmtMoney(r.c.salary) : '—'}</td><td>${r.c.housingAllowance ? '✓' : ''}</td><td>${datePill(r.deadline)}</td></tr>`).join('')}
+      ${rows.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.c.name)}</td><td>${esc(natLabel(r.c.nationality) || '')}</td><td>${esc(profLabel(r.c.profession) || '')}</td><td>${recruitSourceLabel(r.c.source, true)}</td><td>${esc(r.st)}</td><td>${esc(companyName(r.c.targetCompanyId))}</td><td class="num" data-p="sensitive.salary">${r.c.salary ? fmtMoney(r.c.salary) : '—'}</td><td>${r.c.housingAllowance ? '✓' : ''}</td><td>${datePill(r.deadline)}</td></tr>`).join('')}
       </tbody></table></div>`,
-    foot: `<button class="btn primary" data-print>🖨️ طباعة</button><button class="btn" data-csv>📤 CSV</button><button class="btn" data-close>إغلاق</button>`,
+    foot: `<label class="row small" style="gap:6px">${t('لغة التقرير')}<select id="cr-lang">${opt('ar', 'العربية', LANG !== 'en')}${opt('en', 'English', LANG === 'en')}</select></label>
+      <button class="btn primary" data-print>🖨️ طباعة</button><button class="btn" data-csv>📤 CSV</button><button class="btn" data-close>إغلاق</button>`,
   });
-  $('[data-print]', m.el).onclick = () => printCandidatesReport(rows);
+  // التقرير بلغة التقرير حتى لو البرنامج شغال بلغة تانية (المراحل والجنسيات والمهن بتتترجم وقت الطباعة)
+  $('[data-print]', m.el).onclick = () => withLang($('#cr-lang', m.el).value, () => printCandidatesReport(candidatesReportRows(list)));
   $('[data-csv]', m.el).onclick = () => downloadBlob(toCsv([[t('الاسم'), 'Name', t('الجنسية'), t('المهنة'), t('المصدر'), t('المرحلة'), t('الشركة المستهدفة'), t('الراتب'), t('بدل السكن'), t('رقم الجواز'), t('تاريخ التقديم'), t('المهلة')],
     ...rows.map(r => [r.c.name, r.c.nameEn, r.c.nationality, r.c.profession, r.c.source, r.st, companyName(r.c.targetCompanyId), r.c.salary, r.c.housingAllowance ? 'yes' : '', r.c.passportNo, r.c.appliedDate, r.deadline])]), `candidates-${todayISO()}.csv`, 'text/csv');
 }
@@ -145,7 +147,7 @@ function printCandidatesReport(rows) {
   const active = rows.filter(r => r.c.stage !== 'rejected');
   const table = `<table class="rpt"><thead><tr><th>#</th><th class="txt">${t('الاسم')}</th><th>${t('الجنسية')}</th><th>${t('المهنة')}</th><th>${t('المصدر')}</th><th>${t('المرحلة')}</th><th>${t('الشركة المستهدفة')}</th>
       ${sal ? `<th class="num">${t('الراتب')} (${t('د.ك')})</th>` : ''}<th>${t('بدل السكن')}</th><th>${t('المهلة')}</th></tr></thead>
-    <tbody>${rows.map((r, i) => `<tr class="${i % 2 ? 'z' : ''}"><td class="idx">${i + 1}</td><td class="txt">${esc(r.c.name)}</td><td>${esc(r.c.nationality || '')}</td><td>${esc(r.c.profession || '')}</td>
+    <tbody>${rows.map((r, i) => `<tr class="${i % 2 ? 'z' : ''}"><td class="idx">${i + 1}</td><td class="txt">${esc(empName(r.c))}</td><td>${esc(natLabel(r.c.nationality) || '')}</td><td>${esc(profLabel(r.c.profession) || '')}</td>
       <td>${recruitSourceLabel(r.c.source, true)}</td><td>${esc(r.st)}</td><td>${esc(companyName(r.c.targetCompanyId))}</td>
       ${sal ? `<td class="num">${r.c.salary ? rptNum(r.c.salary) : ''}</td>` : ''}<td>${r.c.housingAllowance ? '✓' : ''}</td><td>${r.deadline ? datePill(r.deadline) : ''}</td></tr>`).join('')}</tbody>
     ${sal ? `<tfoot><tr><td></td><td colspan="6">${t('إجمالي الرواتب المتفق عليها')} (${active.length})</td><td class="num">${rptNum(sum(active.map(r => r.c.salary)))}</td><td></td><td></td></tr></tfoot>` : ''}</table>`;

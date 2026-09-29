@@ -98,14 +98,19 @@ const RECRUIT_STAGES_INTERNAL = [
   { id: 'all_completed',             label: '✅ تم إنجاز جميع الإجراءات', final: true },
 ];
 const REJECTED_STAGE = { id: 'rejected', label: 'مرفوض', rejected: true };
+// tierOf بيرجّع شريحة واحدة (للألوان وتوزيع لوحة المعلومات — band)، والفلاتر «خلال X يوم» تراكمية (TIER_WITHIN):
+// «خلال 60 يوم» = اللي بينتهي من النهارده لحد 60 يوم، مش من 31 لـ 60 بس
 const TIERS = {
   expired: { label: 'منتهي',          cls: 't-expired' },
   d30:     { label: 'خلال 30 يوم',    cls: 't-d30' },
-  d60:     { label: 'خلال 60 يوم',    cls: 't-d60' },
-  d90:     { label: 'خلال 90 يوم',    cls: 't-d90' },
+  d60:     { label: 'خلال 60 يوم',    cls: 't-d60', band: '31–60 يوم' },
+  d90:     { label: 'خلال 90 يوم',    cls: 't-d90', band: '61–90 يوم' },
   ok:      { label: 'سارية',          cls: 't-ok' },
   none:    { label: 'بدون تاريخ',     cls: 't-none' },
 };
+const TIER_WITHIN = { soon: ['expired', 'd30'], d30: ['d30'], d60: ['d30', 'd60'], d90: ['d30', 'd60', 'd90'] };
+/** التاريخ ده جوّه فلتر المستوى؟ (منتهي / خلال 30 / 60 / 90 يوم تراكمي / سارية / بدون تاريخ / منتهي أو خلال 30) */
+function tierIn(date, tier) { return (TIER_WITHIN[tier] || [tier]).includes(tierOf(date)); }
 const EMP_DATE_FIELDS = [
   { key: 'residencyExp',      label: 'الإقامة' },
   { key: 'workPermitExp',     label: 'إذن العمل' },
@@ -172,6 +177,8 @@ function govStagePill(id) { const g = govStageInfo(id); return g ? `<span class=
 function norm(s) { return String(s ?? '').toLowerCase().replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').replace(/[ً-ْ]/g, '').trim(); }
 function initials(name) { return (name || '?').trim().split(/\s+/).slice(0, 2).map(w => w[0]).join(''); }
 function uniq(a) { return Array.from(new Set(a.filter(x => x !== null && x !== undefined && x !== ''))); }
+/** قيمة فلتر ← قائمة ('' = فاضية، نص = عنصر واحد — توافق مع الفلاتر القديمة المحفوظة) */
+function asList(v) { return Array.isArray(v) ? v.filter(x => x !== '' && x !== null && x !== undefined) : (v === '' || v === null || v === undefined ? [] : [v]); }
 function sum(a) { return a.reduce((x, y) => x + (Number(y) || 0), 0); }
 function debounce(fn, ms) { let h; return (...a) => { clearTimeout(h); h = setTimeout(() => fn(...a), ms); }; }
 
@@ -189,6 +196,30 @@ function buildIndex() {
 function companyName(id) { const c = IDX.company[id]; return c ? (LANG === 'en' && c.nameEn ? c.nameEn : c.nameAr) : ''; }
 function projectName(id) { const p = IDX.project[id]; return p ? (LANG === 'en' && p.nameEn ? p.nameEn : p.nameAr) : ''; }
 function empName(e) { return e ? (LANG === 'en' && e.nameEn ? e.nameEn : e.name) : ''; }
+/* ترجمة البيانات للإنجليزي: الجنسية والمهنة من القاموس (value_i18n.py + «🌐 ترجمة الجنسيات والمهن»)، ومركز التكلفة باسمه الإنجليزي */
+let VT_CACHE = null;
+function vtMap(kind) {
+  const src = (STATE && STATE.valueTranslations) || {};
+  if (!VT_CACHE || VT_CACHE.src !== src) VT_CACHE = { src, m: {} };
+  if (!VT_CACHE.m[kind]) { const m = {}; Object.entries(src[kind] || {}).forEach(([ar, en]) => { if (en) m[norm(ar)] = en; }); VT_CACHE.m[kind] = m; }
+  return VT_CACHE.m[kind];
+}
+/** الترجمة الإنجليزية للقيمة أو null لو مالهاش */
+function vtFind(kind, v) { return v ? vtMap(kind)[norm(v)] || (window.I18N || {})[String(v).trim()] || null : null; }
+function vt(kind, v) { return LANG === 'en' && v ? vtFind(kind, v) || v : v; }
+function natLabel(v) { return vt('nationality', v); }
+function profLabel(v) { return vt('profession', v); }
+function ccLabel(name) {
+  if (!name || LANG !== 'en') return name;
+  const c = (STATE.costCenters || []).find(x => x.name === name);
+  return (c && c.nameEn) || name;
+}
+/** تنفيذ fn بلغة تانية (تقرير إنجليزي والبرنامج شغال عربي أو العكس) — كل الترجمة (t، الأسماء، الجنسيات…) بتمشي عليها */
+function withLang(lang, fn) {
+  const old = LANG;
+  LANG = lang === 'en' ? 'en' : 'ar';
+  try { return fn(); } finally { LANG = old; }
+}
 function primaryAff(e) { return (e.affiliations && e.affiliations[0]) || {}; }
 function empCompanyId(e) { return primaryAff(e).companyId || null; }
 function isReadOnly() { return !!(STATE && STATE.me && STATE.me.readOnly); }
@@ -431,6 +462,81 @@ function printHtml(title, html) {
   w.document.close();
 }
 
+/* ---------- قائمة اختيار متعدد (الفلاتر) ----------
+   msField(key, title, allLabel, options, selected) ← زرار («الجنسية: مصر +2») بيفتح قائمة فيها بحث وعلامات.
+   msBind(root, onChange) بيربط الأزرار: onChange(key, [القيم]) مع كل علامة، والقائمة بتفضل مفتوحة حتى لو الشاشة
+   اترسمت تاني. options = [{ v, l, n? }] (n = العدد جنب الاختيار). */
+const MS = { reg: {}, open: null, q: '', scroll: 0 };
+function msField(key, title, allLabel, options, selected) {
+  MS.reg[key] = Object.assign(MS.reg[key] || {}, { title, allLabel, options, selected: asList(selected) });
+  return `<div class="ms ${MS.reg[key].selected.length ? 'on' : ''}" data-ms="${esc(key)}"><button type="button" class="ms-btn">${msText(key)}</button></div>`;
+}
+function msText(key) {
+  const r = MS.reg[key], sel = r.selected;
+  if (!sel.length) return `<span class="ms-val">${esc(t(r.allLabel))}</span><i class="ms-caret">▾</i>`;
+  const first = (r.options.find(o => o.v === sel[0]) || { l: sel[0] }).l;
+  return `<span class="ms-val"><small>${esc(t(r.title))}:</small> ${esc(first)}</span>${sel.length > 1 ? `<b class="ms-more">+${sel.length - 1}</b>` : ''}<i class="ms-caret">▾</i>`;
+}
+function msRefresh(key) {
+  $$(`[data-ms="${CSS.escape(key)}"]`).forEach(el => { el.classList.toggle('on', MS.reg[key].selected.length > 0); $('.ms-btn', el).innerHTML = msText(key); });
+}
+function msClose() {
+  const pop = $('.ms-pop');
+  if (pop) pop.remove();
+  MS.open = null; MS.q = ''; MS.scroll = 0;
+}
+function msOpen(el) {
+  const key = el.dataset.ms, r = MS.reg[key];
+  const old = $('.ms-pop');
+  if (old) { MS.scroll = ($('.ms-list', old) || {}).scrollTop || 0; old.remove(); }
+  MS.open = key;
+  const pop = document.createElement('div');
+  pop.className = 'ms-pop'; pop.dir = document.documentElement.dir;
+  pop.innerHTML = `${r.options.length > 7 ? `<input type="search" class="ms-q" placeholder="${esc(t('بحث…'))}" value="${esc(MS.q)}">` : ''}
+    <div class="ms-acts"><button type="button" data-ms-all>✓ ${esc(t('الكل'))}</button><button type="button" data-ms-none>✕ ${esc(t('مسح'))}</button><span class="ms-n"></span></div>
+    <div class="ms-list">${r.options.map(o => `<label data-l="${esc(norm(o.l + ' ' + o.v))}"><input type="checkbox" value="${esc(o.v)}" ${r.selected.includes(o.v) ? 'checked' : ''}><span>${esc(o.l)}</span>${o.n != null ? `<b class="num">${o.n}</b>` : ''}</label>`).join('') || `<div class="empty">${esc(t('لا توجد نتائج'))}</div>`}</div>`;
+  document.body.appendChild(pop);
+  const list = $('.ms-list', pop), q = $('.ms-q', pop);
+  const filter = () => { const v = norm(MS.q); $$('label', list).forEach(l => { l.hidden = !!v && !l.dataset.l.includes(v); }); };
+  const count = () => { $('.ms-n', pop).textContent = r.selected.length ? `${r.selected.length} ${t('محدد')}` : ''; };
+  const apply = sel => { r.selected = sel; msRefresh(key); count(); if (r.on) r.on(key, sel.slice()); };
+  list.addEventListener('change', () => apply($$('input', list).filter(x => x.checked).map(x => x.value)));
+  $('[data-ms-all]', pop).onclick = () => { $$('label:not([hidden]) input', list).forEach(x => { x.checked = true; }); apply($$('input', list).filter(x => x.checked).map(x => x.value)); };
+  $('[data-ms-none]', pop).onclick = () => { $$('input', list).forEach(x => { x.checked = false; }); apply([]); };
+  if (q) q.addEventListener('input', () => { MS.q = q.value; filter(); });
+  filter(); count();
+  msPlace(pop, el);
+  list.scrollTop = MS.scroll;
+  if (q && document.activeElement !== q && MS.q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
+}
+/** المكان: تحت الزرار (أو فوقه لو مفيش مساحة)، ومحاذي لبدايته حسب اتجاه الصفحة */
+function msPlace(pop, el) {
+  const b = el.getBoundingClientRect(), w = Math.max(b.width, 270);
+  pop.style.width = w + 'px';
+  const h = pop.offsetHeight, below = innerHeight - b.bottom - 8;
+  pop.style.top = (below >= h || b.top < h ? b.bottom + 4 : b.top - h - 4) + 'px';
+  const x = document.documentElement.dir === 'rtl' ? b.right - w : b.left;
+  pop.style.left = Math.max(6, Math.min(x, innerWidth - w - 6)) + 'px';
+}
+function msBind(root, onChange) {
+  $$('[data-ms]', root).forEach(el => {
+    const key = el.dataset.ms;
+    MS.reg[key].on = onChange;
+    $('.ms-btn', el).onclick = ev => { ev.stopPropagation(); if (MS.open === key && $('.ms-pop')) msClose(); else { MS.q = ''; MS.scroll = 0; msOpen(el); } };
+    if (MS.open === key) msOpen(el);                 // الشاشة اترسمت تاني والقائمة كانت مفتوحة
+  });
+}
+document.addEventListener('mousedown', ev => { if (MS.open && !ev.target.closest('.ms-pop, [data-ms]')) msClose(); });
+document.addEventListener('keydown', ev => { if (ev.key === 'Escape' && MS.open) { ev.stopPropagation(); msClose(); } }, true);
+// الصفحة اتحركت أو اتغيّر مقاسها (زي كيبورد الموبايل) ← القائمة تمشي مع زرارها
+function msFollow(ev) {
+  if (!MS.open || (ev.target instanceof Element && ev.target.closest('.ms-pop'))) return;
+  const pop = $('.ms-pop'), el = $(`[data-ms="${CSS.escape(MS.open)}"]`);
+  if (pop && el) msPlace(pop, el); else msClose();
+}
+addEventListener('resize', msFollow);
+addEventListener('scroll', msFollow, true);
+
 /* ---------- التقارير المطبوعة (شكل ERP) ----------
    رأس: شعار الشركة واسمها + عنوان التقرير + بيانات الطباعة، وبعدين المعايير والملخص والجدول وخانات التوقيع.
    رأس الجدول بيتكرر في كل صفحة، وترقيم «صفحة X من Y» في هامش الصفحة (@page). */
@@ -485,7 +591,7 @@ function openReportWindow({ title, subtitle = '', company = null, meta = [], cri
   const w = window.open('', '_blank');
   if (!w) { toast('المتصفح منع نافذة الطباعة', 'err'); return; }
   const en = LANG === 'en', dir = en ? 'ltr' : 'rtl';
-  const group = ($('.brand small') || {}).textContent || 'Lunx';
+  const group = t(($('.brand small') || {}).textContent || 'Lunx');
   const brand = company
     ? `${company.logoUrl ? `<img src="${esc(location.origin + company.logoUrl)}" alt="">` : `<div class="mark">${esc((company.nameAr || '?').trim()[0])}</div>`}
        <div><div class="ar">${esc(en ? (company.nameEn || company.nameAr) : company.nameAr)}</div>${!en && company.nameEn ? `<div class="en">${esc(company.nameEn)}</div>` : ''}</div>`
@@ -505,7 +611,7 @@ function openReportWindow({ title, subtitle = '', company = null, meta = [], cri
     <div class="sheet ${landscape ? 'land' : 'port'}">
       <header class="rpt-head"><div class="rpt-brand">${brand}</div>
         <div class="rpt-title"><h1>${esc(title)}</h1>${subtitle ? `<div class="sub">${esc(subtitle)}</div>` : ''}</div>
-        <table class="rpt-meta">${[[t('تاريخ الطباعة'), printed], [t('أعده'), (STATE.me && (STATE.me.displayName || STATE.me.username)) || ''], ...meta]
+        <table class="rpt-meta">${[[t('تاريخ الطباعة'), printed], [t('أعده'), t((STATE.me && (STATE.me.displayName || STATE.me.username)) || '')], ...meta]
           .map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('')}</table></header>
       ${criteria ? `<div class="rpt-criteria"><b>${esc(t('معايير التقرير'))}:</b> ${criteria}</div>` : ''}
       ${summary.length ? `<div class="rpt-summary">${summary.map(([v, l]) => `<div><b>${esc(v)}</b><span>${esc(l)}</span></div>`).join('')}</div>` : ''}
@@ -595,7 +701,7 @@ async function restoreBackup() {
    UI STATE — حفظ الفلاتر والصفحة
    ===================================================================== */
 let UI = Object.assign({
-  emp: { q: '', company: '', link: '', project: '', status: '', stage: '', nationality: '', costCenter: '', tier: '', tierField: 'any', driver: false, sort: 'name', dir: 1, page: 1, perPage: 50 },
+  emp: { q: '', company: [], link: '', project: [], status: [], stage: [], nationality: [], costCenter: [], profession: [], tier: '', tierField: 'any', driver: false, sort: 'name', dir: 1, page: 1, perPage: 50 },
   cand: { q: '', source: '', stage: '', company: '' },
   log: { tab: 'history', company: '', category: '', q: '' },
   vehicles: { q: '' },
@@ -697,8 +803,8 @@ function openAlertTarget(it) {
 function renderAlertCenterPanel(filter = 'all') {
   const items = trackedAlertItems();
   const counts = { all: items.length };
-  for (const k of ['expired', 'd30', 'd60', 'd90']) counts[k] = items.filter(i => i.tier === k).length;
-  const shown = filter === 'all' ? items : items.filter(i => i.tier === filter);
+  for (const k of ['expired', 'd30', 'd60', 'd90']) counts[k] = items.filter(i => tierIn(i.date, k)).length;
+  const shown = filter === 'all' ? items : items.filter(i => tierIn(i.date, filter));
   const root = $('#side-root');
   root.innerHTML = `<div class="side-panel" id="alert-panel">
     <div class="modal-head"><h2>🔔 مركز التنبيهات</h2><button class="btn ghost" id="close-side">✕</button></div>

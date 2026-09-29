@@ -17,6 +17,8 @@ const CUSTODY_TYPES = {
   first_residency:   { label: 'إصدار إقامة أول مرة',           kind: 'candidate', flow: 'outside',  source: 'outside' },
   kw_permit_new:     { label: 'إصدار إذن عمل — عمالة وطنية',   kind: 'candidate', flow: 'kuwaiti',  source: 'kuwaiti', kuwaiti: true },
   kw_permit_renewal: { label: 'تجديد إذن عمل — عمالة وطنية',   kind: 'employee',  flow: 'gov',      kuwaiti: true },
+  // بعد تجديد الجواز: رسوم البطاقة المدنية (بند من غير مرحلة ← «تم» يدوي). doc = التاريخ اللي بيظهر جنب الموظف
+  passport_transfer: { label: 'نقل بيانات الجواز',             kind: 'employee',  flow: 'gov',      kuwaiti: false, doc: 'passportExp' },
 };
 const INVOICE_STATUS = { pending: ['بانتظار الحسابات', 'orange'], approved: ['اعتمدتها الحسابات', 'green'] };
 function invoiceStatusChip(inv) {
@@ -253,8 +255,8 @@ function openCustodyRequestModal(id = null) {
   const eligible = () => {
     const ty = CUSTODY_TYPES[S.tx];
     if (ty.kind === 'employee') return STATE.employees.filter(e => (e.employmentStatus || 'active') !== 'terminated' && isKuwaitiStaff(e) === ty.kuwaiti)
-      .map(e => ({ id: e.id, name: e.name, sub: `${e.id} · ${companyName(empCompanyId(e)) || '—'}${e.costCenter ? ' · ' + e.costCenter : ''}`, exp: ty.kuwaiti ? null : e.residencyExp,
-        tag: e.residencyExp && !ty.kuwaiti ? `${t('الإقامة')}: ${datePill(e.residencyExp)}` : esc(t(e.govStage ? (GOV_STAGES.find(g => g.id === e.govStage) || {}).label || '' : '')) }));
+      .map(e => { const doc = ty.doc || 'residencyExp'; return { id: e.id, name: e.name, sub: `${e.id} · ${companyName(empCompanyId(e)) || '—'}${e.costCenter ? ' · ' + e.costCenter : ''}`, exp: ty.kuwaiti ? null : e[doc],
+        tag: e[doc] && !ty.kuwaiti ? `${t(doc === 'passportExp' ? 'الجواز' : 'الإقامة')}: ${datePill(e[doc])}` : esc(t(e.govStage ? (GOV_STAGES.find(g => g.id === e.govStage) || {}).label || '' : '')) }; });
     return STATE.candidates.filter(c => (c.source || 'outside') === ty.source && !['rejected', 'all_completed'].includes(c.stage))
       .map(c => ({ id: c.id, name: c.name, sub: `${c.civilId || c.passportNo || '—'} · ${companyName(c.targetCompanyId) || '—'}`,
         tag: esc(t((recruitStageInfo(c.source || 'outside', c.stage) || {}).label || '')) }));
@@ -275,7 +277,7 @@ function openCustodyRequestModal(id = null) {
         <b>${esc(p.name)}</b><span class="small muted">${esc(p.sub)}</span><span class="spacer"></span><span class="small">${p.tag || ''}</span></label>`).join('')
       + (list.length > 300 ? `<div class="small muted" style="padding:6px 10px">${t('فيه نتائج أكتر — ضيّق البحث')}</div>` : '')
       || `<div class="empty">${t(kind() === 'employee' ? 'مفيش موظفين' : 'مفيش مترشّحين في المراحل دي')}</div>`;
-    if (CUSTODY_TYPES[S.tx].kuwaiti === false) $('#cu-pick', E).insertAdjacentHTML('beforeend', `<div class="small muted" style="padding:6px 10px">🇰🇼 ${t('العمالة الوطنية ليها «تجديد إذن عمل — عمالة وطنية»')}</div>`);
+    if (CUSTODY_TYPES[S.tx].kuwaiti === false && !CUSTODY_TYPES[S.tx].doc) $('#cu-pick', E).insertAdjacentHTML('beforeend', `<div class="small muted" style="padding:6px 10px">🇰🇼 ${t('العمالة الوطنية ليها «تجديد إذن عمل — عمالة وطنية»')}</div>`);
     $('#cu-sel-n', E).textContent = `${t('المحددين')}: ${S.persons.size}`;
     $$('[data-pick]', E).forEach(cb => cb.onchange = () => {
       if (cb.checked) S.persons.set(cb.dataset.pick, { items: defaults() }); else S.persons.delete(cb.dataset.pick);

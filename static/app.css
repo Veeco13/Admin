@@ -290,6 +290,31 @@ table.cu-lines tr.cu-closed td { background: var(--green-soft); }
 .cu-invoice { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); }
 .cu-badge { display: inline-block; min-width: 18px; padding: 0 5px; margin-inline-start: 4px; border-radius: 9px; background: var(--orange); color: #fff; font-size: 11px; line-height: 18px; text-align: center; }
 td.nowrap { white-space: nowrap; }
+/* قائمة الاختيار المتعدد في الفلاتر (msField في core.js) */
+.ms { display: inline-block; max-width: 100%; }
+.ms-btn { display: inline-flex; align-items: center; gap: 6px; max-width: 260px; border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  border-radius: 8px; padding: 7px 10px; font: inherit; cursor: pointer; text-align: start; }
+.form .ms, .form .ms-btn { width: 100%; max-width: none; }
+.ms-val { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ms-val small { color: var(--muted); }
+.ms-caret { font-style: normal; color: var(--muted); font-size: 10px; }
+.ms.on .ms-btn { border-color: var(--primary); background: var(--primary-soft); color: var(--primary); }
+.ms-more { background: var(--primary); color: #fff; border-radius: 9px; padding: 0 6px; font-size: 11px; line-height: 17px; }
+.ms-pop { position: fixed; z-index: 150; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: var(--shadow); padding: 8px; display: flex; flex-direction: column; gap: 6px; max-height: min(380px, 70vh); }
+.ms-pop .ms-q { border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 8px; padding: 6px 9px; font: inherit; }
+.ms-acts { display: flex; gap: 6px; align-items: center; font-size: 12px; }
+.ms-acts button { font: inherit; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); border-radius: 6px; padding: 2px 8px; cursor: pointer; }
+.ms-acts .ms-n { margin-inline-start: auto; color: var(--primary); font-weight: 600; }
+.ms-list { overflow: auto; display: flex; flex-direction: column; }
+.ms-list label { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+.ms-list label:hover { background: var(--surface-2); }
+.ms-list label[hidden] { display: none; }
+.ms-list label span { flex: 1; }
+.ms-list label b { color: var(--muted); font-weight: 500; font-size: 12px; }
+.rb-lang-note { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; }
+.vt-tbl input { width: 100%; min-width: 220px; border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 6px; padding: 5px 8px; font: inherit; }
+.vt-tbl input.vt-miss { border-color: var(--orange); background: var(--orange-soft); }
 .imp-miss { max-height: 180px; overflow: auto; margin: 6px 0; padding-inline-start: 20px; }
 .imp-list { max-height: 340px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; padding: 6px 10px; margin: 6px 0; }
 .imp-emp { padding: 6px 0; border-bottom: 1px dashed var(--border); }

@@ -34,6 +34,9 @@ TX_TYPES = {
                       "kind": "candidate", "flow": "kuwaiti", "kuwaiti": True},
     "kw_permit_renewal": {"label": "تجديد إذن عمل — عمالة وطنية", "en": "Work Permit Renewal (National Labor)",
                           "kind": "employee", "flow": "gov", "kuwaiti": True},
+    # بعد تجديد الجواز: نقل الإقامة والبيانات للجواز الجديد (رسوم البطاقة المدنية — بيتعلّم «تم» يدوي)
+    "passport_transfer": {"label": "نقل بيانات الجواز", "en": "Passport Data Transfer", "kind": "employee", "flow": "gov",
+                          "kuwaiti": False},
 }
 DEFAULT_ADMIN_FEE = 20            # الدعم الإداري لكل موظف في الفاتورة (الافتراضي — من «إعدادات الفواتير»)
 # ترتيب المراحل (نفس GOV_STAGES و RECRUIT_STAGES_* في static/js/core.js — لو اتغيّروا هناك يتغيّروا هنا).
@@ -167,6 +170,8 @@ def build_lines(s, tx, persons, ctx):
         if kuwaiti is True and not kw:
             return None, f"{name}: النوع ده للعمالة الوطنية بس (الكويتيين ومعاملة كويتية)"
         if kuwaiti is False and kw:
+            if tx == "passport_transfer":
+                return None, f"{name}: «{TX_TYPES[tx]['label']}» مش للعمالة الوطنية"
             return None, f"{name}: العمالة الوطنية ليها «{TX_TYPES['kw_permit_renewal']['label']}»"
         for fid, value in (p.get("items") or {}).items():
             f = fees.get(fid)

@@ -17,7 +17,8 @@ function collectAllTrackedDates() {
 }
 
 function goEmployees(filters) {
-  UI.emp = Object.assign(UI.emp, { q: '', company: '', project: '', status: '', stage: '', nationality: '', costCenter: '', tier: '', tierField: 'any', driver: false, page: 1 }, filters);
+  UI.emp = Object.assign(UI.emp, { q: '', company: [], link: '', project: [], status: [], stage: [], nationality: [], costCenter: [], profession: [], tier: '', tierField: 'any', driver: false, page: 1 },
+    Object.fromEntries(Object.entries(filters).map(([k, v]) => [k, EMP_MULTI.includes(k) ? asList(v) : v])));
   saveUiStateToLocalStorage();
   setView('employees');
 }
@@ -101,13 +102,13 @@ function renderDashboard() {
   const tierKeys = Object.keys(TIERS);
   const stackRows = docs.map(d => `<div class="db-stack-row clickable" data-doc="${d.key}" tabindex="0" role="button">
       <span class="db-bar-l">${esc(t(d.label))}</span>
-      <span class="db-stack">${tierKeys.map(k => d.tiers[k] ? `<i style="flex:${d.tiers[k]};background:${DB_TIER_COLORS[k]}" data-tip="${esc(`${t(d.label)} · ${t(TIERS[k].label)}: ${d.tiers[k]} (${dbPct(d.tiers[k], d.total)})`)}"></i>` : '').join('')}</span>
+      <span class="db-stack">${tierKeys.map(k => d.tiers[k] ? `<i style="flex:${d.tiers[k]};background:${DB_TIER_COLORS[k]}" data-tip="${esc(`${t(d.label)} · ${t(TIERS[k].band || TIERS[k].label)}: ${d.tiers[k]} (${dbPct(d.tiers[k], d.total)})`)}"></i>` : '').join('')}</span>
       <b class="db-stack-n ${d.tiers.expired + d.tiers.d30 ? 'hot' : ''}">${d.tiers.expired + d.tiers.d30}</b></div>`).join('');
-  const docTable = `<table class="data db-table"><thead><tr><th>${t('المستند')}</th>${tierKeys.map(k => `<th>${esc(t(TIERS[k].label))}</th>`).join('')}<th>${t('الإجمالي')}</th></tr></thead>
+  const docTable = `<table class="data db-table"><thead><tr><th>${t('المستند')}</th>${tierKeys.map(k => `<th>${esc(t(TIERS[k].band || TIERS[k].label))}</th>`).join('')}<th>${t('الإجمالي')}</th></tr></thead>
     <tbody>${docs.map(d => `<tr><td>${esc(t(d.label))}</td>${tierKeys.map(k => `<td class="num">${d.tiers[k]}</td>`).join('')}<td class="num"><b>${d.total}</b></td></tr>`).join('')}</tbody></table>`;
   const docCard = dbCard('db-span-7', 'حالة المستندات', `
       <div id="db-doc-chart" class="db-fill"><div class="db-stack-head"><span>${t('المستند')}</span><span>${t('التوزيع')}</span><span>${t('محتاج إجراء')}</span></div>${stackRows}
-        <span class="db-grow"></span><div class="db-legend">${tierKeys.map(k => `<span><i class="db-dot" style="background:${DB_TIER_COLORS[k]}"></i>${esc(t(TIERS[k].label))}</span>`).join('')}</div></div>
+        <span class="db-grow"></span><div class="db-legend">${tierKeys.map(k => `<span><i class="db-dot" style="background:${DB_TIER_COLORS[k]}"></i>${esc(t(TIERS[k].band || TIERS[k].label))}</span>`).join('')}</div></div>
       <div id="db-doc-table" hidden>${docTable}</div>`,
     { sub: `${active.length} ${t('موظف في الخدمة')}`, tools: `<button class="btn sm ghost" id="db-doc-toggle">▦ ${t('جدول')}</button>` });
   const upcoming = due.slice(0, 6);
