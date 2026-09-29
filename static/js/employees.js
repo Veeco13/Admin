@@ -90,6 +90,7 @@ function sortEmployees(list) {
 function renderEmployees() {
   const f = UI.emp;
   EMP_MULTI.forEach(k => { f[k] = asList(f[k]); });     // فلاتر قديمة محفوظة كنص ← قائمة
+  f.tier = tierFilterValue(f.tier);                      // مستويات اتشالت (منتهي / سارية / بدون تاريخ)
   const all = filteredEmployees();
   const list = sortEmployees(all);
   const pages = Math.max(1, Math.ceil(list.length / f.perPage));
@@ -120,7 +121,7 @@ function renderEmployees() {
       <input type="search" id="f-q" placeholder="بحث بالاسم، الرقم المدني، الجواز، رقم الملف…" value="${esc(f.q)}">
       ${EMP_MULTI.map(k => empMsField('emp.', k, f[k], f.company)).join('')}
       <select id="f-tierfield">${opt('any', t('أي مستند'), f.tierField === 'any')}${EMP_DATE_FIELDS.map(x => opt(x.key, t(x.label), x.key === f.tierField)).join('')}</select>
-      <select id="f-tier">${opt('', t('— كل المستويات —'), !f.tier)}${opt('soon', t('منتهي أو خلال 30 يوم'), f.tier === 'soon')}${Object.entries(TIERS).map(([k, v]) => opt(k, t(v.label), k === f.tier)).join('')}</select>
+      <select id="f-tier">${opt('', t('— كل المستويات —'), !f.tier)}${TIER_FILTERS.map(k => opt(k, t(TIERS[k].label), k === f.tier)).join('')}</select>
       <label class="chip clickable ${f.driver ? 'on' : ''}"><input type="checkbox" id="f-driver" ${f.driver ? 'checked' : ''} hidden>🚚 ${t('السائقين فقط')}</label>
       <button class="btn sm ghost" id="f-clear">✕ ${t('مسح الفلاتر')}</button>
     </div>
@@ -144,8 +145,8 @@ function renderEmployees() {
           <td data-nosel><input type="checkbox" data-sel="${esc(e.id)}" ${EMP_SELECTED.has(e.id) ? 'checked' : ''}></td>
           <td><b>${esc(empName(e))}</b>${e.isDriver ? ' 🚚' : ''}${e.govStageNote ? ` <span title="${esc(e.govStageNote)}">⚠️</span>` : ''}${LANG !== 'en' && e.nameEn ? `<div class="small muted" dir="ltr" style="text-align:start">${esc(e.nameEn)}</div>` : ''}</td>
           <td class="num">${esc(e.id)}</td>
-          <td>${esc(natLabel(e.nationality) || '—')}</td>
-          <td>${esc(profLabel(e.profession) || '—')}</td>
+          <td>${esc(personNat(e) || '—')}</td>
+          <td>${esc(personProf(e) || '—')}</td>
           <td><div style="max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(companyName(a.companyId))}">${esc(companyName(a.companyId) || '—')}</div><div class="small muted">${esc(projectName(a.projectId))}</div>
             ${link === 'cc' ? `<div class="small" style="color:var(--orange)" title="${esc(t('مركز التكلفة') + ': ' + (e.costCenter || ''))}">🏭 ${esc(companyName(ccCo) || e.costCenter || '')}</div>` : ''}
             ${f.company.length ? empLinkChip(link) : ''}</td>
@@ -227,10 +228,10 @@ const EMP_REPORT_COLS = [
   { k: 'nameEn', g: 'basic', l: 'الاسم (إنجليزي)', v: e => e.nameEn, ltr: true },
   { k: 'id', g: 'basic', l: 'الرقم المدني', v: e => e.id, num: true },
   { k: 'unifiedNumber', g: 'basic', l: 'الرقم الموحد', v: e => e.unifiedNumber, num: true },
-  { k: 'nationality', g: 'basic', l: 'الجنسية', v: e => natLabel(e.nationality) },
+  { k: 'nationality', g: 'basic', l: 'الجنسية', v: e => personNat(e) },
   { k: 'gender', g: 'basic', l: 'الجنس', v: e => t(GENDER_LABELS[e.gender] || '') },
   { k: 'dateOfBirth', g: 'basic', l: 'تاريخ الميلاد', date: true },
-  { k: 'profession', g: 'basic', l: 'المهنة', v: e => profLabel(e.profession) },
+  { k: 'profession', g: 'basic', l: 'المهنة', v: e => personProf(e) },
   { k: 'maritalStatus', g: 'basic', l: 'الحالة الاجتماعية', v: e => maritalLabel(e) },
   { k: 'qualification', g: 'basic', l: 'المؤهل الدراسي', v: e => e.qualification },
   { k: 'childrenCount', g: 'basic', l: 'عدد الأبناء', v: e => (e.children || []).length || '', num: true },
@@ -240,6 +241,7 @@ const EMP_REPORT_COLS = [
   { k: 'status', g: 'work', l: 'الحالة الوظيفية', v: e => { const s = EMP_STATUS_LABELS[e.employmentStatus || 'active'] || {}; return LANG === 'en' ? s.en : s.ar; } },
   { k: 'dateOfHire', g: 'work', l: 'تاريخ التعيين', date: true, plain: true },
   { k: 'serviceEndDate', g: 'work', l: 'تاريخ انتهاء الخدمة', date: true, plain: true },
+  { k: 'serviceEndReason', g: 'work', l: 'سبب انتهاء الخدمة', v: e => t(e.serviceEndReason) },
   { k: 'contractType', g: 'work', l: 'نوع العقد', v: e => t(e.contractType) },
   { k: 'fileNo', g: 'work', l: 'رقم الملف', v: e => e.fileNo, num: true },
   { k: 'actualWorkplace', g: 'work', l: 'مكان العمل الفعلي', v: e => e.actualWorkplace },
@@ -298,7 +300,7 @@ function empGroupKey(by, e) {
     return [p || '', p ? projectName(p) + (pr && pr.fileNumber ? ` — ${t('رقم الملف')} ${pr.fileNumber}` : '') : t('بدون مشروع')];
   }
   if (by === 'costCenter') return [e.costCenter || '', ccLabel(e.costCenter) || t('بدون مركز تكلفة')];
-  if (by === 'nationality') return [e.nationality || '', natLabel(e.nationality) || '—'];
+  if (by === 'nationality') return [e.nationality || '', personNat(e) || '—'];
   if (by === 'status') { const s = e.employmentStatus || 'active'; return [s, EMP_REPORT_COLS.find(c => c.k === 'status').v(e)]; }
   if (by === 'govStage') return [e.govStage || '', e.govStage ? t((govStageInfo(e.govStage) || {}).label) : t('بدون معاملة')];
   return ['', ''];
@@ -307,7 +309,7 @@ function empGroupKey(by, e) {
 /** نافذة إعداد التقرير. selected = الموظفين المحددين (لو فيه) */
 function openEmployeeReportModal(selected = []) {
   const R = UI.report = Object.assign({ preset: 'general', cols: EMP_REPORT_PRESETS[0].cols, groupBy: '', sort: 'name', orientation: 'auto', summary: true, sign: false, colors: true, lang: LANG }, UI.report || {});
-  const F = { ...UI.emp };                               // الفلاتر: نسخة من فلاتر الشاشة (مابتغيّرهاش)
+  const F = { ...UI.emp, tier: tierFilterValue(UI.emp.tier) };   // الفلاتر: نسخة من فلاتر الشاشة (مابتغيّرهاش)
   const RF = Object.fromEntries(['company', 'project', 'status', 'costCenter', 'stage', 'profession'].map(k => [k, asList(F[k])]));
   let scope = selected.length ? 'selected' : 'filters';
   const cols = empReportCols();
@@ -319,8 +321,8 @@ function openEmployeeReportModal(selected = []) {
   const NAT = asList(F.nationality).length ? { mode: 'in', list: asList(F.nationality) } : { mode: '', list: [] };
   const today = todayISO(), nm = new Date();
   nm.setDate(1); nm.setMonth(nm.getMonth() + 1);
-  const RANGES = [['expired', 'منتهية', '', addDays(today, -1)], ['30', 'خلال 30 يوم', today, addDays(today, 30)],
-    ['60', 'خلال 60 يوم', today, addDays(today, 60)], ['90', 'خلال 90 يوم', today, addDays(today, 90)],
+  const RANGES = [['30', 'خلال 30 يوم', '', addDays(today, 30)],             // «خلال X يوم» = المنتهي + لحد X يوم
+    ['60', 'خلال 60 يوم', '', addDays(today, 60)], ['90', 'خلال 90 يوم', '', addDays(today, 90)],
     ['next', 'الشهر القادم', toISO(nm), toISO(new Date(nm.getFullYear(), nm.getMonth() + 1, 0))]];
   const m = openModal({
     title: '📊 ' + t('تقرير الموظفين'), size: 'wide',
@@ -334,7 +336,7 @@ function openEmployeeReportModal(selected = []) {
         <div class="form" id="rb-filters">
           ${['company', 'project', 'status', 'costCenter', 'stage', 'profession'].map(k => `<label>${t(EMP_MS_LABELS[k][0])}${empMsField('rb.', k, RF[k])}</label>`).join('')}
           <label>${t('المستند')}<select name="tierField">${opt('any', t('أي مستند'), F.tierField === 'any')}${EMP_DATE_FIELDS.map(x => opt(x.key, t(x.label), x.key === F.tierField)).join('')}</select></label>
-          <label>${t('المستوى')}<select name="tier">${opt('', t('— كل المستويات —'), !F.tier)}${opt('soon', t('منتهي أو خلال 30 يوم'), F.tier === 'soon')}${Object.entries(TIERS).map(([k, v]) => opt(k, t(v.label), k === F.tier)).join('')}</select></label>
+          <label>${t('المستوى')}<select name="tier">${opt('', t('— كل المستويات —'), !F.tier)}${TIER_FILTERS.map(k => opt(k, t(TIERS[k].label), k === F.tier)).join('')}</select></label>
           <label>${t('بحث')}<input name="q" value="${esc(F.q || '')}" placeholder="${esc(t('الاسم، الرقم المدني، الجواز…'))}"></label>
           <label class="check"><input type="checkbox" name="driver" ${F.driver ? 'checked' : ''}> 🚚 ${t('السائقين فقط')}</label>
           <div class="full rb-nat">
@@ -384,7 +386,7 @@ function openEmployeeReportModal(selected = []) {
     });
     $('#rb-nat-hint', E).textContent = NAT.mode && !NAT.list.length ? t('اختار الجنسيات من القائمة') : NAT.mode ? `(${NAT.list.length})` : '';
     const fv = formValues($('#rb-filters', E));
-    $$('[data-range]', E).forEach(c => { const r = RANGES.find(x => x[0] === c.dataset.range); c.classList.toggle('on', !!r && fv.dFrom === r[2] && fv.dTo === r[3]); });
+    $$('[data-range]', E).forEach(c => { const r = RANGES.find(x => x[0] === c.dataset.range); c.classList.toggle('on', !!r && (fv.dFrom || '') === r[2] && (fv.dTo || '') === r[3]); });
     // تقرير إنجليزي: الجنسيات والمهن اللي مالهاش ترجمة هتطلع بالعربي
     const note = $('#rb-lang-note', E), en = $('#rb-lang', E).value === 'en';
     const miss = en ? empMissingTranslations(rows()) : [];
@@ -492,7 +494,7 @@ function printEmployeeReport(list, cols, { title, filters, selectedCount }) {
     }
     list('costCenter', 'مركز التكلفة', ccLabel);
     list('stage', 'المعاملة', x => x === '__none' ? t('بدون معاملة') : x === '__note' ? t('عليها ملاحظة تعطّل') : t((govStageInfo(x) || {}).label || ''));
-    if (f.tier) crit.push(`${esc(f.tierField === 'any' ? t('أي مستند') : t((EMP_DATE_FIELDS.find(x => x.key === f.tierField) || {}).label || ''))}: ${esc(f.tier === 'soon' ? t('منتهي أو خلال 30 يوم') : t(TIERS[f.tier].label))}`);
+    if (f.tier) crit.push(`${esc(f.tierField === 'any' ? t('أي مستند') : t((EMP_DATE_FIELDS.find(x => x.key === f.tierField) || {}).label || ''))}: ${esc(t(TIERS[f.tier].label))} (${esc(t('والمنتهي'))})`);
     if (f.driver) crit.push(t('السائقين فقط'));
     if (f.q) crit.push(`${t('بحث')}: «${esc(f.q)}»`);
   }
@@ -535,8 +537,8 @@ function printEmployeeReport(list, cols, { title, filters, selectedCount }) {
 /* ---------- ترجمة الجنسيات والمهن (للتقارير والشاشات بالإنجليزي) ---------- */
 /** الجنسيات والمهن في الموظفين دول اللي مالهاش ترجمة إنجليزية */
 function empMissingTranslations(list) {
-  return [...uniq(list.map(e => e.nationality)).filter(v => !vtFind('nationality', v)).map(v => ['nationality', v]),
-    ...uniq(list.map(e => e.profession)).filter(v => !vtFind('profession', v)).map(v => ['profession', v])];
+  return [...uniq(list.filter(e => !e.nationalityEn).map(e => e.nationality)).filter(v => !vtFind('nationality', v)).map(v => ['nationality', v]),
+    ...uniq(list.filter(e => !e.professionEn).map(e => e.profession)).filter(v => !vtFind('profession', v)).map(v => ['profession', v])];
 }
 /** القاموس: كل الجنسيات والمهن اللي في الموظفين والمترشّحين، والترجمة قدام كل واحدة (الجاهزة أو المعدّلة) */
 function openValueTranslationsModal(after) {
@@ -678,6 +680,7 @@ async function openProfileCard(id, tab = 'info') {
         <div style="flex:1"><h2 style="margin:0">${esc(e.name)} ${e.isDriver ? '🚚' : ''}</h2><div class="muted" dir="ltr" style="text-align:start">${esc(e.nameEn || '')}</div>
         <div class="row small">${statusPill(e.employmentStatus)} ${govStagePill(e.govStage)} <span class="muted">${t('آخر تعديل')}: ${fmtDateTime(e.lastUpdated)} ${esc(e.lastUpdatedBy || '')}</span></div></div>
         <div style="width:150px"><div class="small muted">${t('اكتمال المستندات')} ${comp.pct}%</div><div class="progress"><i style="width:${comp.pct}%"></i></div></div></div>
+      ${empEndNotice(e)}
       ${e.govStageNote ? `<div class="notice warn" style="margin-top:10px">⚠️ ${esc(e.govStageNote)}</div>` : ''}
       ${e.transferNote ? `<div class="notice" style="margin-top:10px">ℹ️ ${esc(e.transferNote)}</div>` : ''}
       <div class="tabs" style="margin-top:12px">
@@ -690,7 +693,7 @@ async function openProfileCard(id, tab = 'info') {
       <div data-pane="info" ${tab !== 'info' ? 'hidden' : ''}><div class="kv">
         ${field('الرقم المدني', `<b class="num">${esc(e.id)}</b>`)}${field('الجنسية', esc(e.nationality))}${field('المهنة', esc(e.profession) + (e.professionEn ? `<div class="small muted">${esc(e.professionEn)}</div>` : ''))}
         ${field('تاريخ الميلاد', fmtDate(e.dateOfBirth))}${field('الجنس', esc(t(GENDER_LABELS[e.gender] || '')))}${field('مكان الميلاد', esc(e.placeOfBirth))}
-        ${field('تاريخ إصدار الجواز', fmtDate(e.passportIssueDate))}${field('تاريخ التعيين', fmtDate(e.dateOfHire))}${field('تاريخ انتهاء الخدمة', fmtDate(e.serviceEndDate))}
+        ${field('تاريخ إصدار الجواز', fmtDate(e.passportIssueDate))}${field('تاريخ التعيين', fmtDate(e.dateOfHire))}${field('تاريخ انتهاء الخدمة', fmtDate(e.serviceEndDate))}${e.serviceEndReason ? field('سبب انتهاء الخدمة', esc(t(e.serviceEndReason))) : ''}
         ${field('الرقم الموحد', e.unifiedNumber ? `<span class="num">${esc(e.unifiedNumber)}</span>` : '')}${field('فصيلة الدم', esc(e.bloodType))}
         ${field('عنوان السكن', esc(addressText(e)))}${field('هاتف المنزل', esc(e.homePhone))}${can('sensitive.salary') ? field('الراتب', fmtMoney(e.salary)) : ''}
         ${field('بدل السكن', e.housingIncluded ? (e.housingAmount ? fmtMoney(e.housingAmount) : t('مشمول')) : t('غير مشمول'))}
@@ -728,6 +731,7 @@ async function openProfileCard(id, tab = 'info') {
       </div>
       <div data-pane="timeline" ${tab !== 'timeline' ? 'hidden' : ''}><ul class="timeline">${tl.map(x => `<li><span class="muted small">${fmtDateTime(x.date)} · ${esc(x.user || '')}</span><br>${esc(x.label)}</li>`).join('') || '<li class="muted">—</li>'}</ul></div>`,
     foot: `<button class="btn primary write-only" data-p="employees.edit" data-a="edit">✏️ تعديل</button>
+      <button class="btn write-only" data-p="employees.edit" data-a="status">🔄 ${t('الحالة الوظيفية')}</button>
       <button class="btn write-only" data-p="employees.edit" data-a="stage">🏛️ مرحلة المعاملة</button>
       <button class="btn" data-p="contract.view employees.view sensitive.salary" data-a="contract">📄 عقد العمل</button>
       ${empNeedsResidency(e) ? '<button class="btn" data-p="sensitive.documents" data-a="residency">🪪 نموذج الإقامة</button>' : ''}
@@ -750,6 +754,7 @@ async function openProfileCard(id, tab = 'info') {
     const a = b.dataset.a;
     if (a === 'edit') { m.close(); openEmployeeModal(e.id); }
     else if (a === 'stage') { m.close(); openGovStageModal(e.id); }
+    else if (a === 'status') { m.close(); openEmployeeStatusModal(e.id); }
     else if (a === 'signature') { m.close(); openSignatureModal(e.id, e.name, canAll('employees.edit sensitive.documents')); }
     else if (a === 'contract') { m.close(); VIEW_ARGS = { emp: e.id }; setView('contract'); }
     else if (a === 'residency') openOfficialFormModal('residency', 'employee', e.id);
@@ -854,7 +859,7 @@ function openOfficialFormModal(form, kind, id) {
   const rec = kind === 'employee' ? IDX.employee[id] : IDX.candidate[id];
   if (!rec) return toast('غير موجود', 'err');
   const kit = missingDataKit(spec.fields, kind, rec);
-  const extras = spec.extras === 'pifss' ? pifssExtrasHtml(kit, rec) : spec.extras === 'social' ? socialExtrasHtml(rec) : '';
+  const extras = spec.extras === 'pifss' ? pifssExtrasHtml(kit, rec, kind) : spec.extras === 'social' ? socialExtrasHtml(rec) : '';
   const m = openModal({
     title: esc(t(spec.title)) + ': ' + esc(rec.name), size: kit.missing.length > 3 || spec.extras ? '' : 'narrow',
     body: `<div class="form" id="of-form">
@@ -865,9 +870,22 @@ function openOfficialFormModal(form, kind, id) {
   });
   const endBox = $('#of-end', m.el), act = $('[name="__action"]', m.el);
   if (endBox) { const upd = () => { endBox.style.display = act.value === 'إنهاء خدمة' ? '' : 'none'; }; act.addEventListener('change', upd); upd(); }
+  // «غيّر الحالة الوظيفية»: السبب ← مستقيل / إنهاء خدمات، ولو آخر يوم عمل لسه ماجاش ← في فترة الإنذار لحد اليوم ده
+  const stPrev = $('#of-st-preview', m.el);
+  if (stPrev) {
+    const upd = () => {
+      const d = formValues($('#of-form', m.el)), reason = d.__x_endReason, end = d.serviceEndDate;
+      const fin = t(EMP_STATUS_LABELS[endTypeForReason(reason)].ar);
+      stPrev.textContent = !reason || !end ? `— ${t('اكتب تاريخ انتهاء الخدمة وسببه')}`
+        : end >= todayISO() ? `← ${t('في فترة الإنذار')} ${t('حتى')} ${fmtDate(end)}، ${t('وبعدها')} «${fin}»` : `← «${fin}»`;
+    };
+    $('#of-form', m.el).addEventListener('input', upd); $('#of-form', m.el).addEventListener('change', upd); upd();
+  }
   $('[data-go]', m.el).onclick = async (ev) => {
     const b = ev.currentTarget;
     const d = formValues($('#of-form', m.el)), action = d.__action, extra = {};
+    if (action === 'إنهاء خدمة' && d.__x_setStatus && (!d.serviceEndDate || !d.__x_endReason))
+      return openBlockAlert(t('علشان الحالة الوظيفية تتغيّر: اكتب تاريخ انتهاء الخدمة وسببه (أو شيل علامة «غيّر الحالة الوظيفية»).'));
     Object.keys(d).filter(k => k.startsWith('__')).forEach(k => { if (k.startsWith('__x_') && d[k] !== '' && d[k] != null) extra[k.slice(4)] = d[k]; delete d[k]; });
     if ('serviceEndDate' in d && (d.serviceEndDate || '') === (rec.serviceEndDate || '')) delete d.serviceEndDate;   // مااتغيّرش
     b.disabled = true;
@@ -878,7 +896,66 @@ function openOfficialFormModal(form, kind, id) {
         { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, ...extra, ...data }) });
       m.close();
       openPdfPreviewModal(res.blob, res.name, 1);
+      if (action === 'إنهاء خدمة' && extra.setStatus) reload().catch(() => {});   // الحالة الوظيفية اتغيّرت على السيرفر
     } catch (e) { toast(e.message, 'err'); b.disabled = false; }
+  };
+}
+
+/* ---------- الحالة الوظيفية: في الخدمة / في فترة الإنذار / مستقيل / إنهاء خدمات / قيد الاستكمال ---------- */
+/** شريط في بطاقة الموظف: فترة الإنذار (فاضل كام يوم وبعدها إيه) أو آخر يوم عمل والسبب */
+function empEndNotice(e) {
+  const st = e.employmentStatus, fin = e.serviceEndType && EMP_STATUS_LABELS[e.serviceEndType];
+  if (st === 'warning' && e.serviceEndDate) {
+    const then = fin ? `${LANG === 'en' ? ', ' : '، '}${t('وبعدها')} «${esc(LANG === 'en' ? fin.en : fin.ar)}»` : '';
+    return `<div class="notice warn" style="margin-top:10px">⏳ ${t('في فترة الإنذار')} — ${t('آخر يوم عمل')} ${fmtDate(e.serviceEndDate)} (${esc(daysText(daysUntil(e.serviceEndDate)))})${then}${e.serviceEndReason ? ` — ${esc(t(e.serviceEndReason))}` : ''}</div>`;
+  }
+  if (empEnded(e)) {
+    return `<div class="notice" style="margin-top:10px">🚪 ${esc(LANG === 'en' ? EMP_STATUS_LABELS[st].en : EMP_STATUS_LABELS[st].ar)}${e.serviceEndDate ? ` — ${t('آخر يوم عمل')} ${fmtDate(e.serviceEndDate)}` : ''}${e.serviceEndReason ? ` — ${esc(t(e.serviceEndReason))}` : ''}</div>`;
+  }
+  return '';
+}
+function openEmployeeStatusModal(id) {
+  const e = IDX.employee[id];
+  if (!e) return;
+  const cur = e.employmentStatus || 'active', label = k => LANG === 'en' ? EMP_STATUS_LABELS[k].en : EMP_STATUS_LABELS[k].ar;
+  const m = openModal({
+    title: `🔄 ${t('الحالة الوظيفية')}: ${esc(empName(e))}`, size: 'narrow',
+    body: `<div class="form" id="st-form">
+        <label class="full">${t('الحالة')}<select name="status">${Object.keys(EMP_STATUS_LABELS).map(k => opt(k, label(k), k === cur)).join('')}</select></label>
+        <label class="full" data-st="warning">${t('بعد فترة الإنذار')}<select name="endType">${EMP_ENDED.map(k => opt(k, k === 'resigned' ? t('استقالة') + ' ← ' + label(k) : label(k), k === (e.serviceEndType || 'resigned'))).join('')}</select></label>
+        <label class="full" data-st="end"><span class="req" id="st-date-l"></span><input type="date" name="date" value="${esc(e.serviceEndDate || todayISO())}"></label>
+        <label class="full" data-st="end">${t('السبب')}<input name="reason" list="dl-st-reason" value="${esc(e.serviceEndReason || '')}" placeholder="${esc(t('اختار أو اكتب'))}"></label>
+        <label class="full">${t('ملاحظة')} <span class="small muted">(${t('بتتسجّل في سجل الموظف')})</span><input name="note"></label></div>
+      <datalist id="dl-st-reason">${END_REASONS.map(x => `<option value="${esc(t(x))}">`).join('')}</datalist>
+      <div class="notice small" id="st-hint" style="margin-top:8px"></div>`,
+    foot: `<button class="btn primary" data-save>💾 ${t('حفظ')}</button><button class="btn" data-close>${t('إلغاء')}</button>`,
+  });
+  const E = m.el, get = n => $(`[name="${n}"]`, E);
+  const sync = () => {
+    const st = get('status').value, ending = st === 'warning' || EMP_ENDED.includes(st);
+    $$('[data-st="end"]', E).forEach(x => { x.style.display = ending ? '' : 'none'; });
+    $('[data-st="warning"]', E).style.display = st === 'warning' ? '' : 'none';
+    $('#st-date-l', E).textContent = t(st === 'warning' ? 'آخر يوم عمل (نهاية فترة الإنذار)' : 'آخر يوم عمل');
+    const date = get('date').value, hint = $('#st-hint', E);
+    hint.textContent = st === 'warning' ? `${t('بعد')} ${fmtDate(date) || '…'} ${t('الموظف هيتحوّل لوحده لـ')} «${label(get('endType').value)}».`
+      : ending ? t('الموظف هيطلع من التنبيهات ولوحة المعلومات وقوايم العهد والعقود، ويفضل في الأرشيف والتقارير.')
+      : EMP_ENDED.includes(cur) || cur === 'warning' ? t('تاريخ ونوع وسبب انتهاء الخدمة هيتمسحوا من البطاقة (بيفضلوا في سجل الموظف).') : '';
+    hint.style.display = hint.textContent ? '' : 'none';
+  };
+  // السبب بيحدّد النوع: «استقالة» ← مستقيل، والباقي ← إنهاء خدمات
+  get('reason').addEventListener('change', () => {
+    const r = get('reason').value.trim(), st = get('status').value;
+    if (!r) return;
+    if (st === 'warning') get('endType').value = endTypeForReason(r);
+    else if (EMP_ENDED.includes(st)) get('status').value = endTypeForReason(r);
+    sync();
+  });
+  E.addEventListener('change', sync); E.addEventListener('input', sync);
+  sync();
+  $('[data-save]', E).onclick = async () => {
+    const d = formValues($('#st-form', E));
+    if ((d.status === 'warning' || EMP_ENDED.includes(d.status)) && !d.date) return openBlockAlert(t('آخر يوم عمل مطلوب'));
+    try { await persist('POST', `/api/employees/${encodeURIComponent(id)}/status`, d, 'تم الحفظ'); m.close(); openProfileCard(id); } catch (err) { /* ظاهر */ }
   };
 }
 
@@ -887,7 +964,7 @@ const PIFSS_END_REASONS = ['استقالة', 'إنهاء خدمات من صاح�
 const KUWAITI_DATALISTS = `<datalist id="dl-qual">${['ابتدائي', 'متوسط', 'ثانوي', 'دبلوم', 'بكالوريوس', 'ماجستير', 'دكتوراه'].map(x => `<option value="${x}">`).join('')}</datalist>
   <datalist id="dl-article">${['الأولى', 'الثانية', 'الثالثة', 'الرابعة', 'الخامسة', 'السابعة', 'الثامنة'].map(x => `<option value="${x}">`).join('')}</datalist>`;
 /** اختيارات استمارة 103 اللي مش في بيانات الموظف (المبالغ للي معاه صلاحية الرواتب بس) */
-function pifssExtrasHtml(kit, e) {
+function pifssExtrasHtml(kit, e, kind = 'employee') {
   const money = (k, l) => `<label>${t(l)}<input type="number" step="0.001" min="0" name="__x_${k}"></label>`;
   return `<label>${t('المفوّض بالتوقيع')}<select name="__x_sig">${batchSigOptions(kit.cid)}</select></label>
     <label>${t('تاريخ التوقيع')}<input type="date" name="__x_signDate" value="${todayISO()}"></label>
@@ -898,7 +975,9 @@ function pifssExtrasHtml(kit, e) {
     <div class="form" id="of-end" style="grid-column:1/-1;display:none"><h4>${t('انتهاء الخدمة')}</h4>
       <label>${t('تاريخ انتهاء الخدمة')}<input type="date" name="serviceEndDate" value="${esc(e.serviceEndDate || '')}"></label>
       <label>${t('سبب انتهاء الخدمة')}<input name="__x_endReason" list="dl-end-reason"></label>
-      <datalist id="dl-end-reason">${PIFSS_END_REASONS.map(x => `<option value="${esc(t(x))}">`).join('')}</datalist></div>`;
+      <datalist id="dl-end-reason">${PIFSS_END_REASONS.map(x => `<option value="${esc(t(x))}">`).join('')}</datalist>
+      ${kind === 'employee' && can('employees.edit') ? `<label class="check" style="grid-column:1/-1"><input type="checkbox" name="__x_setStatus" checked> ${t('غيّر الحالة الوظيفية')}
+        <b class="small" id="of-st-preview" style="color:var(--primary)"></b></label>` : ''}</div>`;
 }
 function socialExtrasHtml(e) {
   const kids = e.children || [];

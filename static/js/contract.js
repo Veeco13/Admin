@@ -44,7 +44,7 @@ function renderContractView() {
   const coId = CONTRACT.company || (e ? empCompanyId(e) : '');
   const sigs = coId && IDX.company[coId] ? IDX.company[coId].signatories : STATE.companies.flatMap(c => c.signatories);
   if (CONTRACT.sig && !sigs.find(s => s.id === CONTRACT.sig)) CONTRACT.sig = '';
-  const empList = scopedEmployees().filter(x => x.employmentStatus !== 'terminated');
+  const empList = scopedEmployees().filter(x => !empEnded(x));
   const selSig = CONTRACT.sig ? sigs.find(s => s.id === CONTRACT.sig) : (coId && IDX.company[coId] ? (IDX.company[coId].signatories || [])[0] : null);
   const pdfMode = STATE.pdfAvailable && CONTRACT_PREVIEW === 'pdf';
   const signs = templateSigns(CONTRACT.tpl);
@@ -208,7 +208,7 @@ function openBatchContractModal(preselected = []) {
   tplSel.onchange = () => syncTemplateSigns(el, tplSel.value);
   syncTemplateSigns(el, tplSel.value);
   const visible = () => scopedEmployees().filter(e => {
-    if (F.status === 'active_only' && e.employmentStatus === 'terminated') return false;
+    if (F.status === 'active_only' && empEnded(e)) return false;
     if (F.company && !empInCompany(e, F.company)) return false;
     const q = norm(F.q);
     return !q || norm(e.name).includes(q) || norm(e.nameEn).includes(q) || String(e.id).includes(q);

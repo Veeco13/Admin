@@ -61,10 +61,17 @@ function personExtraInputs(p) {
 }
 const EMP_STATUS_LABELS = {
   active:             { ar: 'في الخدمة',       en: 'In Service' },
-  warning:            { ar: 'في فترة الإنذار',  en: 'Warning Period' },
-  terminated:         { ar: 'منتهي خدمته',     en: 'Terminated' },
+  warning:            { ar: 'في فترة الإنذار',  en: 'Notice Period' },
+  resigned:           { ar: 'مستقيل',          en: 'Resigned' },
+  terminated:         { ar: 'إنهاء خدمات',     en: 'Terminated' },
   pending_completion: { ar: 'قيد الاستكمال',    en: 'Pending Completion' },
 };
+// خدمتهم انتهت (استقالة / إنهاء خدمات): برّه التنبيهات ولوحة المعلومات وقوايم العهد والعقود، وموجودين في الأرشيف والتقارير
+const EMP_ENDED = ['resigned', 'terminated'];
+function empEnded(e) { return EMP_ENDED.includes(e && e.employmentStatus); }
+// سبب انتهاء الخدمة (نفس استمارة 103): «استقالة» ← مستقيل، والباقي ← إنهاء خدمات (app.end_type_for_reason)
+const END_REASONS = ['استقالة', 'إنهاء خدمات من صاحب العمل', 'انتهاء العقد', 'التقاعد', 'الوفاة'];
+function endTypeForReason(r) { return /استقال/.test(r || '') ? 'resigned' : 'terminated'; }
 const RECRUIT_STAGES_OUTSIDE = [
   { id: 'work_permit',           label: 'استخراج تصريح العمل' },
   { id: 'work_visa',             label: 'إصدار تأشيرة العمل' },
@@ -99,7 +106,7 @@ const RECRUIT_STAGES_INTERNAL = [
 ];
 const REJECTED_STAGE = { id: 'rejected', label: 'مرفوض', rejected: true };
 // tierOf بيرجّع شريحة واحدة (للألوان وتوزيع لوحة المعلومات — band)، والفلاتر «خلال X يوم» تراكمية (TIER_WITHIN):
-// «خلال 60 يوم» = اللي بينتهي من النهارده لحد 60 يوم، مش من 31 لـ 60 بس
+// «خلال 60 يوم» = المنتهي + اللي بينتهي لحد 60 يوم، مش من 31 لـ 60 بس
 const TIERS = {
   expired: { label: 'منتهي',          cls: 't-expired' },
   d30:     { label: 'خلال 30 يوم',    cls: 't-d30' },
@@ -108,7 +115,11 @@ const TIERS = {
   ok:      { label: 'سارية',          cls: 't-ok' },
   none:    { label: 'بدون تاريخ',     cls: 't-none' },
 };
-const TIER_WITHIN = { soon: ['expired', 'd30'], d30: ['d30'], d60: ['d30', 'd60'], d90: ['d30', 'd60', 'd90'] };
+// «خلال X يوم» بيجيب المنتهي كمان (كل اللي محتاج إجراء لحد X يوم). الفلتر فيه 30 / 60 / 90 بس (TIER_FILTERS)
+const TIER_WITHIN = { d30: ['expired', 'd30'], d60: ['expired', 'd30', 'd60'], d90: ['expired', 'd30', 'd60', 'd90'] };
+const TIER_FILTERS = ['d30', 'd60', 'd90'];
+/** قيمة فلتر مستوى قديمة محفوظة ← الجديدة (soon / منتهي ← خلال 30، سارية / بدون تاريخ ← الكل) */
+function tierFilterValue(v) { return TIER_FILTERS.includes(v) ? v : v === 'soon' || v === 'expired' ? 'd30' : ''; }
 /** التاريخ ده جوّه فلتر المستوى؟ (منتهي / خلال 30 / 60 / 90 يوم تراكمي / سارية / بدون تاريخ / منتهي أو خلال 30) */
 function tierIn(date, tier) { return (TIER_WITHIN[tier] || [tier]).includes(tierOf(date)); }
 const EMP_DATE_FIELDS = [
@@ -209,6 +220,9 @@ function vtFind(kind, v) { return v ? vtMap(kind)[norm(v)] || (window.I18N || {}
 function vt(kind, v) { return LANG === 'en' && v ? vtFind(kind, v) || v : v; }
 function natLabel(v) { return vt('nationality', v); }
 function profLabel(v) { return vt('profession', v); }
+/** الجنسية / المهنة بلغة العرض: خانة «الجنسية (إنجليزي)» / «المهنة (إنجليزي)» في البطاقة الأول، وبعدين القاموس */
+function personNat(p) { return LANG === 'en' && p && p.nationalityEn ? p.nationalityEn : natLabel(p && p.nationality); }
+function personProf(p) { return LANG === 'en' && p && p.professionEn ? p.professionEn : profLabel(p && p.profession); }
 function ccLabel(name) {
   if (!name || LANG !== 'en') return name;
   const c = (STATE.costCenters || []).find(x => x.name === name);
@@ -762,7 +776,7 @@ function trackedAlertItems(maxDays = 90) {
     items.push(byKey[key] = { ...o, what: t(o.what), days: d, tier: tierOf(o.date) });
   };
   for (const e of scopedEmployees()) {
-    if (e.employmentStatus === 'terminated') continue;
+    if (empEnded(e)) continue;
     for (const f of EMP_DATE_FIELDS) {
       if (f.driverOnly && !e.isDriver) continue;
       push({ kind: 'employee', refId: e.id, name: empName(e), what: f.label, date: e[f.key] });
@@ -801,15 +815,16 @@ function openAlertTarget(it) {
   else if (it.kind === 'candidate') { setView('recruitment'); setTimeout(() => openCandidateModal(it.refId), 50); }
 }
 function renderAlertCenterPanel(filter = 'all') {
+  if (filter !== 'all') filter = tierFilterValue(filter) || 'all';        // «منتهي» من لوحة المعلومات ← خلال 30 يوم
   const items = trackedAlertItems();
   const counts = { all: items.length };
-  for (const k of ['expired', 'd30', 'd60', 'd90']) counts[k] = items.filter(i => tierIn(i.date, k)).length;
+  for (const k of TIER_FILTERS) counts[k] = items.filter(i => tierIn(i.date, k)).length;
   const shown = filter === 'all' ? items : items.filter(i => tierIn(i.date, filter));
   const root = $('#side-root');
   root.innerHTML = `<div class="side-panel" id="alert-panel">
     <div class="modal-head"><h2>🔔 مركز التنبيهات</h2><button class="btn ghost" id="close-side">✕</button></div>
     <div style="padding:8px 14px" class="row">
-      ${['all', 'expired', 'd30', 'd60', 'd90'].map(k => `<span class="chip clickable ${filter === k ? 'on' : ''}" data-f="${k}">${k === 'all' ? t('الكل') : t(TIERS[k].label)} (${counts[k]})</span>`).join('')}
+      ${['all', ...TIER_FILTERS].map(k => `<span class="chip clickable ${filter === k ? 'on' : ''}" data-f="${k}">${k === 'all' ? t('الكل') : t(TIERS[k].label)} (${counts[k]})</span>`).join('')}
     </div>
     <div class="body">${shown.length ? shown.map((it, i) => `
       <div class="alert-item" data-i="${i}">
@@ -891,7 +906,7 @@ function renderAlertBar() {
   const items = trackedAlertItems();
   const expired = items.filter(i => i.days < 0).length;
   const week = items.filter(i => i.days >= 0 && i.days <= 7).length;
-  const stuck = scopedEmployees().filter(e => e.govStageNote && e.employmentStatus !== 'terminated').length;
+  const stuck = scopedEmployees().filter(e => e.govStageNote && !empEnded(e)).length;
   let html = '';
   if ((expired || week || stuck) && VIEW !== 'dashboard') {   // الرئيسية فيها «محتاج إجراء»
     const parts = [];

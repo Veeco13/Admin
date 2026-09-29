@@ -60,7 +60,7 @@ function renderCompanies() {
 }
 
 function renderCompaniesTab(root) {
-  const emps = STATE.employees.filter(e => e.employmentStatus !== 'terminated');
+  const emps = STATE.employees.filter(e => !empEnded(e));
   // الترتيب: الأقرب ينتهي ← اللي ناقصه تواريخ ← الباقي بالاسم
   const rank = x => x.alerts.length ? CO_TIER_RANK[x.alerts[0].tier] : COMPANY_DOC_KINDS.some(k => !x.c[k.exp]) ? 4 : 5;
   const list = scopedCompanies().map(c => ({ c, alerts: companyAlerts(c.id) }))
@@ -94,7 +94,7 @@ function fillCompanyDetails() {
   const { id, tab, m } = CO_DETAIL;
   const c = IDX.company[id];
   if (!c || !document.body.contains(m.el)) { if (CO_DETAIL) CO_DETAIL.m.close(); return; }
-  const emps = STATE.employees.filter(e => e.employmentStatus !== 'terminated' && (e.affiliations || []).some(a => a.companyId === id));
+  const emps = STATE.employees.filter(e => !empEnded(e) && (e.affiliations || []).some(a => a.companyId === id));
   const projs = STATE.projects.filter(p => p.companyId === id);
   const sigs = c.signatories || [];
   const kv = (l, v) => `<div><span>${esc(t(l))}</span>${v ? esc(v) : '<span class="muted">—</span>'}</div>`;
@@ -151,7 +151,7 @@ function fillCompanyDetails() {
 
 /* ---------- المشاريع: جدول واحد (في تبويب المشاريع وفي تفاصيل الشركة) ---------- */
 function projectsTable(projs, withCompany) {
-  const emps = STATE.employees.filter(e => e.employmentStatus !== 'terminated');
+  const emps = STATE.employees.filter(e => !empEnded(e));
   if (!projs.length) return `<div class="empty">${t('لا توجد مشاريع')}</div>`;
   return `<div class="table-wrap"><table class="data"><thead><tr><th>${t('المشروع')}</th>${withCompany ? `<th>${t('الشركة')}</th>` : ''}<th>${t('رقم الملف')}</th><th>${t('إدارة العمل')}</th><th>${t('الانتهاء')}</th><th>${t('الموظفين')}</th><th></th></tr></thead><tbody>
     ${projs.map(p => `<tr><td><b>${esc(projectName(p.id))}</b></td>${withCompany ? `<td><a href="#" data-proj-co="${p.companyId}">${esc(companyName(p.companyId))}</a></td>` : ''}
@@ -342,7 +342,7 @@ function openVehicleModal(id) {
    COST CENTERS — مراكز التكلفة
    ===================================================================== */
 function renderCostCentersTab(root) {
-  const emps = scopedEmployees().filter(e => e.employmentStatus !== 'terminated');
+  const emps = scopedEmployees().filter(e => !empEnded(e));
   const rows = STATE.costCenters.map(c => {
     const ce = emps.filter(e => e.costCenter === c.name);
     return { c, n: ce.length, sal: sum(ce.map(e => e.salary)), gov: sum(ce.map(e => e.govTransactionCost)) };

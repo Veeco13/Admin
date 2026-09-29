@@ -7,7 +7,7 @@
 
 function collectAllTrackedDates() {
   // تواريخ الموظفين مجمّعة حسب نوع المستند والمستوى
-  const emps = scopedEmployees().filter(e => e.employmentStatus !== 'terminated');
+  const emps = scopedEmployees().filter(e => !empEnded(e));
   return EMP_DATE_FIELDS.map(f => {
     const list = emps.filter(e => !f.driverOnly || e.isDriver);
     const tiers = { expired: 0, d30: 0, d60: 0, d90: 0, ok: 0, none: 0 };
@@ -64,7 +64,7 @@ function bindVizTips(root) {
 
 function renderDashboard() {
   const emps = scopedEmployees();
-  const active = emps.filter(e => e.employmentStatus !== 'terminated');
+  const active = emps.filter(e => !empEnded(e));
   const items = trackedAlertItems();
   const expired = items.filter(i => i.days < 0), week = items.filter(i => i.days >= 0 && i.days <= 7), month = items.filter(i => i.days > 7 && i.days <= 30);
   const due = items.filter(i => i.days <= 30);
@@ -86,7 +86,7 @@ function renderDashboard() {
   const payroll = sum(active.map(e => e.salary)), paid = active.filter(e => e.salary).length;
   const vehDue = items.filter(i => i.kind === 'vehicle' && i.days <= 30).length;
   const tiles = [
-    { ico: '👥', l: 'في الخدمة', v: count('active'), sub: `${t('من')} ${emps.length} ${t('موظف')} · ${count('terminated')} ${t('منتهي خدمته')}`, go: () => goEmployees({ status: 'active' }) },
+    { ico: '👥', l: 'في الخدمة', v: count('active'), sub: `${t('من')} ${emps.length} ${t('موظف')} · ${t('مستقيل')} ${count('resigned')} · ${t('إنهاء خدمات')} ${count('terminated')}`, go: () => goEmployees({ status: 'active' }) },
     { ico: '🧩', l: 'قيد الاستكمال', v: count('pending_completion'), sub: `${t('في فترة الإنذار')}: ${count('warning')}`, go: () => goEmployees({ status: 'pending_completion' }) },
     viewAllowed('recruitment') && { ico: '🧭', l: 'المترشّحين', v: cands.length, sub: Object.keys(RECRUIT_SOURCES).map(k => `${recruitSourceLabel(k, true)} ${cands.filter(c => (c.source || 'outside') === k).length}`).join(' · '), go: () => setView('recruitment') },
     can('companies.view') && { ico: '🏢', l: 'الشركات', v: scopedCompanies().length, sub: `${STATE.projects.filter(p => companyInScope(p.companyId)).length} ${t('مشروع')}`, go: () => setView('companies') },
@@ -167,7 +167,7 @@ function renderDashboard() {
   $$('[data-k]', root).forEach(el => el.onclick = () => tiles[+el.dataset.k].go());
   $$('[data-alert]', root).forEach(el => el.onclick = () => renderAlertCenterPanel(el.dataset.alert));
   const st = $('#d-stuck'); if (st) st.onclick = () => openStuckListModal(stuck);
-  $$('[data-doc]', root).forEach(el => el.onclick = () => goEmployees({ tierField: el.dataset.doc, tier: 'soon', sort: el.dataset.doc }));
+  $$('[data-doc]', root).forEach(el => el.onclick = () => goEmployees({ tierField: el.dataset.doc, tier: 'd30', sort: el.dataset.doc }));
   $$('[data-up]', root).forEach(el => el.onclick = () => openAlertTarget(upcoming[+el.dataset.up]));
   $$('[data-stage]', root).forEach(el => el.onclick = () => goEmployees({ stage: el.dataset.stage }));
   $$('[data-co]', root).forEach(el => el.onclick = () => goEmployees({ company: el.dataset.co }));
@@ -235,7 +235,7 @@ function renderRenewalCalendarModal(year, month) {
    ORG CHART — الهيكل التنظيمي للشركات
    ===================================================================== */
 function renderOrgChartModal() {
-  const emps = scopedEmployees().filter(e => e.employmentStatus !== 'terminated');
+  const emps = scopedEmployees().filter(e => !empEnded(e));
   const html = scopedCompanies().map(c => {
     const ce = emps.filter(e => empCompanyId(e) === c.id);
     const projs = STATE.projects.filter(p => p.companyId === c.id);

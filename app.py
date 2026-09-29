@@ -260,6 +260,11 @@ def api_state():
         db.auto_backup_if_due()          # نسخة JSON يومية في backups/
     except Exception as e:               # النسخ الاحتياطي ما يوقفش النظام
         app.logger.warning("auto backup failed: %s", e)
+    try:
+        with db.session_scope() as s:
+            _finish_notice_periods(s)    # فترة الإنذار خلصت ← مستقيل / إنهاء خدمات
+    except Exception as e:
+        app.logger.warning("notice periods failed: %s", e)
     u = me()
     with db.session_scope(commit=False) as s:
         state = db.dump_state(s, u)
@@ -442,6 +447,87 @@ def save_employee(orig_id):
             return jsonify({"ok": True, "employee": u.strip("employee", db.employee_full(s, new_id))})
     except IntegrityError as e:
         return err(f"تعارض في البيانات: {e.orig}", 409)
+
+
+# ---------------------------------------------------------------------------
+# الحالة الوظيفية: في الخدمة / في فترة الإنذار / مستقيل / إنهاء خدمات / قيد الاستكمال
+# ---------------------------------------------------------------------------
+EMP_STATUSES = tuple(history.EMP_STATUS_LABELS)
+ENDED_STATUSES = ("resigned", "terminated")
+
+
+def end_type_for_reason(reason):
+    """سبب انتهاء الخدمة ← النوع: الاستقالة = مستقيل، وأي سبب تاني (إنهاء من صاحب العمل، انتهاء العقد، التقاعد، الوفاة) = إنهاء خدمات."""
+    return "resigned" if "استقال" in (reason or "") else "terminated"
+
+
+def _set_employment_status(s, e, status, end_date=None, end_type=None, reason=None, note=None, user=None, source=None):
+    """بيغيّر حالة الموظف ويسجّل في سجله. مستقيل / إنهاء خدمات: آخر يوم عمل لازم. في فترة الإنذار: النوع (مستقيل / إنهاء
+    خدمات) وآخر يوم لازمين — بعد اليوم ده بيتحوّل لوحده (_finish_notice_periods)، ولو عدّى خلاص بيتحوّل على طول.
+    الرجوع للخدمة بيمسح بيانات الانتهاء (بتفضل في السجل). بيرجّع رسالة خطأ أو None."""
+    if status not in EMP_STATUSES:
+        return "الحالة غير معروفة"
+    old_status = e.employmentStatus or "active"
+    reason = (reason or "").strip() or None
+    if status in ENDED_STATUSES or status == "warning":
+        if not end_date:
+            return "آخر يوم عمل مطلوب"
+        end_type = status if status in ENDED_STATUSES else end_type
+        if end_type not in ENDED_STATUSES:
+            return "اختار نوع انتهاء الخدمة (استقالة / إنهاء خدمات)"
+        if status == "warning" and end_date < datetime.now().date():
+            status = end_type
+        if (old_status, e.serviceEndDate, e.serviceEndType, e.serviceEndReason) == (status, end_date, end_type, reason):
+            return None                              # مفيش تغيير (زي طباعة الاستمارة مرتين)
+        e.serviceEndDate, e.serviceEndType, e.serviceEndReason = end_date, end_type, reason
+    elif old_status == status:
+        return None
+    elif old_status in ENDED_STATUSES + ("warning",):
+        e.serviceEndDate = e.serviceEndType = e.serviceEndReason = None
+    e.employmentStatus = status
+    e.lastUpdated, e.lastUpdatedBy = db.now(), user
+    lab = history.EMP_STATUS_LABELS
+    label = f"الحالة الوظيفية: {lab.get(old_status, old_status)} ← {lab[status]}"
+    if status == "warning":
+        label += f" — فترة الإنذار حتى {end_date.isoformat()} وبعدها «{lab[end_type]}»"
+    elif status in ENDED_STATUSES:
+        label += f" — آخر يوم عمل {end_date.isoformat()}"
+    label += (f" — السبب: {reason}" if reason and status in ENDED_STATUSES + ("warning",) else "") \
+        + (f" — {note.strip()}" if note and note.strip() else "") + (f" ({source})" if source else "")
+    db.push_timeline(s, e.id, "edit", label, user)
+    db.log_audit(s, "employee_edit", f"{e.name} ({e.id}): {label}", user)
+    return None
+
+
+def _finish_notice_periods(s):
+    """الموظفين اللي آخر يوم عمل ليهم في فترة الإنذار عدّى ← الحالة النهائية (مستقيل / إنهاء خدمات)."""
+    today = datetime.now().date()
+    for e in s.scalars(select(M.Employee).where(M.Employee.employmentStatus == "warning",
+                                                M.Employee.serviceEndType.in_(ENDED_STATUSES),
+                                                M.Employee.serviceEndDate < today)):
+        e.employmentStatus = e.serviceEndType
+        label = f"انتهت فترة الإنذار (آخر يوم عمل {e.serviceEndDate.isoformat()}) — الحالة الوظيفية: " \
+                f"{history.EMP_STATUS_LABELS[e.serviceEndType]}"
+        db.push_timeline(s, e.id, "edit", label, "النظام")
+        db.log_audit(s, "employee_edit", f"{e.name} ({e.id}): {label}", "النظام")
+
+
+@app.post("/api/employees/<emp_id>/status")
+@require("employees.edit")
+def set_employee_status(emp_id):
+    """{status, date (آخر يوم عمل / نهاية الإنذار), endType (resigned | terminated — مع فترة الإنذار), reason, note}"""
+    d = body()
+    with db.session_scope() as s:
+        e = s.get(M.Employee, emp_id)
+        if not e:
+            return err("الموظف غير موجود", 404)
+        if not emp_ok(s, emp_id):
+            return forbidden(OUT_OF_SCOPE)
+        msg = _set_employment_status(s, e, d.get("status"), db.parse_date(d.get("date")), d.get("endType"),
+                                     d.get("reason"), d.get("note"), uname())
+        if msg:
+            return err(msg)
+    return jsonify({"ok": True})
 
 
 @app.delete("/api/employees/<emp_id>")
@@ -673,6 +759,11 @@ def employee_official_form(emp_id, form):
             return bad
         db.log_audit(s, f"employee_{form}_form", f"{pdf_forms.FORMS[form]['title']} ({out[2]}) للموظف: {emp['name']} ({emp_id})",
                      uname())
+        end = db.parse_date(emp.get("serviceEndDate"))
+        if form == "pifss103" and out[2] == "إنهاء خدمة" and _truthy(body().get("setStatus")) and end and me().can("employees.edit"):
+            reason = body().get("endReason")
+            _set_employment_status(s, s.get(M.Employee, emp_id), "warning", end, end_type_for_reason(reason), reason,
+                                   user=uname(), source="استمارة 103")
     return _send_pdf(out[0], out[1])
 
 
@@ -1682,6 +1773,10 @@ def _build_contract(s, emp, args, fill=True, tpl=None, extra=None, path=None, si
     for k in ("salary", "profession", "professionEn", "nameEn", "nationalityEn"):
         if args.get(k):
             emp[k] = args.get(k)
+    tr = value_i18n.merged(s)                  # خانة الموظف فاضية ← القاموس (نفس ترجمة التقارير الإنجليزية)
+    for k, kind in (("nationalityEn", "nationality"), ("professionEn", "profession")):
+        if not emp.get(k):
+            emp[k] = value_i18n.lookup(tr, kind, emp.get(kind)) or emp.get(k)
     ctx = contracts.extra_context(docx_engine.resolve_contract_template(
         emp, company, db.to_dict(sig), project, args.get("date") or None))
     contracts.housing_context(ctx, contracts.housing_included(args.get("housing"), emp))

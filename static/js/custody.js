@@ -254,7 +254,7 @@ function openCustodyRequestModal(id = null) {
   const kind = () => CUSTODY_TYPES[S.tx].kind;
   const eligible = () => {
     const ty = CUSTODY_TYPES[S.tx];
-    if (ty.kind === 'employee') return STATE.employees.filter(e => (e.employmentStatus || 'active') !== 'terminated' && isKuwaitiStaff(e) === ty.kuwaiti)
+    if (ty.kind === 'employee') return STATE.employees.filter(e => !empEnded(e) && isKuwaitiStaff(e) === ty.kuwaiti)
       .map(e => { const doc = ty.doc || 'residencyExp'; return { id: e.id, name: e.name, sub: `${e.id} · ${companyName(empCompanyId(e)) || '—'}${e.costCenter ? ' · ' + e.costCenter : ''}`, exp: ty.kuwaiti ? null : e[doc],
         tag: e[doc] && !ty.kuwaiti ? `${t(doc === 'passportExp' ? 'الجواز' : 'الإقامة')}: ${datePill(e[doc])}` : esc(t(e.govStage ? (GOV_STAGES.find(g => g.id === e.govStage) || {}).label || '' : '')) }; });
     return STATE.candidates.filter(c => (c.source || 'outside') === ty.source && !['rejected', 'all_completed'].includes(c.stage))

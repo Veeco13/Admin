@@ -20,7 +20,7 @@ GOV_STAGE_LABELS = {
     "health_insurance": "التأمين الصحي", "residency": "الإقامة", "civil_id": "البطاقة المدنية",
     "renewed": "تم التجديد", "awaiting_cancellation": "بانتظار إلغاء الإقامة وإذن العمل",
 }
-EMP_STATUS_LABELS = {"active": "في الخدمة", "warning": "في فترة الإنذار", "terminated": "منتهي خدمته",
+EMP_STATUS_LABELS = {"active": "في الخدمة", "warning": "في فترة الإنذار", "resigned": "مستقيل", "terminated": "إنهاء خدمات",
                      "pending_completion": "قيد الاستكمال"}
 
 

@@ -145,7 +145,7 @@ body.readonly .write-only { display: none !important; }
 .t-none { background: var(--grey-soft); color: var(--grey); }
 .s-active { background: var(--green-soft); color: var(--green); }
 .s-warning { background: var(--orange-soft); color: var(--orange); }
-.s-terminated { background: var(--grey-soft); color: var(--grey); }
+.s-terminated, .s-resigned { background: var(--grey-soft); color: var(--grey); }
 .s-pending_completion { background: var(--purple-soft); color: var(--purple); }
 .muted { color: var(--muted); }
 .small { font-size: 12px; }

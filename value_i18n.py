@@ -3,49 +3,54 @@
 Lunx — ترجمة البيانات للتقارير الإنجليزية (الجنسيات والمهن).
 
 الجنسية والمهنة بيتسجّلوا بالعربي (زي ما في الإقامة وإذن العمل)، فالتقرير الإنجليزي بياخد الترجمة من هنا:
-- DEFAULTS: ترجمات جاهزة (الجنسية ← صفة الجنسية بالإنجليزي، والمهن اللي في البيانات).
+- DEFAULTS: ترجمات جاهزة (الجنسية ← اسم الدولة زي البطاقة المدنية، والمهن اللي في البيانات) + قواميس عقد العمل.
+- خانتي «الجنسية (إنجليزي)» و«المهنة (إنجليزي)» في بطاقة الموظف بيغلبوا على القاموس (في التقرير والعقد).
 - تعديلات المستخدم من «🌐 ترجمة الجنسيات والمهن» بتتخزّن في meta بمفتاح value_translations وبتغلب على الجاهز.
 المطابقة في الواجهة بعد توحيد الهمزات والتاء المربوطة (norm)، فـ«الأردن» و«الاردن» واحد.
 """
 import json
+import re
 
+import contracts
 import db
+import docx_engine
 
 KEY = "value_translations"
 KINDS = ("nationality", "profession")
 
+# الجنسية بالإنجليزي = اسم الدولة، زي البطاقة المدنية والإقامة وعقد العمل (docx_engine.NATIONALITY_EN)
 NATIONALITIES = {
     # الموجودة في البيانات
-    "مصر": "Egyptian", "الهند": "Indian", "الكويت": "Kuwaiti", "نيبال": "Nepalese", "الجزائر": "Algerian",
-    "بنغلاديش": "Bangladeshi", "باكستان": "Pakistani", "الفلبين": "Filipino", "كندا": "Canadian", "لبنان": "Lebanese",
-    "الأردن": "Jordanian", "سوريا": "Syrian", "نيجيريا": "Nigerian", "ماليزيا": "Malaysian", "سيريلانكا": "Sri Lankan",
-    "سريلانكا": "Sri Lankan", "سيرا ليون": "Sierra Leonean", "سيراليون": "Sierra Leonean", "غانا": "Ghanaian",
-    "بوركينا فاسو": "Burkinabe", "مالي": "Malian", "اندونيسيا": "Indonesian", "المملكة المتحدة": "British",
-    "بريطانيا": "British", "العراق": "Iraqi", "الصومال": "Somali", "معاملة كويتية": "Kuwaiti (treated as)",
-    "كويتي": "Kuwaiti", "كويتية": "Kuwaiti", "فلسطين": "Palestinian", "جورجيا": "Georgian", "تونس": "Tunisian",
-    "تشاد": "Chadian", "الولايات المتحدة الامريكية": "American", "الولايات المتحدة": "American", "أمريكا": "American",
-    "النيجر": "Nigerien", "الكاميرون": "Cameroonian", "السودان": "Sudanese", "السعودية": "Saudi",
-    "المملكة العربية السعودية": "Saudi", "إيران": "Iranian", "أوغندا": "Ugandan", "أثيوبيا": "Ethiopian",
-    "إثيوبيا": "Ethiopian", "افغانستان": "Afghan",
-    # جنسيات تانية شائعة
-    "اليمن": "Yemeni", "عمان": "Omani", "سلطنة عمان": "Omani", "البحرين": "Bahraini", "قطر": "Qatari",
-    "الإمارات": "Emirati", "الإمارات العربية المتحدة": "Emirati", "المغرب": "Moroccan", "ليبيا": "Libyan",
-    "موريتانيا": "Mauritanian", "جيبوتي": "Djiboutian", "جزر القمر": "Comorian", "إريتريا": "Eritrean",
-    "الصين": "Chinese", "تركيا": "Turkish", "كينيا": "Kenyan", "تنزانيا": "Tanzanian", "رواندا": "Rwandan",
-    "بوروندي": "Burundian", "جنوب السودان": "South Sudanese", "السنغال": "Senegalese", "ساحل العاج": "Ivorian",
-    "كوت ديفوار": "Ivorian", "غينيا": "Guinean", "بنين": "Beninese", "توغو": "Togolese", "ليبيريا": "Liberian",
-    "غامبيا": "Gambian", "الكونغو": "Congolese", "زيمبابوي": "Zimbabwean", "زامبيا": "Zambian", "ملاوي": "Malawian",
-    "مدغشقر": "Malagasy", "موريشيوس": "Mauritian", "جنوب أفريقيا": "South African", "فيتنام": "Vietnamese",
-    "تايلاند": "Thai", "ميانمار": "Myanmar", "كمبوديا": "Cambodian", "سنغافورة": "Singaporean", "اليابان": "Japanese",
-    "كوريا الجنوبية": "South Korean", "بوتان": "Bhutanese", "المالديف": "Maldivian", "أذربيجان": "Azerbaijani",
-    "أرمينيا": "Armenian", "أوزبكستان": "Uzbek", "كازاخستان": "Kazakh", "طاجيكستان": "Tajik", "قيرغيزستان": "Kyrgyz",
-    "تركمانستان": "Turkmen", "روسيا": "Russian", "أوكرانيا": "Ukrainian", "فرنسا": "French", "ألمانيا": "German",
-    "إيطاليا": "Italian", "إسبانيا": "Spanish", "البرتغال": "Portuguese", "هولندا": "Dutch", "بلجيكا": "Belgian",
-    "سويسرا": "Swiss", "النمسا": "Austrian", "السويد": "Swedish", "النرويج": "Norwegian", "الدنمارك": "Danish",
-    "فنلندا": "Finnish", "أيرلندا": "Irish", "بولندا": "Polish", "رومانيا": "Romanian", "بلغاريا": "Bulgarian",
-    "اليونان": "Greek", "قبرص": "Cypriot", "صربيا": "Serbian", "البوسنة والهرسك": "Bosnian", "ألبانيا": "Albanian",
-    "أستراليا": "Australian", "نيوزيلندا": "New Zealander", "البرازيل": "Brazilian", "المكسيك": "Mexican",
-    "الأرجنتين": "Argentine", "كولومبيا": "Colombian", "فنزويلا": "Venezuelan", "بيرو": "Peruvian", "تشيلي": "Chilean",
+    "مصر": "Egypt", "الهند": "India", "الكويت": "Kuwait", "نيبال": "Nepal", "الجزائر": "Algeria",
+    "بنغلاديش": "Bangladesh", "باكستان": "Pakistan", "الفلبين": "Philippines", "كندا": "Canada", "لبنان": "Lebanon",
+    "الأردن": "Jordan", "سوريا": "Syria", "نيجيريا": "Nigeria", "ماليزيا": "Malaysia", "سيريلانكا": "Sri Lanka",
+    "سريلانكا": "Sri Lanka", "سيرا ليون": "Sierra Leone", "سيراليون": "Sierra Leone", "غانا": "Ghana",
+    "بوركينا فاسو": "Burkina Faso", "مالي": "Mali", "اندونيسيا": "Indonesia", "المملكة المتحدة": "United Kingdom",
+    "بريطانيا": "United Kingdom", "العراق": "Iraq", "الصومال": "Somalia", "معاملة كويتية": "Treated as Kuwaiti",
+    "كويتي": "Kuwait", "كويتية": "Kuwait", "فلسطين": "Palestine", "جورجيا": "Georgia", "تونس": "Tunisia",
+    "تشاد": "Chad", "الولايات المتحدة الامريكية": "United States", "الولايات المتحدة": "United States", "أمريكا": "United States",
+    "النيجر": "Niger", "الكاميرون": "Cameroon", "السودان": "Sudan", "السعودية": "Saudi Arabia",
+    "المملكة العربية السعودية": "Saudi Arabia", "إيران": "Iran", "أوغندا": "Uganda", "أثيوبيا": "Ethiopia",
+    "إثيوبيا": "Ethiopia", "افغانستان": "Afghanistan",
+    # دول تانية شائعة
+    "اليمن": "Yemen", "عمان": "Oman", "سلطنة عمان": "Oman", "البحرين": "Bahrain", "قطر": "Qatar",
+    "الإمارات": "United Arab Emirates", "الإمارات العربية المتحدة": "United Arab Emirates", "المغرب": "Morocco",
+    "ليبيا": "Libya", "موريتانيا": "Mauritania", "جيبوتي": "Djibouti", "جزر القمر": "Comoros", "إريتريا": "Eritrea",
+    "الصين": "China", "تركيا": "Turkey", "كينيا": "Kenya", "تنزانيا": "Tanzania", "رواندا": "Rwanda", "بوروندي": "Burundi",
+    "جنوب السودان": "South Sudan", "السنغال": "Senegal", "ساحل العاج": "Ivory Coast", "كوت ديفوار": "Ivory Coast",
+    "غينيا": "Guinea", "بنين": "Benin", "توغو": "Togo", "ليبيريا": "Liberia", "غامبيا": "Gambia", "الكونغو": "Congo",
+    "زيمبابوي": "Zimbabwe", "زامبيا": "Zambia", "ملاوي": "Malawi", "مدغشقر": "Madagascar", "موريشيوس": "Mauritius",
+    "جنوب أفريقيا": "South Africa", "فيتنام": "Vietnam", "تايلاند": "Thailand", "ميانمار": "Myanmar",
+    "كمبوديا": "Cambodia", "سنغافورة": "Singapore", "اليابان": "Japan", "كوريا الجنوبية": "South Korea", "بوتان": "Bhutan",
+    "المالديف": "Maldives", "أذربيجان": "Azerbaijan", "أرمينيا": "Armenia", "أوزبكستان": "Uzbekistan",
+    "كازاخستان": "Kazakhstan", "طاجيكستان": "Tajikistan", "قيرغيزستان": "Kyrgyzstan", "تركمانستان": "Turkmenistan",
+    "روسيا": "Russia", "أوكرانيا": "Ukraine", "فرنسا": "France", "ألمانيا": "Germany", "إيطاليا": "Italy",
+    "إسبانيا": "Spain", "البرتغال": "Portugal", "هولندا": "Netherlands", "بلجيكا": "Belgium", "سويسرا": "Switzerland",
+    "النمسا": "Austria", "السويد": "Sweden", "النرويج": "Norway", "الدنمارك": "Denmark", "فنلندا": "Finland",
+    "أيرلندا": "Ireland", "بولندا": "Poland", "رومانيا": "Romania", "بلغاريا": "Bulgaria", "اليونان": "Greece",
+    "قبرص": "Cyprus", "صربيا": "Serbia", "البوسنة والهرسك": "Bosnia and Herzegovina", "ألبانيا": "Albania",
+    "أستراليا": "Australia", "نيوزيلندا": "New Zealand", "البرازيل": "Brazil", "المكسيك": "Mexico",
+    "الأرجنتين": "Argentina", "كولومبيا": "Colombia", "فنزويلا": "Venezuela", "بيرو": "Peru", "تشيلي": "Chile",
     "بدون": "Stateless (Bedoon)", "غير محدد الجنسية": "Stateless",
 }
 
@@ -137,7 +142,28 @@ PROFESSIONS = {
     "نادل مقهى": "Café Waiter",
 }
 
-DEFAULTS = {"nationality": NATIONALITIES, "profession": PROFESSIONS}
+# قواميس عقد العمل بتغلب على اللي هنا، علشان العقد والتقرير يكتبوا نفس الترجمة
+DEFAULTS = {
+    "nationality": {**NATIONALITIES, **docx_engine.NATIONALITY_EN, **contracts.NATIONALITY_EN_EXTRA},
+    "profession": {**PROFESSIONS, **docx_engine.PROFESSION_EN, **contracts.PROFESSION_EN_EXTRA},
+}
+
+
+def norm(v):
+    """نفس norm في الواجهة: الهمزات والتاء المربوطة والألف المقصورة والتشكيل."""
+    v = re.sub(r"[أإآ]", "ا", str(v or "").lower())
+    return re.sub(r"[ً-ْ]", "", v.replace("ة", "ه").replace("ى", "ي")).strip()
+
+
+def lookup(tr, kind, value):
+    """الترجمة الإنجليزية لقيمة من قاموس merged() (بعد توحيد الكتابة) أو None."""
+    if not value:
+        return None
+    d = tr.get(kind) or {}
+    if value in d:
+        return d[value] or None
+    n = norm(value)
+    return next((en for ar, en in d.items() if en and norm(ar) == n), None)
 
 
 def overrides(s):
