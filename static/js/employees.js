@@ -20,7 +20,7 @@ const EMP_COLUMNS = [
 ];
 
 // الفلاتر اللي بتاخد أكتر من اختيار (الموظف بيظهر لو طابق أي اختيار في الفلتر الواحد، ولازم يطابق كل الفلاتر)
-const EMP_MULTI = ['company', 'project', 'status', 'stage', 'nationality', 'costCenter', 'profession'];
+const EMP_MULTI = ['company', 'project', 'agency', 'status', 'stage', 'nationality', 'costCenter', 'profession'];
 function filteredEmployees(f = UI.emp) {
   const q = norm(f.q);
   const L = Object.fromEntries(EMP_MULTI.map(k => [k, asList(f[k])]));
@@ -29,6 +29,8 @@ function filteredEmployees(f = UI.emp) {
     if (L.company.length && !L.company.some(c => empInCompany(e, c))) return false;
     if (f.link && empLinkIn(e, L.company) !== f.link) return false;
     if (L.project.length && !L.project.some(p => p === '__none' ? !primaryAff(e).projectId : (e.affiliations || []).some(a => a.projectId === p))) return false;
+    if (L.agency.length && !L.agency.includes((projectAgency(empProjectId(e)) || {}).id || '__none')) return false;
+    if (f.outside && !empOutsideAgency(e)) return false;
     if (L.status.length && !L.status.includes(e.employmentStatus || 'active')) return false;
     if (L.stage.length && !L.stage.some(x => x === '__none' ? !e.govStage : x === '__note' ? !!e.govStageNote : e.govStage === x)) return false;
     if (L.nationality.length && !L.nationality.includes(e.nationality || '—')) return false;
@@ -67,6 +69,7 @@ function empMsOptions(key, companies = []) {
   if (key === 'company') return scopedCompanies().map(c => ({ v: c.id, l: companyName(c.id) }));
   if (key === 'project') return [{ v: '__none', l: t('بدون مشروع') }, ...scopedProjects().filter(p => !companies.length || companies.includes(p.companyId))
     .map(p => ({ v: p.id, l: projectName(p.id) + (companies.length === 1 ? '' : ' — ' + companyName(p.companyId)) }))];
+  if (key === 'agency') return [{ v: '__none', l: t('بدون وكالة') }, ...(STATE.agencies || []).map(a => ({ v: a.id, l: agencyName(a) }))];
   if (key === 'status') return Object.entries(EMP_STATUS_LABELS).map(([k, v]) => ({ v: k, l: LANG === 'en' ? v.en : v.ar }));
   if (key === 'stage') return [{ v: '__none', l: t('بدون معاملة') }, { v: '__note', l: t('عليها ملاحظة تعطّل') }, ...GOV_STAGES.map(g => ({ v: g.id, l: g.dot + ' ' + t(g.label) }))];
   if (key === 'nationality') return counted(e => e.nationality, natLabel);
@@ -74,7 +77,7 @@ function empMsOptions(key, companies = []) {
   if (key === 'costCenter') return (STATE.costCenters || []).map(c => ({ v: c.name, l: ccLabel(c.name) }));
   return [];
 }
-const EMP_MS_LABELS = { company: ['الشركة', '— كل الشركات —'], project: ['المشروع', '— كل المشاريع —'], status: ['الحالة', '— كل الحالات —'],
+const EMP_MS_LABELS = { company: ['الشركة', '— كل الشركات —'], project: ['العقد / المشروع', '— كل العقود والمشاريع —'], agency: ['الوكالة', '— كل الوكالات —'], status: ['الحالة', '— كل الحالات —'],
   stage: ['المعاملة', '— كل مراحل المعاملات —'], nationality: ['الجنسية', '— كل الجنسيات —'], costCenter: ['مركز التكلفة', '— كل مراكز التكلفة —'],
   profession: ['المهنة', '— كل المهن —'] };
 function empMsField(prefix, key, sel, companies) { const [title, all] = EMP_MS_LABELS[key]; return msField(prefix + key, title, all, empMsOptions(key, companies), sel); }
@@ -123,6 +126,7 @@ function renderEmployees() {
       <select id="f-tierfield">${opt('any', t('أي مستند'), f.tierField === 'any')}${EMP_DATE_FIELDS.map(x => opt(x.key, t(x.label), x.key === f.tierField)).join('')}</select>
       <select id="f-tier">${opt('', t('— كل المستويات —'), !f.tier)}${TIER_FILTERS.map(k => opt(k, t(TIERS[k].label), k === f.tier)).join('')}</select>
       <label class="chip clickable ${f.driver ? 'on' : ''}"><input type="checkbox" id="f-driver" ${f.driver ? 'checked' : ''} hidden>🚚 ${t('السائقين فقط')}</label>
+      ${(STATE.agencies || []).length ? `<label class="chip clickable ${f.outside ? 'on' : ''}" title="${esc(t('مكان الشغل الفعلي (مركز التكلفة) مش من وكالة العقد اللي مسجّل عليه'))}"><input type="checkbox" id="f-outside" ${f.outside ? 'checked' : ''} hidden>⚠️ ${t('برّه وكالة عقده')}</label>` : ''}
       <button class="btn sm ghost" id="f-clear">✕ ${t('مسح الفلاتر')}</button>
     </div>
     ${linkBar}
@@ -175,7 +179,8 @@ function renderEmployees() {
   $('#f-tierfield').onchange = e => upd({ tierField: e.target.value });
   $('#f-tier').onchange = e => upd({ tier: e.target.value });
   $('#f-driver').onchange = e => upd({ driver: e.target.checked });
-  $('#f-clear').onclick = () => { msClose(); upd({ q: '', company: [], link: '', project: [], status: [], stage: [], nationality: [], costCenter: [], profession: [], tier: '', tierField: 'any', driver: false }); };
+  const fo = $('#f-outside'); if (fo) fo.onchange = e => upd({ outside: e.target.checked });
+  $('#f-clear').onclick = () => { msClose(); upd({ q: '', company: [], link: '', project: [], agency: [], status: [], stage: [], nationality: [], costCenter: [], profession: [], tier: '', tierField: 'any', driver: false, outside: false }); };
   $$('#emp-table th[data-sort]').forEach(th => th.onclick = () => { const k = th.dataset.sort; UI.emp.dir = UI.emp.sort === k ? -UI.emp.dir : 1; UI.emp.sort = k; saveUiStateToLocalStorage(); render(); });
   $('#pg-prev').onclick = () => upd({ page: f.page - 1 });
   $('#pg-next').onclick = () => upd({ page: f.page + 1 });
@@ -243,6 +248,11 @@ const EMP_REPORT_COLS = [
   { k: 'serviceEndDate', g: 'work', l: 'تاريخ انتهاء الخدمة', date: true, plain: true },
   { k: 'serviceEndReason', g: 'work', l: 'سبب انتهاء الخدمة', v: e => t(e.serviceEndReason) },
   { k: 'contractType', g: 'work', l: 'نوع العقد', v: e => t(e.contractType) },
+  { k: 'agency', g: 'work', l: 'الوكالة', v: e => agencyName(projectAgency(empProjectId(e))) },
+  { k: 'contractNo', g: 'work', l: 'رقم العقد', v: e => (IDX.project[empProjectId(e)] || {}).contractNo, num: true },
+  { k: 'licenseEnd', g: 'work', l: 'نهاية العقد / الترخيص', v: e => fmtDate((IDX.project[empProjectId(e)] || {}).expiryDate), num: true },
+  { k: 'actualCompany', g: 'work', l: 'شغال فعليًا في', v: e => companyName(costCenterCompanyId(e.costCenter)) },
+  { k: 'outsideAgency', g: 'work', l: 'برّه وكالة عقده', v: e => (empOutsideAgency(e) ? '⚠️' : '') },
   { k: 'fileNo', g: 'work', l: 'رقم الملف', v: e => e.fileNo, num: true },
   { k: 'actualWorkplace', g: 'work', l: 'مكان العمل الفعلي', v: e => e.actualWorkplace },
   { k: 'salary', g: 'work', l: 'الراتب', money: true, perm: 'sensitive.salary' },
@@ -273,7 +283,7 @@ const EMP_REPORT_PRESETS = [
   { id: 'gov', l: 'المعاملات الحكومية', cols: ['name', 'id', 'company', 'govStage', 'govStageNote', 'govStageResponsible', 'govStageStartDate', 'residencyExp'], group: 'govStage' },
   { id: 'contact', l: 'بيانات الاتصال', cols: ['name', 'id', 'company', 'phone', 'homePhone', 'address'] },
 ];
-const EMP_REPORT_GROUPBY = [['', 'بدون تجميع'], ['company', 'الشركة'], ['project', 'المشروع'], ['costCenter', 'مركز التكلفة'], ['nationality', 'الجنسية'], ['status', 'الحالة الوظيفية'], ['govStage', 'مرحلة المعاملة']];
+const EMP_REPORT_GROUPBY = [['', 'بدون تجميع'], ['company', 'الشركة'], ['project', 'العقد / المشروع'], ['agency', 'الوكالة'], ['costCenter', 'مركز التكلفة'], ['nationality', 'الجنسية'], ['status', 'الحالة الوظيفية'], ['govStage', 'مرحلة المعاملة']];
 const EMP_REPORT_SORTS = ['name', 'id', 'company', 'nationality', 'residencyExp', 'workPermitExp', 'passportExp', 'dateOfHire', 'salary', 'urgency'];
 
 /** مبلغ من غير العملة (العملة في عنوان العمود) */
@@ -299,6 +309,7 @@ function empGroupKey(by, e) {
     const p = primaryAff(e).projectId, pr = IDX.project[p];
     return [p || '', p ? projectName(p) + (pr && pr.fileNumber ? ` — ${t('رقم الملف')} ${pr.fileNumber}` : '') : t('بدون مشروع')];
   }
+  if (by === 'agency') { const a = projectAgency(empProjectId(e)); return [a ? a.id : '', a ? agencyName(a) : t('بدون وكالة')]; }
   if (by === 'costCenter') return [e.costCenter || '', ccLabel(e.costCenter) || t('بدون مركز تكلفة')];
   if (by === 'nationality') return [e.nationality || '', personNat(e) || '—'];
   if (by === 'status') { const s = e.employmentStatus || 'active'; return [s, EMP_REPORT_COLS.find(c => c.k === 'status').v(e)]; }
@@ -310,7 +321,7 @@ function empGroupKey(by, e) {
 function openEmployeeReportModal(selected = []) {
   const R = UI.report = Object.assign({ preset: 'general', cols: EMP_REPORT_PRESETS[0].cols, groupBy: '', sort: 'name', orientation: 'auto', summary: true, sign: false, colors: true, lang: LANG }, UI.report || {});
   const F = { ...UI.emp, tier: tierFilterValue(UI.emp.tier) };   // الفلاتر: نسخة من فلاتر الشاشة (مابتغيّرهاش)
-  const RF = Object.fromEntries(['company', 'project', 'status', 'costCenter', 'stage', 'profession'].map(k => [k, asList(F[k])]));
+  const RF = Object.fromEntries(['company', 'project', 'agency', 'status', 'costCenter', 'stage', 'profession'].map(k => [k, asList(F[k])]));
   let scope = selected.length ? 'selected' : 'filters';
   const cols = empReportCols();
   const presets = EMP_REPORT_PRESETS.filter(p => !p.perm || can(p.perm));
@@ -334,11 +345,12 @@ function openEmployeeReportModal(selected = []) {
         ${selected.length ? `<div class="row" style="margin-bottom:8px"><label class="check"><input type="radio" name="rb-scope" value="selected" checked> ${t('المحددين فقط')} (${selected.length})</label>
           <label class="check"><input type="radio" name="rb-scope" value="filters"> ${t('حسب الفلاتر')}</label></div>` : ''}
         <div class="form" id="rb-filters">
-          ${['company', 'project', 'status', 'costCenter', 'stage', 'profession'].map(k => `<label>${t(EMP_MS_LABELS[k][0])}${empMsField('rb.', k, RF[k])}</label>`).join('')}
+          ${['company', 'project', 'agency', 'status', 'costCenter', 'stage', 'profession'].map(k => `<label>${t(EMP_MS_LABELS[k][0])}${empMsField('rb.', k, RF[k])}</label>`).join('')}
           <label>${t('المستند')}<select name="tierField">${opt('any', t('أي مستند'), F.tierField === 'any')}${EMP_DATE_FIELDS.map(x => opt(x.key, t(x.label), x.key === F.tierField)).join('')}</select></label>
           <label>${t('المستوى')}<select name="tier">${opt('', t('— كل المستويات —'), !F.tier)}${TIER_FILTERS.map(k => opt(k, t(TIERS[k].label), k === F.tier)).join('')}</select></label>
           <label>${t('بحث')}<input name="q" value="${esc(F.q || '')}" placeholder="${esc(t('الاسم، الرقم المدني، الجواز…'))}"></label>
           <label class="check"><input type="checkbox" name="driver" ${F.driver ? 'checked' : ''}> 🚚 ${t('السائقين فقط')}</label>
+          <label class="check"><input type="checkbox" name="outside" ${F.outside ? 'checked' : ''}> ⚠️ ${t('برّه وكالة عقده')}</label>
           <div class="full rb-nat">
             <div class="rb-nat-head">${t('الجنسيات')}:
               ${[['', 'كل الجنسيات'], ['in', '✓ المحددة فقط'], ['out', '✕ كل الجنسيات ماعدا المحددة']].map(([k, l]) => `<span class="chip clickable" data-natmode="${k}">${t(l)}</span>`).join('')}
@@ -481,7 +493,9 @@ function printEmployeeReport(list, cols, { title, filters, selectedCount }) {
     const f = filters, sep = LANG === 'en' ? ', ' : '، ';
     const list = (k, label, fn) => { const v = asList(f[k]); if (v.length) crit.push(`${t(label)}: ${esc(v.map(fn).join(sep))}`); };
     list('company', 'الشركة', companyName);
-    list('project', 'المشروع', p => p === '__none' ? t('بدون مشروع') : projectName(p));
+    list('project', 'العقد / المشروع', p => p === '__none' ? t('بدون مشروع') : projectName(p));
+    list('agency', 'الوكالة', a => a === '__none' ? t('بدون وكالة') : agencyName(agencyById(a)));
+    if (f.outside) crit.push(t('برّه وكالة عقده'));
     list('status', 'الحالة', x => (EMP_STATUS_LABELS[x] || {})[LANG === 'en' ? 'en' : 'ar'] || x);
     list('nationality', 'الجنسية', natLabel);
     if ((f.natMode === 'in' || f.natMode === 'out') && f.nats && f.nats.length)
@@ -702,6 +716,8 @@ async function openProfileCard(id, tab = 'info') {
         ${field('مرجع إضافي', esc(e.dpId))}
       </div>
       ${isKuwaitiStaff(e) ? kuwaitiInfoHtml(e, field) : ''}
+      <h4>${t('الكفالة والعقد ومكان الشغل')}</h4>
+      ${empContractBlock(e)}
       <h4>${t('الشركات والمشاريع')}</h4>
       ${costCenterCompanyId(e.costCenter) && !(e.affiliations || []).some(a => a.companyId === costCenterCompanyId(e.costCenter))
         ? `<div class="notice" style="margin:4px 0">🏭 ${t('شغال فعليًا في')}: <b>${esc(companyName(costCenterCompanyId(e.costCenter)) || '—')}</b> <span class="small">(${t('مركز التكلفة')}: ${esc(e.costCenter)})</span></div>` : ''}
@@ -899,6 +915,19 @@ function openOfficialFormModal(form, kind, id) {
       if (action === 'إنهاء خدمة' && extra.setStatus) reload().catch(() => {});   // الحالة الوظيفية اتغيّرت على السيرفر
     } catch (e) { toast(e.message, 'err'); b.disabled = false; }
   };
+}
+
+/* ---------- بطاقة الموظف: الكفيل · العقد / المشروع المسجّل عليه (ووكالته) · مكان الشغل الفعلي ---------- */
+function empContractBlock(e) {
+  const pid = empProjectId(e), p = IDX.project[pid], ccCo = costCenterCompanyId(e.costCenter);
+  const beyond = beyondLicense(e, pid, ['residencyExp', 'workPermitExp']);
+  return `<div class="emp-license">
+      <div><span>${t('الكفيل')}</span><b>${esc(companyName(empCompanyId(e)) || '—')}</b></div>
+      <div><span>${t('العقد / المشروع')}</span><b>${p ? esc(projectName(p.id)) : '—'}</b>
+        ${p ? `<div class="small muted">${esc(projectSummary(p))}</div>${p.expiryDate ? `<div class="small">${t('ينتهي')} ${datePill(p.expiryDate)}</div>` : ''}` : ''}</div>
+      <div><span>${t('شغال فعليًا')}</span><b>${esc(e.costCenter || '—')}</b>${ccCo ? `<div class="small muted">${esc(companyName(ccCo))}</div>` : ''}
+        ${empOutsideAgency(e) ? `<div class="small" style="color:var(--orange)">⚠️ ${t('برّه وكالة عقده')}</div>` : ''}</div></div>
+    ${beyond.length ? `<div class="notice warn" style="margin-top:8px">⚠️ ${beyond.map(k => t(k === 'residencyExp' ? 'الإقامة' : 'إذن العمل')).join(' / ')} ${t('بعد نهاية العقد اللي عليه')} (${fmtDate(p.expiryDate)}) — ${t('لازم العقد يتجدّد قبلها.')}</div>` : ''}`;
 }
 
 /* ---------- الحالة الوظيفية: في الخدمة / في فترة الإنذار / مستقيل / إنهاء خدمات / قيد الاستكمال ---------- */

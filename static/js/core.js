@@ -220,6 +220,32 @@ function vtFind(kind, v) { return v ? vtMap(kind)[norm(v)] || (window.I18N || {}
 function vt(kind, v) { return LANG === 'en' && v ? vtFind(kind, v) || v : v; }
 function natLabel(v) { return vt('nationality', v); }
 function profLabel(v) { return vt('profession', v); }
+/* ---------- الوكالات والعقود والمشاريع الحكومية ----------
+   الموظف (والسيارة) ليه: الكفيل (الشركة) · العقد / المشروع المسجّل عليه ← وكالته · مكان الشغل الفعلي (مركز التكلفة).
+   «برّه وكالة عقده» = مركز التكلفة مش من مراكز وكالة العقد (agencies.costCenterIds). */
+const PROJECT_KINDS = { main: 'ترخيص رئيسي (أهلي)', gov: 'عقد حكومي' };
+const VEHICLE_TYPES = { private: 'خصوصي', truck: 'شاحنة', pickup: 'شاحنة نصف', tanker: 'صهريج', bus: 'حافلة', motorcycle: 'دراجة نارية', equipment: 'معدات', other: 'أخرى' };
+function agencyById(id) { return (STATE.agencies || []).find(a => a.id === id) || null; }
+function agencyName(a) { return a ? (LANG === 'en' && a.nameEn ? a.nameEn : a.nameAr) : ''; }
+function projectAgency(pid) { const p = IDX.project[pid]; return p && p.agencyId ? agencyById(p.agencyId) : null; }
+function agencyCcNames(a) { return (a.costCenterIds || []).map(id => (STATE.costCenters.find(c => c.id === id) || {}).name).filter(Boolean); }
+function outsideAgency(pid, cc) { const a = projectAgency(pid); return !!(a && cc && !agencyCcNames(a).includes(cc)); }
+function empProjectId(e) { return primaryAff(e).projectId || null; }
+function empOutsideAgency(e) { return outsideAgency(empProjectId(e), e.costCenter); }
+function projectKindLabel(p) { return p && p.kind ? t(PROJECT_KINDS[p.kind]) : t('مشروع'); }
+/** الترتيب: الترخيص الرئيسي، وبعدين العقود الحكومية بترتيب الوكالة، وبعدين الباقي */
+function projectSortKey(p) { const a = p.agencyId ? agencyById(p.agencyId) : null; return `${p.kind === 'main' ? 0 : p.kind === 'gov' ? 1 : 2}|${String((a && a.position) || 0).padStart(3, '0')}|${projectName(p.id)}`; }
+/** «عقد حكومي · Superior · رقم العقد 19053598» */
+function projectSummary(p) {
+  if (!p) return '';
+  const a = p.agencyId && agencyById(p.agencyId);
+  return [projectKindLabel(p), a && agencyName(a), p.contractNo && `${t('رقم العقد')} ${p.contractNo}`].filter(Boolean).join(' · ');
+}
+/** الإقامة / إذن العمل (أو تأمين العربية / دفترها) بعد نهاية العقد المسجّل عليه */
+function beyondLicense(obj, pid, keys) {
+  const p = IDX.project[pid];
+  return p && p.expiryDate ? keys.filter(k => obj[k] && obj[k] > p.expiryDate) : [];
+}
 /** الجنسية / المهنة بلغة العرض: خانة «الجنسية (إنجليزي)» / «المهنة (إنجليزي)» في البطاقة الأول، وبعدين القاموس */
 function personNat(p) { return LANG === 'en' && p && p.nationalityEn ? p.nationalityEn : natLabel(p && p.nationality); }
 function personProf(p) { return LANG === 'en' && p && p.professionEn ? p.professionEn : profLabel(p && p.profession); }
@@ -773,11 +799,11 @@ async function restoreBackup() {
    UI STATE — حفظ الفلاتر والصفحة
    ===================================================================== */
 let UI = Object.assign({
-  emp: { q: '', company: [], link: '', project: [], status: [], stage: [], nationality: [], costCenter: [], profession: [], tier: '', tierField: 'any', driver: false, sort: 'name', dir: 1, page: 1, perPage: 50 },
+  emp: { q: '', company: [], link: '', project: [], agency: [], status: [], stage: [], nationality: [], costCenter: [], profession: [], tier: '', tierField: 'any', driver: false, outside: false, sort: 'name', dir: 1, page: 1, perPage: 50 },
   cand: { q: '', source: '', stage: '', company: '' },
   log: { tab: 'history', company: '', category: '', q: '' },
-  vehicles: { q: '' },
-  co: { tab: '', projQ: '', projCompany: '' },
+  vehicles: { q: '', project: '', agency: '', type: '', cc: '' },
+  co: { tab: '', projQ: '', projCompany: '', projAgency: '' },
   custody: { tab: 'list', q: '', status: '', type: '', custodian: '' },
 }, lsJson('mv_uiState', {}));
 const saveUiStateToLocalStorage = debounce(() => lsSet('mv_uiState', JSON.stringify(UI)), 300);
@@ -849,7 +875,14 @@ function trackedAlertItems(maxDays = 90) {
       if (d) push({ kind: 'company', refId: c.id, name: s.nameAr, what: 'بطاقة المفوّض المدنية', date: d.expiryDate });
     }
   }
-  for (const p of STATE.projects) if (companyInScope(p.companyId)) push({ kind: 'project', refId: p.companyId, name: projectName(p.id), what: 'المشروع', date: p.expiryDate });
+  // العقد / المشروع: انتهاؤه، ومعاه سطر واحد بعدد الموظفين والسيارات اللي إقامتهم / دفترهم بعد نهايته (لازم يتجدّد قبلها)
+  for (const p of STATE.projects) if (companyInScope(p.companyId)) {
+    push({ kind: 'project', refId: p.companyId, name: projectName(p.id), what: 'العقد / المشروع', date: p.expiryDate });
+    const ne = scopedEmployees().filter(e => !empEnded(e) && empProjectId(e) === p.id && beyondLicense(e, p.id, ['residencyExp', 'workPermitExp']).length).length;
+    const nv = STATE.vehicles.filter(v => v.projectId === p.id && beyondLicense(v, p.id, ['insuranceExpiry', 'govLicenseExpiry']).length).length;
+    if (ne) push({ kind: 'project', refId: p.companyId, name: projectName(p.id), what: `${ne} ${t('موظف إقامته أو إذن عمله بعد نهاية العقد')}`, date: p.expiryDate });
+    if (nv) push({ kind: 'project', refId: p.companyId, name: projectName(p.id), what: `${nv} ${t('سيارة تأمينها أو دفترها بعد نهاية العقد')}`, date: p.expiryDate });
+  }
   for (const v of STATE.vehicles) if (companyInScope(v.companyId)) {
     push({ kind: 'vehicle', refId: v.id, name: v.plate, what: 'تأمين السيارة', date: v.insuranceExpiry });
     push({ kind: 'vehicle', refId: v.id, name: v.plate, what: 'دفتر السيارة', date: v.govLicenseExpiry });

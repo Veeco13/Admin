@@ -290,6 +290,10 @@ table.cu-lines tr.cu-closed td { background: var(--green-soft); }
 .cu-invoice { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); }
 .cu-badge { display: inline-block; min-width: 18px; padding: 0 5px; margin-inline-start: 4px; border-radius: 9px; background: var(--orange); color: #fff; font-size: 11px; line-height: 18px; text-align: center; }
 td.nowrap { white-space: nowrap; }
+.emp-license { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
+.emp-license > div { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }
+.emp-license span { display: block; font-size: 11px; color: var(--muted); }
+table.data td.out, table.data td.warn-cell { background: var(--orange-soft); }
 .cu-pick-list label.cu-busy { opacity: .6; cursor: not-allowed; }
 .cu-lang select { border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 8px; padding: 4px 8px; font: inherit; }
 /* قائمة الاختيار المتعدد في الفلاتر (msField في core.js) */

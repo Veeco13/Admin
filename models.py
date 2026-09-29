@@ -72,9 +72,13 @@ class Project(Base):
     companyId: Mapped[Optional[str]] = col("company_id", ID, fk("companies.id"), index=True)
     nameAr: Mapped[str] = col("name_ar", NAME, nullable=False)
     nameEn: Mapped[Optional[str]] = col("name_en", NAME)
-    fileNumber: Mapped[Optional[str]] = col("file_number", SHORT, index=True)
+    fileNumber: Mapped[Optional[str]] = col("file_number", SHORT, index=True)      # الرقم المدني للترخيص
     laborOffice: Mapped[Optional[str]] = col("labor_office", NAME)
-    expiryDate: Mapped[Optional[date]] = col("expiry_date", Date)
+    expiryDate: Mapped[Optional[date]] = col("expiry_date", Date)                   # نهاية الترخيص
+    kind: Mapped[Optional[str]] = col("kind", String(20))                           # main ترخيص رئيسي | gov عقد حكومي
+    contractNo: Mapped[Optional[str]] = col("contract_no", SHORT)                   # رقم العقد الحكومي
+    agencyId: Mapped[Optional[str]] = col("agency_id", ID, fk("agencies.id"))       # الوكالة اللي العقد تابع لها
+    startDate: Mapped[Optional[date]] = col("start_date", Date)                     # بداية الترخيص
 
 
 class CostCenter(Base):
@@ -97,6 +101,9 @@ class Vehicle(Base):
     insuranceExpiry: Mapped[Optional[date]] = col("insurance_expiry", Date)
     govLicenseExpiry: Mapped[Optional[date]] = col("gov_license_expiry", Date)
     notes: Mapped[Optional[str]] = col("notes", TEXT)
+    projectId: Mapped[Optional[str]] = col("project_id", ID, fk("projects.id"))     # العقد / المشروع المسجّلة عليه
+    costCenter: Mapped[Optional[str]] = col("cost_center", NAME)                    # مكان الشغل الفعلي (بالاسم زي الموظف)
+    vehicleType: Mapped[Optional[str]] = col("vehicle_type", String(20))            # نوع المركبة (تصنيف الهيئة)
 
 
 class Employee(Base):
@@ -467,3 +474,27 @@ class Invoice(Base):
     approvedBy: Mapped[Optional[str]] = col("approved_by", NAME)
     createdBy: Mapped[Optional[str]] = col("created_by", NAME)
     createdAt: Mapped[Optional[datetime]] = col("created_at", DateTime)
+
+
+# ---------------------------------------------------------------------------
+# الوكالات (الشركة وكيلة لشركات تانية والعقود الحكومية تابعة للوكالات)
+# ---------------------------------------------------------------------------
+class Agency(Base):
+    """وكالة للشركة (أبراج انرجي وكيلة لـ Superior و Scomi): العقود الحكومية بتتبعها، ومراكز التكلفة التابعة لها
+    بتحدد مين «برّه وكالة عقده» (للتقارير بس)."""
+    __tablename__ = "agencies"
+    id: Mapped[str] = col("id", ID, primary_key=True)
+    companyId: Mapped[Optional[str]] = col("company_id", ID, fk("companies.id"), index=True)
+    nameAr: Mapped[str] = col("name_ar", NAME, nullable=False)
+    nameEn: Mapped[Optional[str]] = col("name_en", NAME)
+    position: Mapped[int] = col("position", Integer, nullable=False, default=0)
+
+
+class AgencyCostCenter(Base):
+    __tablename__ = "agency_cost_centers"
+    agencyId: Mapped[str] = col("agency_id", ID, fk("agencies.id"), primary_key=True)
+    costCenterId: Mapped[str] = col("cost_center_id", ID, fk("cost_centers.id"), primary_key=True)
+
+
+# النسخ الاحتياطي: العهد والفواتير والوكالات كمان
+ALL_MODELS.extend([FeeItem, Custody, CustodyLine, Invoice, Agency, AgencyCostCenter])

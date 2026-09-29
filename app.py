@@ -273,6 +273,11 @@ def api_state():
                      else {"custodies": [], "invoices": [], "feeItems": [], "custodySettings": None})
         state["valueTranslations"] = value_i18n.merged(s)       # الجنسيات والمهن للتقارير الإنجليزية
         state["exportPasswordSet"] = bool(u.isAdmin and db.get_meta(s, EXPORT_KEY))
+        links = {}
+        for r in s.scalars(select(M.AgencyCostCenter)):
+            links.setdefault(r.agencyId, []).append(r.costCenterId)
+        state["agencies"] = [{**db.to_dict(a), "costCenterIds": links.get(a.id, [])}
+                             for a in s.scalars(select(M.Agency).order_by(M.Agency.position, M.Agency.nameAr))]
         for cc in state.get("costCenters", []):                   # رمز المركز بيتحدد مرة واحدة ومايتغيّرش
             cc["codeLocked"] = bool(cc.get("code"))
     if not u.can("custody.all"):                                  # عمليات عهد المستخدمين التانيين مش ليه
@@ -963,6 +968,12 @@ def delete_company(cid):
         if pids:
             s.query(M.EmployeeAffiliation).filter(M.EmployeeAffiliation.projectId.in_(pids)) \
                 .update({"projectId": None}, synchronize_session=False)
+            s.query(M.Vehicle).filter(M.Vehicle.projectId.in_(pids)).update({"projectId": None}, synchronize_session=False)
+        aids = [a.id for a in s.scalars(select(M.Agency).where(M.Agency.companyId == cid))]
+        if aids:
+            s.query(M.Project).filter(M.Project.agencyId.in_(aids)).update({"agencyId": None}, synchronize_session=False)
+            s.query(M.AgencyCostCenter).filter(M.AgencyCostCenter.agencyId.in_(aids)).delete(synchronize_session=False)
+            s.query(M.Agency).filter(M.Agency.id.in_(aids)).delete(synchronize_session=False)
         for model in (M.Project, M.Signatory, M.CompanyDoc, M.UserCompany):
             s.query(model).filter(model.companyId == cid).delete()
         s.flush()
@@ -1200,6 +1211,22 @@ def get_signature(civil_id):
     return resp
 
 
+PROJECT_KINDS = ("main", "gov")
+
+
+def _project_fields(s, d, company_id):
+    """النوع (ترخيص رئيسي / عقد حكومي)، والوكالة ورقم العقد للعقد الحكومي بس — والوكالة لازم تبقى من نفس الشركة."""
+    if "kind" in d and d["kind"] not in PROJECT_KINDS:
+        d["kind"] = None
+    if d.get("kind") != "gov" and "kind" in d:
+        d["agencyId"], d["contractNo"] = None, None
+    if d.get("agencyId"):
+        a = s.get(M.Agency, d["agencyId"])
+        if a is None or a.companyId != company_id:
+            return "الوكالة مش تبع الشركة دي"
+    return None
+
+
 @app.post("/api/projects")
 @require("companies.edit")
 def create_project():
@@ -1210,6 +1237,9 @@ def create_project():
         return forbidden(OUT_OF_SCOPE)
     d["id"] = db.new_id("pr")
     with db.session_scope() as s:
+        msg = _project_fields(s, d, d["companyId"])
+        if msg:
+            return err(msg)
         s.add(db.build(M.Project, d))
         db.log_company_history(s, d["companyId"], "project_added", f"إضافة مشروع: {d['nameAr']}", uname())
     return jsonify({"ok": True, "id": d["id"]})
@@ -1226,6 +1256,9 @@ def update_project(pid):
         if not me().company_ok(p.companyId) or ("companyId" in d and not me().company_ok(d["companyId"])):
             return forbidden(OUT_OF_SCOPE)
         old_exp = db.ser(p.expiryDate)
+        msg = _project_fields(s, d, d.get("companyId") or p.companyId)
+        if msg:
+            return err(msg)
         db.apply(p, d)
         if p.expiryDate and db.ser(p.expiryDate) != old_exp:
             db.log_company_history(s, p.companyId, "project_renewed",
@@ -1241,6 +1274,7 @@ def delete_project(pid):
         if p and not me().company_ok(p.companyId):
             return forbidden(OUT_OF_SCOPE)
         s.query(M.EmployeeAffiliation).filter(M.EmployeeAffiliation.projectId == pid).update({"projectId": None})
+        s.query(M.Vehicle).filter(M.Vehicle.projectId == pid).update({"projectId": None})
         s.flush()
         p = s.get(M.Project, pid)
         if p:
@@ -1265,6 +1299,21 @@ def save_vehicle(vid=None):
             return forbidden("اختار شركة السيارة من القائمة")
         if s.scalar(select(M.Vehicle).where(M.Vehicle.plate == plate, M.Vehicle.id != (vid or ""))):
             return err(f"رقم اللوحة {plate} مسجّل بالفعل", 409, block=True)
+        if d.get("projectId"):
+            p = s.get(M.Project, d["projectId"])
+            if p is None:
+                return err("العقد / المشروع غير موجود")
+            cid = d["companyId"] if "companyId" in d else (old.companyId if old else None)
+            if (cid or None) != p.companyId:      # العقد تبع الشركة اللي العربية مسجّلة باسمها بس
+                return err("العقد / المشروع ده تبع شركة تانية — اختار الشركة اللي العربية مسجّلة باسمها الأول")
+        if "costCenter" in d:
+            d["costCenter"] = d["costCenter"] or None
+            if d["costCenter"] and not s.scalar(select(M.CostCenter).where(M.CostCenter.name == d["costCenter"])):
+                return err("مركز التكلفة غير موجود")
+        if "vehicleType" in d and d["vehicleType"] not in VEHICLE_TYPES:
+            d["vehicleType"] = None
+        if "projectId" in d:
+            d["projectId"] = d["projectId"] or None
         if vid:
             v = s.get(M.Vehicle, vid)
             if not v:
@@ -1276,6 +1325,61 @@ def save_vehicle(vid=None):
             s.add(db.build(M.Vehicle, d))
             db.log_audit(s, "vehicle_add", f"إضافة سيارة: {plate}", uname())
     return jsonify({"ok": True, "id": vid})
+
+
+VEHICLE_TYPES = ("private", "truck", "pickup", "tanker", "bus", "motorcycle", "equipment", "other")
+
+
+# ---------------------------------------------------------------------------
+# الوكالات: {companyId, nameAr, nameEn, costCenterIds: [...]}
+# ---------------------------------------------------------------------------
+@app.post("/api/agencies")
+@app.put("/api/agencies/<aid>")
+@require("companies.edit")
+def save_agency(aid=None):
+    d = body()
+    name = (d.get("nameAr") or "").strip()
+    if not name:
+        return err("اسم الوكالة مطلوب")
+    with db.session_scope() as s:
+        a = s.get(M.Agency, aid) if aid else None
+        if aid and a is None:
+            return err("غير موجود", 404)
+        cid = a.companyId if a is not None else d.get("companyId")
+        if not cid or s.get(M.Company, cid) is None:
+            return err("الشركة مطلوبة")
+        if not me().company_ok(cid):
+            return forbidden(OUT_OF_SCOPE)
+        if a is None:
+            n = s.scalar(select(func.count()).select_from(M.Agency).where(M.Agency.companyId == cid)) or 0
+            a = M.Agency(id=db.new_id("ag"), companyId=cid, position=n + 1, nameAr=name)
+            s.add(a)
+        a.nameAr, a.nameEn = name, (d.get("nameEn") or "").strip() or None
+        s.flush()
+        if "costCenterIds" in d:                     # مراكز التكلفة التابعة ليها (المراكز نفسها مابتتغيّرش)
+            s.query(M.AgencyCostCenter).filter(M.AgencyCostCenter.agencyId == a.id).delete()
+            for ccid in dict.fromkeys(d.get("costCenterIds") or []):
+                if s.get(M.CostCenter, ccid) is not None:
+                    s.add(M.AgencyCostCenter(agencyId=a.id, costCenterId=ccid))
+        db.log_company_history(s, cid, "agency_saved", f"{'تعديل' if aid else 'إضافة'} وكالة: {name}", uname())
+        return jsonify({"ok": True, "id": a.id})
+
+
+@app.delete("/api/agencies/<aid>")
+@require("companies.delete")
+def delete_agency(aid):
+    with db.session_scope() as s:
+        a = s.get(M.Agency, aid)
+        if a is None:
+            return jsonify({"ok": True})
+        if not me().company_ok(a.companyId):
+            return forbidden(OUT_OF_SCOPE)
+        s.query(M.Project).filter(M.Project.agencyId == aid).update({"agencyId": None})
+        s.query(M.AgencyCostCenter).filter(M.AgencyCostCenter.agencyId == aid).delete()
+        s.flush()
+        db.log_company_history(s, a.companyId, "agency_deleted", f"حذف وكالة: {a.nameAr}", uname())
+        s.delete(a)
+    return jsonify({"ok": True})
 
 
 @app.delete("/api/vehicles/<vid>")
@@ -1326,6 +1430,7 @@ def save_cost_center(ccid=None):
             if old_name != c.name:   # الربط بالاسم ← نحدّث الموظفين والمترشّحين
                 s.query(M.Employee).filter(M.Employee.costCenter == old_name).update({"costCenter": c.name})
                 s.query(M.Candidate).filter(M.Candidate.costCenter == old_name).update({"costCenter": c.name})
+                s.query(M.Vehicle).filter(M.Vehicle.costCenter == old_name).update({"costCenter": c.name})
         else:
             d["id"] = db.new_id("cc")
             c = db.build(M.CostCenter, d)
@@ -1349,7 +1454,11 @@ def delete_cost_center(ccid):
             n = s.scalar(select(func.count()).select_from(M.Employee).where(M.Employee.costCenter == c.name))
             if n:
                 return err(f"لا يمكن الحذف: مرتبط بـ {n} موظف")
+            nv = s.scalar(select(func.count()).select_from(M.Vehicle).where(M.Vehicle.costCenter == c.name))
+            if nv:
+                return err(f"لا يمكن الحذف: مرتبط بـ {nv} سيارة")
             s.query(M.UserCostCenter).filter(M.UserCostCenter.costCenterId == ccid).delete()
+            s.query(M.AgencyCostCenter).filter(M.AgencyCostCenter.costCenterId == ccid).delete()
             s.flush()
             s.delete(c)
     return jsonify({"ok": True})

@@ -1,5 +1,5 @@
 /* =====================================================================
-   COMPANIES — مركز إدارة الشركات (الشركات | المشاريع | مراكز التكلفة)
+   COMPANIES — مركز إدارة الشركات (الشركات | العقود والمشاريع الحكومية | مراكز التكلفة)
    ===================================================================== */
 'use strict';
 
@@ -12,7 +12,7 @@ const COMPANY_DOC_KINDS = [
 /* ---------- مركز إدارة الشركات: تبويبات الشركات | المشاريع | مراكز التكلفة ---------- */
 const CO_TABS = [
   { id: 'companies', label: 'الشركات', ico: '🏢', perm: 'companies.view' },
-  { id: 'projects', label: 'المشاريع', ico: '📁', perm: 'companies.view' },
+  { id: 'projects', label: 'العقود والمشاريع الحكومية', ico: '🏛️', perm: 'companies.view' },
   { id: 'costcenters', label: 'مراكز التكلفة', ico: '💼', perm: 'costcenters.view' },
 ];
 const CO_TIER_RANK = { expired: 0, d30: 1, d60: 2, d90: 3 };
@@ -44,7 +44,7 @@ function renderCompanies() {
     can('costcenters.view') && `${STATE.costCenters.length} ${t('مركز تكلفة')}`].filter(Boolean).join(' · ');
   const actions = {
     companies: `<button class="btn primary write-only" data-p="companies.edit scope.all" id="co-add">➕ إضافة شركة</button><button class="btn" id="co-org">🏗️ الهيكل التنظيمي</button>`,
-    projects: `<button class="btn primary write-only" data-p="companies.edit" id="pr-add">➕ إضافة مشروع</button>`,
+    projects: `<button class="btn primary write-only" data-p="companies.edit" id="pr-add">➕ ${t('إضافة عقد / مشروع')}</button><button class="btn" id="pr-dist">📊 ${t('توزيع العمالة والمركبات')}</button>`,
     costcenters: `<button class="btn primary write-only" data-p="costcenters.edit" id="cc-add">➕ إضافة مركز تكلفة</button>`,
   }[tab];
   viewRoot().innerHTML = `<div class="page-head"><div><h1>مركز إدارة الشركات</h1><div class="sub">${counts}</div></div><div class="actions">${actions}</div></div>
@@ -96,6 +96,7 @@ function fillCompanyDetails() {
   if (!c || !document.body.contains(m.el)) { if (CO_DETAIL) CO_DETAIL.m.close(); return; }
   const emps = STATE.employees.filter(e => !empEnded(e) && (e.affiliations || []).some(a => a.companyId === id));
   const projs = STATE.projects.filter(p => p.companyId === id);
+  const agencies = (STATE.agencies || []).filter(a => a.companyId === id);
   const sigs = c.signatories || [];
   const kv = (l, v) => `<div><span>${esc(t(l))}</span>${v ? esc(v) : '<span class="muted">—</span>'}</div>`;
   $('.modal-head h2', m.el).innerHTML = `🏢 ${esc(c.nameAr)}`;
@@ -116,15 +117,24 @@ function fillCompanyDetails() {
           <button class="btn sm" data-sig-sign="${esc(s.civilId || '')}" data-sig-name="${esc(s.nameAr)}">${hasSignature(s.civilId) ? '✍️ ✓' : '✍️'} ${t('التوقيع')}</button>
           <button class="btn sm write-only" data-p="companies.edit" data-sig-edit="${s.id}">✏️</button><button class="btn sm danger write-only" data-p="companies.delete" data-sig-del="${s.id}">✕</button></td></tr>`; }).join('')}
       </tbody></table>` : `<div class="empty">${t('مفيش مفوّضين')}</div>`}`,
-    projects: `<div class="row" style="margin-bottom:8px"><span class="spacer"></span><button class="btn sm write-only" data-p="companies.edit" data-proj-add>➕ ${t('إضافة مشروع')}</button></div>
+    projects: `<div class="row" style="margin-bottom:8px"><span class="spacer"></span><button class="btn sm write-only" data-p="companies.edit" data-proj-add>➕ ${t('إضافة عقد / مشروع')}</button></div>
       ${projectsTable(projs, false)}`,
+    agencies: `<div class="row" style="margin-bottom:8px"><span class="small muted">${t('العقود الحكومية بتتبع الوكالة، ومراكز التكلفة التابعة ليها بتحدد مين «برّه وكالة عقده» (للمقارنة والتقارير بس — مراكز التكلفة مابتتغيّرش).')}</span>
+        <span class="spacer"></span><button class="btn sm write-only" data-p="companies.edit" data-ag-add>➕ ${t('إضافة وكالة')}</button></div>
+      ${agencies.length ? `<table class="data"><thead><tr><th>${t('الوكالة')}</th><th>${t('مراكز التكلفة التابعة')}</th><th>${t('العقود')}</th><th>${t('الموظفين')}</th><th></th></tr></thead><tbody>
+      ${agencies.map(a => { const ap = projs.filter(p => p.agencyId === a.id); return `<tr><td><b>${esc(a.nameAr)}</b><div class="small muted" dir="ltr" style="text-align:start">${esc(a.nameEn || '')}</div></td>
+        <td>${agencyCcNames(a).map(n => `<span class="chip">${esc(((STATE.costCenters.find(c => c.name === n) || {}).code || '') + ' ' + ccLabel(n))}</span>`).join(' ') || '<span class="muted">—</span>'}</td>
+        <td>${ap.map(p => `<span class="chip on">${esc(p.contractNo || projectName(p.id))}</span>`).join(' ') || '<span class="muted">—</span>'}</td>
+        <td class="num">${emps.filter(e => ap.some(p => p.id === empProjectId(e))).length}</td>
+        <td class="row"><button class="btn sm write-only" data-p="companies.edit" data-ag-edit="${a.id}">✏️</button><button class="btn sm danger write-only" data-p="companies.delete" data-ag-del="${a.id}">✕</button></td></tr>`; }).join('')}
+      </tbody></table>` : `<div class="empty">${t('مفيش وكالات')}</div>`}`,
   };
   const status = companyStatusLine(c, companyAlerts(id));
   $('#cod-body', m.el).innerHTML = `<div class="co-detail-h">${c.logoUrl ? `<img src="${esc(c.logoUrl)}" alt="" class="co-logo">` : '<div class="co-logo">🏢</div>'}
       <div style="flex:1;min-width:0"><div class="muted small" dir="ltr" style="text-align:start">${esc(c.nameEn || '')}</div>
         <div class="co-stats"><span>👥 <b>${emps.length}</b> ${t('موظف')}</span>${c.mainFileNumber ? `<span>${t('رقم الملف')}: <b>${esc(c.mainFileNumber)}</b></span>` : ''}${c.laborOffice ? `<span>${esc(c.laborOffice)}</span>` : ''}</div>${status}</div></div>
     <div class="tabs" style="margin-top:12px">
-      ${[['info', 'البيانات والمستندات'], ['sigs', `${t('المفوّضين بالتوقيع')} (${sigs.length})`], ['projects', `${t('المشاريع')} (${projs.length})`]]
+      ${[['info', 'البيانات والمستندات'], ['sigs', `${t('المفوّضين بالتوقيع')} (${sigs.length})`], ['projects', `${t('العقود والمشاريع الحكومية')} (${projs.length})`], ['agencies', `${t('الوكالات')} (${agencies.length})`]]
         .map(([k, l]) => `<button data-codtab="${k}" class="${k === tab ? 'active' : ''}">${esc(t(l))}</button>`).join('')}</div>
     <div class="co-pane">${panes[tab] || panes.info}</div>`;
   $('#cod-foot', m.el).innerHTML = `<button class="btn primary write-only" data-p="companies.edit" data-co-edit>✏️ ${t('تعديل بيانات الشركة')}</button>
@@ -147,36 +157,62 @@ function fillCompanyDetails() {
   $$('[data-sig-sign]', E).forEach(b => b.onclick = () => openSignatureModal(b.dataset.sigSign, b.dataset.sigName, can('companies.edit')));
   const pa = $('[data-proj-add]', E); if (pa) pa.onclick = () => openProjectModal(id, null);
   bindProjectsTable(E, () => m.close());
+  const aa = $('[data-ag-add]', E); if (aa) aa.onclick = () => openAgencyModal(id, null);
+  $$('[data-ag-edit]', E).forEach(b => b.onclick = () => openAgencyModal(id, agencyById(b.dataset.agEdit)));
+  $$('[data-ag-del]', E).forEach(b => b.onclick = async () => {
+    if (await openConfirm(t('حذف الوكالة؟ (العقود هتفضل من غير وكالة)'), { danger: true })) await persist('DELETE', '/api/agencies/' + b.dataset.agDel, undefined, 'تم الحذف');
+  });
 }
 
-/* ---------- المشاريع: جدول واحد (في تبويب المشاريع وفي تفاصيل الشركة) ---------- */
+/* ---------- العقود والمشاريع الحكومية: جدول واحد (في التبويب وفي تفاصيل الشركة) ----------
+   لكل ترخيص: النوع، الوكالة، الرقم المدني، رقم العقد، البداية والنهاية، الموظفين والسيارات المسجّلين عليه،
+   واللي شغالين برّه وكالته، واللي إقامتهم بعد نهايته. */
 function projectsTable(projs, withCompany) {
   const emps = STATE.employees.filter(e => !empEnded(e));
-  if (!projs.length) return `<div class="empty">${t('لا توجد مشاريع')}</div>`;
-  return `<div class="table-wrap"><table class="data"><thead><tr><th>${t('المشروع')}</th>${withCompany ? `<th>${t('الشركة')}</th>` : ''}<th>${t('رقم الملف')}</th><th>${t('إدارة العمل')}</th><th>${t('الانتهاء')}</th><th>${t('الموظفين')}</th><th></th></tr></thead><tbody>
-    ${projs.map(p => `<tr><td><b>${esc(projectName(p.id))}</b></td>${withCompany ? `<td><a href="#" data-proj-co="${p.companyId}">${esc(companyName(p.companyId))}</a></td>` : ''}
-      <td class="num">${esc(p.fileNumber || '')}</td><td>${esc(p.laborOffice || '')}</td><td>${datePill(p.expiryDate)}</td>
-      <td><a href="#" data-proj-emps="${p.id}">${emps.filter(e => (e.affiliations || []).some(a => a.projectId === p.id)).length}</a></td>
-      <td class="row"><button class="btn sm write-only" data-p="companies.edit" data-proj-edit="${p.id}">✏️</button><button class="btn sm danger write-only" data-p="companies.delete" data-proj-del="${p.id}">✕</button></td></tr>`).join('')}
-    </tbody></table></div>`;
+  if (!projs.length) return `<div class="empty">${t('لا توجد عقود أو مشاريع')}</div>`;
+  const rows = projs.slice().sort((a, b) => projectSortKey(a).localeCompare(projectSortKey(b), 'ar')).map(p => {
+    const pe = emps.filter(e => empProjectId(e) === p.id), pv = STATE.vehicles.filter(v => v.projectId === p.id);
+    const out = pe.filter(empOutsideAgency).length + pv.filter(v => outsideAgency(v.projectId, v.costCenter)).length;
+    const beyond = pe.filter(e => beyondLicense(e, p.id, ['residencyExp', 'workPermitExp']).length).length;
+    const a = p.agencyId && agencyById(p.agencyId), dl = daysUntil(p.expiryDate);
+    return `<tr><td><b>${esc(projectName(p.id))}</b><div class="small muted">${esc(p.laborOffice || '')}</div></td>${withCompany ? `<td><a href="#" data-proj-co="${p.companyId}">${esc(companyName(p.companyId))}</a></td>` : ''}
+      <td><span class="chip ${p.kind === 'gov' ? 'on' : ''}">${esc(projectKindLabel(p))}</span></td><td>${a ? esc(agencyName(a)) : '<span class="muted">—</span>'}</td>
+      <td class="num">${esc(p.fileNumber || '')}</td><td class="num">${esc(p.contractNo || '')}</td>
+      <td class="num small">${fmtDate(p.startDate)}</td><td class="nowrap">${datePill(p.expiryDate)}${dl !== null ? `<div class="small muted">${esc(daysText(dl))}</div>` : ''}</td>
+      <td class="num"><a href="#" data-proj-emps="${p.id}">${pe.length}</a></td><td class="num"><a href="#" data-proj-veh="${p.id}">${pv.length}</a></td>
+      <td class="num ${out ? 'warn-cell' : ''}">${out ? `<a href="#" data-proj-out="${p.id}">⚠️ ${out}</a>` : '<span class="muted">—</span>'}</td>
+      <td class="num ${beyond ? 'warn-cell' : ''}" title="${esc(t('إقامة أو إذن عمل بعد نهاية العقد'))}">${beyond || '<span class="muted">—</span>'}</td>
+      <td class="row"><button class="btn sm write-only" data-p="companies.edit" data-proj-edit="${p.id}">✏️</button><button class="btn sm danger write-only" data-p="companies.delete" data-proj-del="${p.id}">✕</button></td></tr>`;
+  });
+  return `<div class="table-wrap"><table class="data"><thead><tr><th>${t('العقد / المشروع')}</th>${withCompany ? `<th>${t('الشركة')}</th>` : ''}<th>${t('النوع')}</th><th>${t('الوكالة')}</th>
+      <th>${t('الرقم المدني')}</th><th>${t('رقم العقد')}</th><th>${t('البداية')}</th><th>${t('النهاية')}</th><th>${t('الموظفين')}</th><th>${t('السيارات')}</th>
+      <th title="${esc(t('موظفين وسيارات شغالين برّه وكالة العقد'))}">${t('برّه الوكالة')}</th><th title="${esc(t('إقامة أو إذن عمل بعد نهاية العقد'))}">${t('بعد النهاية')}</th><th></th></tr></thead><tbody>
+    ${rows.join('')}</tbody></table></div>`;
 }
+function goVehicles(filters) { UI.vehicles = Object.assign({ q: '', project: '', agency: '', type: '', cc: '' }, filters); saveUiStateToLocalStorage(); setView('vehicles'); }
 function bindProjectsTable(root, beforeLeave = () => {}) {
   $$('[data-proj-emps]', root).forEach(b => b.onclick = (e) => { e.preventDefault(); const p = IDX.project[b.dataset.projEmps]; beforeLeave(); goEmployees({ company: p.companyId, project: p.id }); });
+  $$('[data-proj-out]', root).forEach(b => b.onclick = (e) => { e.preventDefault(); const p = IDX.project[b.dataset.projOut]; beforeLeave(); goEmployees({ company: p.companyId, project: p.id, outside: true }); });
+  $$('[data-proj-veh]', root).forEach(b => b.onclick = (e) => { e.preventDefault(); beforeLeave(); goVehicles({ project: b.dataset.projVeh }); });
   $$('[data-proj-co]', root).forEach(b => b.onclick = (e) => { e.preventDefault(); openCompanyDetails(b.dataset.projCo, 'projects'); });
   $$('[data-proj-edit]', root).forEach(b => b.onclick = () => { const p = IDX.project[b.dataset.projEdit]; openProjectModal(p.companyId, p); });
   $$('[data-proj-del]', root).forEach(b => b.onclick = async () => { if (await openConfirm(t('حذف المشروع؟ (الموظفين هيفضلوا في الشركة بدون مشروع)'), { danger: true })) await persist('DELETE', '/api/projects/' + b.dataset.projDel, undefined, 'تم الحذف'); });
 }
 function renderProjectsTab(root) {
   const f = UI.co, q = norm(f.projQ);
-  const list = scopedProjects().filter(p => (!f.projCompany || p.companyId === f.projCompany)
-      && (!q || [p.nameAr, p.nameEn, p.fileNumber, p.laborOffice].some(v => norm(v).includes(q))))
+  const list = scopedProjects().filter(p => (!f.projCompany || p.companyId === f.projCompany) && (!f.projAgency || (f.projAgency === '__none' ? !p.agencyId : p.agencyId === f.projAgency))
+      && (!q || [p.nameAr, p.nameEn, p.fileNumber, p.contractNo, p.laborOffice].some(v => norm(v).includes(q))))
     .sort((a, b) => companyName(a.companyId).localeCompare(companyName(b.companyId), 'ar') || projectName(a.id).localeCompare(projectName(b.id), 'ar'));
-  root.innerHTML = `<div class="filters"><input type="search" id="pr-q" placeholder="${esc(t('بحث بالاسم أو رقم الملف…'))}" value="${esc(f.projQ)}">
-      <select id="pr-co">${companyOptions(f.projCompany, '— كل الشركات —')}</select></div>${projectsTable(list, true)}`;
+  root.innerHTML = `<div class="filters"><input type="search" id="pr-q" placeholder="${esc(t('بحث بالاسم أو الرقم المدني أو رقم العقد…'))}" value="${esc(f.projQ)}">
+      <select id="pr-co">${companyOptions(f.projCompany, '— كل الشركات —')}</select>
+      <select id="pr-ag">${opt('', t('— كل الوكالات —'), !f.projAgency)}${opt('__none', t('بدون وكالة'), f.projAgency === '__none')}${(STATE.agencies || []).map(a => opt(a.id, agencyName(a), a.id === f.projAgency)).join('')}</select></div>
+    ${projectsTable(list, true)}`;
   const upd = p => { Object.assign(UI.co, p); saveUiStateToLocalStorage(); render(); };
   $('#pr-q').addEventListener('input', debounce(e => { UI.co.projQ = e.target.value; render(); const i = $('#pr-q'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 250));
   $('#pr-co').onchange = e => upd({ projCompany: e.target.value });
+  $('#pr-ag').onchange = e => upd({ projAgency: e.target.value });
   const add = $('#pr-add'); if (add) add.onclick = () => openProjectModal(f.projCompany || '', null);
+  const dist = $('#pr-dist'); if (dist) dist.onclick = () => openDistributionReport();
   bindProjectsTable(root);
 }
 
@@ -272,54 +308,153 @@ function openCivilIdDocModal(civilId) {
 }
 function openProjectModal(companyId, p) {
   p = p || {};
+  const agencyOpts = cid => opt('', t('— بدون وكالة —'), !p.agencyId) + (STATE.agencies || []).filter(a => a.companyId === cid).map(a => opt(a.id, agencyName(a), a.id === p.agencyId)).join('');
   const m = openModal({
-    title: p.id ? t('تعديل مشروع') : t('إضافة مشروع'),
-    body: `<div class="form"><label><span class="req">${t('اسم المشروع (عربي)')}</span><input name="nameAr" value="${esc(p.nameAr || '')}"></label>
-      <label>${t('اسم المشروع (إنجليزي)')}<input name="nameEn" value="${esc(p.nameEn || '')}" dir="ltr"></label>
-      <label>${t('الشركة')}<select name="companyId">${companyOptions(companyId)}</select></label>
-      <label>${t('رقم الملف')}<input name="fileNumber" value="${esc(p.fileNumber || '')}"></label>
+    title: p.id ? t('تعديل عقد / مشروع') : t('إضافة عقد / مشروع'),
+    body: `<div class="form"><label><span class="req">${t('الاسم (عربي)')}</span><input name="nameAr" value="${esc(p.nameAr || '')}"></label>
+      <label>${t('الاسم (إنجليزي)')}<input name="nameEn" value="${esc(p.nameEn || '')}" dir="ltr"></label>
+      <label>${t('الشركة (صاحبة الترخيص)')}<select name="companyId">${companyOptions(companyId)}</select></label>
+      <label>${t('النوع')}<select name="kind">${opt('', t('مشروع'), !p.kind)}${Object.entries(PROJECT_KINDS).map(([k, l]) => opt(k, t(l), k === p.kind)).join('')}</select></label>
+      <label data-gov>${t('الوكالة')}<select name="agencyId">${agencyOpts(companyId || p.companyId)}</select></label>
+      <label data-gov>${t('رقم العقد')}<input name="contractNo" value="${esc(p.contractNo || '')}" inputmode="numeric"></label>
+      <label>${t('الرقم المدني للترخيص')}<input name="fileNumber" value="${esc(p.fileNumber || '')}" inputmode="numeric"></label>
       <label>${t('إدارة العمل')}<input name="laborOffice" value="${esc(p.laborOffice || '')}"></label>
-      <label>${t('تاريخ الانتهاء')}<input type="date" name="expiryDate" value="${esc(p.expiryDate || '')}"></label></div>`,
+      <label>${t('تاريخ البداية')}<input type="date" name="startDate" value="${esc(p.startDate || '')}"></label>
+      <label>${t('تاريخ النهاية')}<input type="date" name="expiryDate" value="${esc(p.expiryDate || '')}"></label></div>`,
     foot: `<button class="btn primary" data-save>حفظ</button><button class="btn" data-close>إلغاء</button>`,
   });
+  const kind = $('[name=kind]', m.el), co = $('[name=companyId]', m.el);
+  const sync = () => $$('[data-gov]', m.el).forEach(x => { x.style.display = kind.value === 'gov' ? '' : 'none'; });
+  kind.onchange = sync; sync();
+  co.onchange = () => { $('[name=agencyId]', m.el).innerHTML = agencyOpts(co.value); };
   $('[data-save]', m.el).onclick = async () => {
     const d = formValues(m.el);
-    if (!d.nameAr || !d.companyId) return openBlockAlert(t('اسم المشروع والشركة مطلوبين'));
+    if (!d.nameAr || !d.companyId) return openBlockAlert(t('الاسم والشركة مطلوبين'));
+    if (d.kind !== 'gov') { d.agencyId = null; d.contractNo = null; }
     await persist(p.id ? 'PUT' : 'POST', p.id ? '/api/projects/' + p.id : '/api/projects', d, 'تم الحفظ');
     m.close();
   };
+}
+/** وكالة: الاسم، ومراكز التكلفة التابعة ليها (للمقارنة والتقارير بس) */
+function openAgencyModal(companyId, a) {
+  a = a || {};
+  const sel = new Set(a.costCenterIds || []);
+  const m = openModal({
+    title: a.id ? t('تعديل وكالة') : t('إضافة وكالة'), size: 'narrow',
+    body: `<div class="form"><label class="full"><span class="req">${t('اسم الوكالة (عربي)')}</span><input name="nameAr" value="${esc(a.nameAr || '')}"></label>
+      <label class="full">${t('اسم الوكالة (إنجليزي)')}<input name="nameEn" value="${esc(a.nameEn || '')}" dir="ltr"></label></div>
+      <h4 class="cu-h">${t('مراكز التكلفة التابعة للوكالة')}</h4>
+      <div class="cu-pick-list" style="max-height:240px">${STATE.costCenters.map(c => `<label class="${sel.has(c.id) ? 'on' : ''}"><input type="checkbox" data-agcc="${c.id}" ${sel.has(c.id) ? 'checked' : ''}>
+        <b>${esc(c.code || '')}</b> ${esc(c.name)} <span class="small muted">${esc(c.nameEn || '')}</span></label>`).join('')}</div>
+      <div class="small muted" style="margin-top:6px">${t('الموظف أو العربية على عقد الوكالة دي وشغال في مركز تكلفة مش من دول ← «برّه وكالة عقده». مراكز التكلفة نفسها مش بتتغيّر.')}</div>`,
+    foot: `<button class="btn primary" data-save>حفظ</button><button class="btn" data-close>إلغاء</button>`,
+  });
+  $$('[data-agcc]', m.el).forEach(cb => cb.onchange = () => cb.closest('label').classList.toggle('on', cb.checked));
+  $('[data-save]', m.el).onclick = async () => {
+    const d = formValues($('.form', m.el));
+    if (!d.nameAr) return openBlockAlert(t('اسم الوكالة مطلوب'));
+    d.companyId = companyId;
+    d.costCenterIds = $$('[data-agcc]', m.el).filter(x => x.checked).map(x => x.dataset.agcc);
+    await persist(a.id ? 'PUT' : 'POST', a.id ? '/api/agencies/' + a.id : '/api/agencies', d, 'تم الحفظ');
+    m.close();
+  };
+}
+
+/* ---------- تقرير توزيع العمالة والمركبات: العقود (صفوف) × مكان الشغل الفعلي (أعمدة) ---------- */
+function openDistributionReport() {
+  const m = openModal({
+    title: '📊 ' + t('توزيع العمالة والمركبات'), size: 'narrow',
+    body: `<div class="form"><label class="full">${t('لغة التقرير')}<select name="lang">${opt('ar', 'العربية', LANG !== 'en')}${opt('en', 'English', LANG === 'en')}</select></label></div>
+      <div class="small muted" style="margin-top:6px">${t('لكل عقد / مشروع: عدد الموظفين والسيارات المسجّلين عليه موزّعين على مكان الشغل الفعلي (مركز التكلفة). الخانات البرتقالي = برّه وكالة العقد.')}</div>`,
+    foot: `<button class="btn primary" data-go>🖨️ ${t('معاينة وطباعة')}</button><button class="btn" data-close>${t('إلغاء')}</button>`,
+  });
+  $('[data-go]', m.el).onclick = () => { const lang = $('[name=lang]', m.el).value; m.close(); withLang(lang, printDistributionReport); };
+}
+function printDistributionReport() {
+  const projs = scopedProjects().slice().sort((a, b) => projectSortKey(a).localeCompare(projectSortKey(b), 'ar'));
+  const matrix = (items, pidOf, title) => {
+    const ccs = uniq(items.map(x => x.costCenter || '—')).sort((a, b) => a.localeCompare(b, 'ar'));
+    const rows = [...projs.map(p => ({ p, items: items.filter(x => pidOf(x) === p.id) })), { p: null, items: items.filter(x => !pidOf(x) || !IDX.project[pidOf(x)]) }].filter(r => r.items.length);
+    const code = n => (STATE.costCenters.find(c => c.name === n) || {}).code || n;
+    const cell = (r, cc) => {
+      const n = r.items.filter(x => (x.costCenter || '—') === cc).length;
+      const out = n && r.p && r.p.agencyId && cc !== '—' && !agencyCcNames(agencyById(r.p.agencyId) || {}).includes(cc);
+      return `<td class="num"${out ? ' style="background:#fdeede;color:#b35c00;font-weight:600"' : ''}>${n || ''}</td>`;
+    };
+    return `<h3 style="margin:14px 0 6px">${esc(title)}</h3><table class="rpt"><thead><tr><th class="txt">${t('العقد / المشروع')}</th><th>${t('الوكالة')}</th><th>${t('رقم العقد')}</th>
+        ${ccs.map(cc => `<th title="${esc(ccLabel(cc))}">${esc(code(cc))}</th>`).join('')}<th>${t('الإجمالي')}</th></tr></thead><tbody>
+      ${rows.map((r, i) => `<tr class="${i % 2 ? 'z' : ''}"><td class="txt">${r.p ? esc(projectName(r.p.id)) : esc(t('بدون عقد / مشروع'))}</td><td>${r.p && r.p.agencyId ? esc(agencyName(agencyById(r.p.agencyId))) : ''}</td>
+        <td class="num">${r.p ? esc(r.p.contractNo || '') : ''}</td>${ccs.map(cc => cell(r, cc)).join('')}<td class="num"><b>${r.items.length}</b></td></tr>`).join('')}</tbody>
+      <tfoot><tr><td colspan="3">${t('الإجمالي')}</td>${ccs.map(cc => `<td class="num">${items.filter(x => (x.costCenter || '—') === cc).length || ''}</td>`).join('')}<td class="num"><b>${items.length}</b></td></tr></tfoot></table>
+      <div class="small" style="margin-top:4px;color:#66736f">${ccs.filter(cc => cc !== '—').map(cc => `${esc(code(cc))} = ${esc(ccLabel(cc))}`).join(' · ')}</div>`;
+  };
+  const emps = scopedEmployees().filter(e => !empEnded(e)), vehs = STATE.vehicles.filter(v => companyInScope(v.companyId) || !v.companyId);
+  const outE = emps.filter(empOutsideAgency).length, outV = vehs.filter(v => outsideAgency(v.projectId, v.costCenter)).length;
+  openReportWindow({
+    title: t('توزيع العمالة والمركبات'), subtitle: t('العقود والمشاريع الحكومية × مكان الشغل الفعلي'), landscape: true,
+    summary: [[projs.length, t('عقد / مشروع')], [emps.length, t('موظف')], [outE, t('موظف برّه وكالة عقده')], [vehs.length, t('سيارة')], [outV, t('سيارة برّه وكالة عقدها')]],
+    body: matrix(emps.map(e => ({ costCenter: e.costCenter, pid: empProjectId(e) })), x => x.pid, t('الموظفين'))
+      + (vehs.length ? matrix(vehs.map(v => ({ costCenter: v.costCenter, pid: v.projectId })), x => x.pid, t('السيارات')) : ''),
+    meta: [[t('عدد السجلات'), String(emps.length + vehs.length)]],
+  });
+  printLog(t('توزيع العمالة والمركبات'), 'employee');
 }
 
 /* =====================================================================
    VEHICLES — مركز إدارة السيارات
    ===================================================================== */
 function renderVehicles() {
-  const q = norm(UI.vehicles.q);
+  const V = UI.vehicles = Object.assign({ q: '', project: '', agency: '', type: '', cc: '' }, UI.vehicles || {});
+  const q = norm(V.q);
   const list = STATE.vehicles.filter(v => companyInScope(v.companyId) || !v.companyId)
-    .filter(v => !q || [v.plate, v.model, companyName(v.companyId), empName(IDX.employee[v.driverId])].some(x => norm(x).includes(q)));
+    .filter(v => (!V.project || (V.project === '__none' ? !v.projectId : v.projectId === V.project))
+      && (!V.agency || (projectAgency(v.projectId) || {}).id === V.agency) && (!V.type || v.vehicleType === V.type)
+      && (!V.cc || (V.cc === '__out' ? outsideAgency(v.projectId, v.costCenter) : v.costCenter === V.cc)))
+    .filter(v => !q || [v.plate, v.model, companyName(v.companyId), empName(IDX.employee[v.driverId]), projectName(v.projectId), v.costCenter].some(x => norm(x).includes(q)));
   viewRoot().innerHTML = `<div class="page-head"><div><h1>مركز إدارة السيارات</h1><div class="sub">${STATE.vehicles.length} ${t('سيارة')}</div></div>
     <div class="actions"><button class="btn primary write-only" data-p="vehicles.edit" id="v-add">➕ إضافة سيارة</button>${can('admin') ? '<button class="btn" id="v-export">📤 تصدير CSV</button>' : ''}</div></div>
-    <div class="filters"><input type="search" id="v-q" placeholder="بحث باللوحة أو السائق…" value="${esc(UI.vehicles.q)}"></div>
-    <div class="table-wrap"><table class="data"><thead><tr><th>${t('رقم اللوحة')}</th><th>${t('النوع / الموديل')}</th><th>${t('الشركة')}</th><th>${t('السائق')}</th><th>${t('انتهاء التأمين')}</th><th>${t('انتهاء الدفتر')}</th></tr></thead>
+    <div class="filters"><input type="search" id="v-q" placeholder="${esc(t('بحث باللوحة أو السائق أو العقد…'))}" value="${esc(V.q)}">
+      <select id="v-proj">${opt('', t('— كل العقود والمشاريع —'), !V.project)}${opt('__none', t('بدون عقد / مشروع'), V.project === '__none')}${scopedProjects().slice().sort((a, b) => projectSortKey(a).localeCompare(projectSortKey(b), 'ar')).map(p => opt(p.id, projectName(p.id), p.id === V.project)).join('')}</select>
+      <select id="v-ag">${opt('', t('— كل الوكالات —'), !V.agency)}${(STATE.agencies || []).map(a => opt(a.id, agencyName(a), a.id === V.agency)).join('')}</select>
+      <select id="v-type">${opt('', t('— كل الأنواع —'), !V.type)}${Object.entries(VEHICLE_TYPES).map(([k, l]) => opt(k, t(l), k === V.type)).join('')}</select>
+      <select id="v-cc">${opt('', t('— كل مراكز التكلفة —'), !V.cc)}${opt('__out', '⚠️ ' + t('برّه وكالة عقدها'), V.cc === '__out')}${STATE.costCenters.map(c => opt(c.name, `${c.code || ''} ${ccLabel(c.name)}`, c.name === V.cc)).join('')}</select>
+      <button class="btn sm ghost" id="v-clear">✕ ${t('مسح الفلاتر')}</button></div>
+    <div class="table-wrap"><table class="data"><thead><tr><th>${t('رقم اللوحة')}</th><th>${t('النوع / الموديل')}</th><th>${t('الشركة')}</th><th>${t('العقد / المشروع')}</th><th>${t('مركز التكلفة')}</th><th>${t('السائق')}</th><th>${t('انتهاء التأمين')}</th><th>${t('انتهاء الدفتر')}</th></tr></thead>
     <tbody>${list.map(v => {
-      const d = IDX.employee[v.driverId];
-      return `<tr class="clickable" data-id="${v.id}"><td><b class="num">${esc(v.plate)}</b></td><td>${esc(v.model || '')}</td><td>${esc(companyName(v.companyId))}</td>
+      const d = IDX.employee[v.driverId], p = IDX.project[v.projectId], out = outsideAgency(v.projectId, v.costCenter);
+      return `<tr class="clickable" data-id="${v.id}"><td><b class="num">${esc(v.plate)}</b></td><td>${v.vehicleType ? `<span class="chip">${esc(t(VEHICLE_TYPES[v.vehicleType]))}</span> ` : ''}${esc(v.model || '')}</td><td>${esc(companyName(v.companyId))}</td>
+      <td>${p ? `${esc(projectName(p.id))}<div class="small muted">${esc(projectSummary(p))}</div>` : '<span class="muted">—</span>'}</td>
+      <td>${esc(v.costCenter || '—')}${out ? `<div class="small" style="color:var(--orange)">⚠️ ${t('برّه وكالة عقدها')}</div>` : ''}</td>
       <td>${d ? esc(empName(d)) + (d.drivingLicenseExp ? ' ' + datePill(d.drivingLicenseExp) : '') : '<span class="muted">—</span>'}</td><td>${datePill(v.insuranceExpiry)}</td><td>${datePill(v.govLicenseExpiry)}</td></tr>`;
-    }).join('') || `<tr><td colspan="6" class="empty">${t('لا توجد سيارات')}</td></tr>`}</tbody></table></div>`;
+    }).join('') || `<tr><td colspan="8" class="empty">${t('لا توجد سيارات')}</td></tr>`}</tbody></table></div>`;
   $('#v-add').onclick = () => openVehicleModal(null);
   $('#v-q').addEventListener('input', debounce(e => { UI.vehicles.q = e.target.value; saveUiStateToLocalStorage(); render(); const i = $('#v-q'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 250));
+  const vupd = p => { Object.assign(UI.vehicles, p); saveUiStateToLocalStorage(); render(); };
+  $('#v-proj').onchange = e => vupd({ project: e.target.value });
+  $('#v-ag').onchange = e => vupd({ agency: e.target.value });
+  $('#v-type').onchange = e => vupd({ type: e.target.value });
+  $('#v-cc').onchange = e => vupd({ cc: e.target.value });
+  $('#v-clear').onclick = () => vupd({ q: '', project: '', agency: '', type: '', cc: '' });
   $$('tr[data-id]', viewRoot()).forEach(tr => tr.onclick = () => openVehicleModal(tr.dataset.id));
-  const vx = $('#v-export'); if (vx) vx.onclick = () => exportGuard(t('السيارات'), () => downloadBlob(toCsv([[t('رقم اللوحة'), t('النوع / الموديل'), t('الشركة'), t('السائق'), t('انتهاء التأمين'), t('انتهاء الدفتر')],
-    ...list.map(v => [v.plate, v.model, companyName(v.companyId), empName(IDX.employee[v.driverId]), v.insuranceExpiry, v.govLicenseExpiry])]), `vehicles-${todayISO()}.csv`, 'text/csv'));
+  const vx = $('#v-export'); if (vx) vx.onclick = () => exportGuard(t('السيارات'), () => downloadBlob(toCsv([[t('رقم اللوحة'), t('النوع'), t('الموديل'), t('الشركة'), t('العقد / المشروع'), t('رقم العقد'), t('الوكالة'), t('مركز التكلفة'), t('السائق'), t('انتهاء التأمين'), t('انتهاء الدفتر')],
+    ...list.map(v => [v.plate, t(VEHICLE_TYPES[v.vehicleType] || ''), v.model, companyName(v.companyId), projectName(v.projectId), (IDX.project[v.projectId] || {}).contractNo, agencyName(projectAgency(v.projectId)), v.costCenter, empName(IDX.employee[v.driverId]), v.insuranceExpiry, v.govLicenseExpiry])]), `vehicles-${todayISO()}.csv`, 'text/csv'));
 }
 function openVehicleModal(id) {
   const v = id ? IDX.vehicle[id] : {};
   const drivers = STATE.employees.filter(e => e.isDriver || e.id === v.driverId).sort((a, b) => a.name.localeCompare(b.name, 'ar'));
   const m = openModal({
     title: id ? t('تعديل سيارة') + ' ' + esc(v.plate) : t('إضافة سيارة'),
-    body: `<div class="form"><label><span class="req">${t('رقم اللوحة')}</span><input name="plate" value="${esc(v.plate || '')}"></label>
-      <label>${t('النوع / الموديل')}<input name="model" value="${esc(v.model || '')}"></label>
-      <label>${t('الشركة')}<select name="companyId">${companyOptions(v.companyId)}</select></label>
+    body: `${v.projectId ? `<div class="emp-license" style="margin-bottom:10px">
+        <div><span>${t('مسجّلة باسم')}</span><b>${esc(companyName(v.companyId) || '—')}</b></div>
+        <div><span>${t('العقد / المشروع')}</span><b>${esc(projectName(v.projectId))}</b><div class="small muted">${esc(projectSummary(IDX.project[v.projectId]))}</div>
+          ${(IDX.project[v.projectId] || {}).expiryDate ? `<div class="small">${t('ينتهي')} ${datePill(IDX.project[v.projectId].expiryDate)}</div>` : ''}</div>
+        <div><span>${t('شغالة فعليًا')}</span><b>${esc(v.costCenter || '—')}</b>${outsideAgency(v.projectId, v.costCenter) ? `<div class="small" style="color:var(--orange)">⚠️ ${t('برّه وكالة عقدها')}</div>` : ''}</div></div>` : ''}
+      <div class="form"><label><span class="req">${t('رقم اللوحة')}</span><input name="plate" value="${esc(v.plate || '')}"></label>
+      <label>${t('نوع المركبة')}<select name="vehicleType">${opt('', '—', !v.vehicleType)}${Object.entries(VEHICLE_TYPES).map(([k, l]) => opt(k, t(l), k === v.vehicleType)).join('')}</select></label>
+      <label>${t('الموديل')}<input name="model" value="${esc(v.model || '')}"></label>
+      <label>${t('الشركة (مسجّلة باسم)')}<select name="companyId">${companyOptions(v.companyId)}</select></label>
+      <label>${t('العقد / المشروع')}<select name="projectId"></select></label>
+      <label>${t('مركز التكلفة (مكان الشغل الفعلي)')}<select name="costCenter">${costCenterOptions(v.costCenter)}</select></label>
       <label>${t('السائق')}<select name="driverId">${opt('', '—', !v.driverId)}${drivers.map(e => opt(e.id, e.name + ' — ' + e.id, e.id === v.driverId)).join('')}</select></label>
       <label>${t('انتهاء التأمين')}<input type="date" name="insuranceExpiry" value="${esc(v.insuranceExpiry || '')}"></label>
       <label>${t('انتهاء الدفتر')}<input type="date" name="govLicenseExpiry" value="${esc(v.govLicenseExpiry || '')}"></label>
@@ -327,6 +462,16 @@ function openVehicleModal(id) {
       <div class="small muted">${t('قائمة السائقين بتعرض الموظفين المعلَّم عليهم «سائق» فقط.')}</div>`,
     foot: `${id ? '<button class="btn danger write-only" data-p="vehicles.delete" data-del>🗑️ حذف</button><span class="spacer"></span>' : ''}<button class="btn primary write-only" data-p="vehicles.edit" data-save>حفظ</button><button class="btn" data-close>إلغاء</button>`,
   });
+  // العقود / المشاريع بتاعة الشركة اللي العربية مسجّلة باسمها بس
+  const coSel = $('[name=companyId]', m.el), prSel = $('[name=projectId]', m.el);
+  const fillProjects = () => {
+    const keep = prSel.value || v.projectId;
+    prSel.innerHTML = opt('', '—', !keep) + scopedProjects().filter(p => p.companyId === coSel.value)
+      .sort((a, b) => projectSortKey(a).localeCompare(projectSortKey(b), 'ar'))
+      .map(p => opt(p.id, projectName(p.id) + (p.contractNo ? ' · ' + p.contractNo : ''), p.id === keep)).join('');
+  };
+  fillProjects();
+  coSel.onchange = fillProjects;
   $('[data-save]', m.el).onclick = async () => {
     const d = formValues(m.el);
     if (!d.plate) return openBlockAlert(t('رقم اللوحة مطلوب'));
