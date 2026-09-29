@@ -508,6 +508,7 @@ class PermitType(Base):
     nameEn: Mapped[Optional[str]] = col("name_en", NAME)
     appliesTo: Mapped[Optional[str]] = col("applies_to", String(10))           # employee | vehicle | فاضي = الاتنين
     position: Mapped[int] = col("position", Integer, nullable=False, default=0)
+    defaultIssuer: Mapped[Optional[str]] = col("default_issuer", NAME)          # الجهة المانحة اللي بتتملى لوحدها
 
 
 class PermitPlace(Base):

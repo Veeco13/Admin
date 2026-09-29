@@ -1666,6 +1666,7 @@ def _save_permit_list(model, prefix, rid, extra=None):
 
 def _applies_to(r, d):
     r.appliesTo = d.get("appliesTo") if d.get("appliesTo") in PERMIT_HOLDERS else None
+    r.defaultIssuer = (d.get("defaultIssuer") or "").strip() or None
 
 
 @app.post("/api/permit-types")

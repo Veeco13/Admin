@@ -901,7 +901,7 @@ function trackedAlertItems(maxDays = 90) {
   // التصاريح (الموظف اللي خدمته انتهت مالوش تنبيه) ← بتفتح قسم التصاريح على التصريح نفسه
   for (const p of STATE.permits || []) {
     const h = permitHolder(p);
-    if (h && !(p.holderKind === 'employee' && empEnded(h))) push({ kind: 'permit', refId: p.id, name: permitHolderName(p), what: permitLabel(p), date: p.expiryDate });
+    if (h && permitCurrent(p) && !(p.holderKind === 'employee' && empEnded(h))) push({ kind: 'permit', refId: p.id, name: permitHolderName(p), what: permitLabel(p), date: p.expiryDate });
   }
   for (const c of STATE.candidates) {
     if (c.stage === 'rejected' || c.stage === 'all_completed' || c.source === 'kuwaiti') continue;
