@@ -932,7 +932,10 @@ function trackedAlertItems(maxDays = 90) {
   // التصاريح (الموظف اللي خدمته انتهت مالوش تنبيه) ← بتفتح قسم التصاريح على التصريح نفسه
   for (const p of STATE.permits || []) {
     const h = permitHolder(p);
-    if (h && permitCurrent(p) && !(p.holderKind === 'employee' && empEnded(h))) push({ kind: 'permit', refId: p.id, name: permitHolderName(p), what: permitLabel(p), date: p.expiryDate });
+    if (!h || !permitCurrent(p)) continue;
+    if (permitNeedsCancel(p))            // مستقيل / إنهاء خدمات / في فترة إنذار ← لازم يتلغي
+      push({ kind: 'permit', refId: p.id, name: permitHolderName(p), what: `${t('لازم إلغاء')} ${permitLabel(p)} — ${t('آخر يوم شغل')} ${fmtDate(h.serviceEndDate) || '—'}`, date: h.serviceEndDate || todayISO() });
+    else if (!(p.holderKind === 'employee' && empEnded(h))) push({ kind: 'permit', refId: p.id, name: permitHolderName(p), what: permitLabel(p), date: p.expiryDate });
   }
   for (const c of STATE.candidates) {
     if (c.stage === 'rejected' || c.stage === 'all_completed' || c.source === 'kuwaiti') continue;
@@ -1162,6 +1165,7 @@ function dqOpen(it) {
   else if (it.kind === 'vehicle') { closeAllModals(); setView('vehicles'); setTimeout(() => openVehicleModal(it.id), 50); }
   else if (it.kind === 'cc') { closeAllModals(); UI.co.tab = 'costcenters'; setView('companies'); setTimeout(() => openCostCenterModal(it.id), 50); }
   else if (it.kind === 'user') openUsersModal();
+  else if (it.kind === 'permit') { closeAllModals(); setView('permits', { focusPermit: it.id }); }
   else if (it.id === 'exportpw') openExportPasswordModal();
 }
 function printDataQuality(r) {

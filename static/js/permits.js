@@ -44,6 +44,42 @@ function permitProjectOptions(sel) {
   return opt('', t('— بدون —'), !sel) + scopedProjects().slice().sort((a, b) => projectSortKey(a).localeCompare(projectSortKey(b), 'ar'))
     .map(p => opt(p.id, projectName(p.id) + (p.contractNo ? ' · ' + p.contractNo : ''), p.id === sel)).join('');
 }
+/** أقصى تاريخ للتصريح = أقرب تاريخ من: الموظف ← الإقامة ونهاية العقد اللي مسجّل عليه (إذن العمل مش داخل)،
+    والعربية ← نهاية العقد والتأمين والدفتر. [{l, d}] الأقرب الأول (نفس permit_cap على السيرفر). */
+function permitCaps(kind, h) {
+  if (!h) return [];
+  const out = [];
+  if (kind === 'employee') { if (h.residencyExp) out.push({ l: t('الإقامة'), d: h.residencyExp }); }
+  else {
+    if (h.insuranceExpiry) out.push({ l: t('التأمين'), d: h.insuranceExpiry });
+    if (h.govLicenseExpiry) out.push({ l: t('الدفتر'), d: h.govLicenseExpiry });
+  }
+  if (h.contractEnd) out.push({ l: `${t('العقد')}${h.projectId && IDX.project[h.projectId] ? ' ' + projectName(h.projectId) : ''}`, d: h.contractEnd });
+  return out.sort((a, b) => a.d.localeCompare(b.d));
+}
+/** التصريح مربوط بأنهي تاريخ (تاريخه = تاريخ من تواريخ الحد) */
+function permitTiedTo(p) { return permitCaps(p.holderKind, permitHolder(p)).find(c => c.d === p.expiryDate) || null; }
+/** الموظف مستقيل / إنهاء خدمات / في فترة إنذار وتصريحه لسه ساري ← لازم يتلغي */
+function permitNeedsCancel(p) {
+  const h = permitHolder(p);
+  return p.holderKind === 'employee' && !!h && (empEnded(h) || h.employmentStatus === 'warning') && permitValid(p) && permitCurrent(p);
+}
+/** التصريح قرّب ينتهي (90 يوم) والحد بقى أبعد (الإقامة أو العقد اتجددوا) ← ممكن يتجدد لحد الحد الجديد */
+function permitRenewHint(p) {
+  if (!permitCurrent(p) || permitNeedsCancel(p)) return null;
+  const d = daysUntil(p.expiryDate);
+  if (d === null || d > 90) return null;
+  const cs = permitCaps(p.holderKind, permitHolder(p));
+  return cs.length && cs[0].d > p.expiryDate ? cs[0] : null;
+}
+function permitFlagsHtml(p) {
+  const tie = permitTiedTo(p), hint = permitRenewHint(p), cap = permitCaps(p.holderKind, permitHolder(p))[0];
+  const over = cap && permitCurrent(p) && p.expiryDate > cap.d;       // اتسجّل قبل قاعدة «أقرب تاريخ»
+  return `${tie ? `<div class="small muted">🔗 ${t('مع')} ${esc(tie.l)}</div>` : ''}
+    ${over ? `<div class="small" style="color:var(--red)" title="${esc(t('تاريخ التصريح بعد أقرب تاريخ مسموح — راجعه'))}">⛔ ${t('بعد')} ${esc(cap.l)} (${fmtDate(cap.d)})</div>` : ''}
+    ${permitNeedsCancel(p) ? `<div class="small" style="color:var(--red)">⚠️ ${t('لازم يتلغي')}</div>` : ''}
+    ${hint ? `<div class="small" style="color:var(--green)">🔄 ${t('ممكن يتجدد لحد')} ${fmtDate(hint.d)} (${esc(hint.l)})</div>` : ''}`;
+}
 /** التصريح «الحالي» = الأبعد انتهاءً لنفس الشخص ونفس النوع ونفس الأماكن. اللي قبله اتجدّد: تاريخ بس، مالوش تنبيه */
 let PERMIT_SUPER = { state: null, set: new Set() };
 function permitSuperseded(p) {
@@ -109,6 +145,7 @@ function openPermitModal(id, kind0, preset) {
         <label title="${esc(t('العقد أو المشروع اللي التصريح طالع عليه — ممكن يختلف عن عقد صاحبه ومكان شغله'))}">${t('العقد / المشروع (اختياري)')}<select name="projectId">${permitProjectOptions(x.projectId)}</select></label>
         <label>${t('تاريخ الإصدار')}<input type="date" name="issueDate" value="${esc(x.issueDate || '')}"></label>
         <label><span class="req">${t('تاريخ الانتهاء')}</span><input type="date" name="expiryDate" value="${esc(x.expiryDate || '')}"></label>
+        <div class="full small" id="pm-cap"></div>
         ${places.length ? `<div class="full"><div class="small muted" style="margin-bottom:4px">${t('الأماكن')}</div>
           <div class="row" style="flex-wrap:wrap;gap:4px 14px">${places.map(pl => `<label class="check"><input type="checkbox" data-place="${pl.id}" ${(x.placeIds || []).includes(pl.id) ? 'checked' : ''}> ${esc(permitPlaceName(pl))}</label>`).join('')}</div></div>` : ''}
         <label class="full">${t('ملاحظات')}<input name="notes" value="${esc(x.notes || '')}"></label>
@@ -129,9 +166,21 @@ function openPermitModal(id, kind0, preset) {
     const hid = kind === 'employee' ? v.split(' — ')[0].trim() : v;
     return holderOf(kind, hid) ? hid : '';
   };
+  // أقصى تاريخ = أقرب تاريخ (الإقامة / العقد / التأمين / الدفتر) ← بيتحط لوحده في التصريح الجديد، والتاريخ بعده ممنوع
+  const expInp = $('[name=expiryDate]', E);
+  let autoExp = '';
+  const syncCap = () => {
+    const hid = pickedHolder(), cs = hid ? permitCaps(kind, holderOf(kind, hid)) : [];
+    expInp.max = cs.length ? cs[0].d : '';
+    if (!p && cs.length && (!expInp.value || expInp.value === autoExp)) { expInp.value = cs[0].d; autoExp = cs[0].d; }
+    $('#pm-cap', E).innerHTML = !hid ? '' : cs.length
+      ? `📌 ${t('أقصى تاريخ للتصريح')}: <b>${fmtDate(cs[0].d)}</b> (${esc(cs[0].l)})${cs.length > 1 ? ` <span class="muted">— ${cs.slice(1).map(c => `${esc(c.l)} ${fmtDate(c.d)}`).join(' · ')}</span>` : ''}`
+      : `<span class="muted">${t(kind === 'employee' ? 'مفيش تاريخ إقامة ولا عقد متسجّل للموظف ده — مفيش حد لتاريخ التصريح.' : 'مفيش تاريخ عقد ولا تأمين ولا دفتر متسجّل للعربية دي — مفيش حد لتاريخ التصريح.')}</span>`;
+  };
+  syncCap();
   const pick = $('[name=holderPick]', E);
   if (pick) {
-    const show = () => { const hid = pickedHolder(); $('#permit-holder', E).innerHTML = hid ? holderCardHtml(kind, holderOf(kind, hid)) : ''; };
+    const show = () => { const hid = pickedHolder(); $('#permit-holder', E).innerHTML = hid ? holderCardHtml(kind, holderOf(kind, hid)) : ''; syncCap(); };
     pick.addEventListener('change', show);
     pick.addEventListener('input', show);
     pick.focus();
@@ -150,6 +199,8 @@ function openPermitModal(id, kind0, preset) {
     if (!d.typeId) return openBlockAlert(t('اختار نوع التصريح'));
     if (!d.expiryDate) return openBlockAlert(t('تاريخ الانتهاء مطلوب'));
     if (d.issueDate && d.issueDate > d.expiryDate) return openBlockAlert(t('تاريخ الإصدار بعد تاريخ الانتهاء'));
+    const caps = permitCaps(kind, holderOf(kind, hid));
+    if (caps.length && d.expiryDate > caps[0].d) return openBlockAlert(`${t('مش هينفع: التصريح بينتهي بعد')} ${caps[0].l} (${fmtDate(caps[0].d)}). ${t(kind === 'employee' ? 'لو اتجدد، حدّث تاريخه في مركز الإقامات والموظفين أو العقود الأول.' : 'لو اتجدد، حدّث تاريخه في مركز السيارات أو العقود الأول.')}`);
     const placeIds = $$('[data-place]', E).filter(c => c.checked).map(c => c.dataset.place);
     // تصريح جديد من نوع عنده منه تصريح ساري ← تأكيد (التجديد مالوش تأكيد)
     if (!p && !renewOf) {
@@ -201,7 +252,7 @@ function allPermits(kind, withEnded, withOld) {
   return (STATE.permits || []).filter(p => {
     if (p.holderKind !== kind || (!withOld && permitSuperseded(p))) return false;
     const h = permitHolder(p);
-    return !!h && (kind !== 'employee' || withEnded || !empEnded(h));
+    return !!h && (kind !== 'employee' || withEnded || !empEnded(h) || permitNeedsCancel(p));
   });
 }
 function holderMatches(kind, h, q) {
@@ -231,14 +282,15 @@ function permitRowHtml(kind, p, showPlaces) {
        <td>${esc(companyName(h.companyId))}<div class="small muted">${esc(ccLabel(h.costCenter))}</div></td>
        <td>${esc(holderDriver(h)) || '<span class="muted">—</span>'}</td>`;
   return `<tr class="clickable${old ? ' muted' : ''}" data-id="${p.id}">${holderCells}<td>${esc(permitLabel(p))}${old ? ` <span class="chip">${t('مُجدَّد')}</span>` : ''}</td><td class="num" dir="ltr" style="white-space:nowrap">${esc(p.permitNo || '')}</td>
-    <td>${esc(p.issuer || '')}</td>${showPlaces ? `<td>${permitPlaceChips(p)}</td>` : ''}<td>${fmtDate(p.issueDate)}</td><td>${old ? fmtDate(p.expiryDate) : datePill(p.expiryDate)}</td>
+    <td>${esc(p.issuer || '')}</td>${showPlaces ? `<td>${permitPlaceChips(p)}</td>` : ''}<td>${fmtDate(p.issueDate)}</td><td>${old ? fmtDate(p.expiryDate) : datePill(p.expiryDate) + permitFlagsHtml(p)}</td>
     <td>${p.fileUrl ? `<button class="btn sm" data-permit-file="${p.id}" title="${esc(t('عرض المرفق'))}">📎</button>` : ''}</td></tr>`;
 }
 /** صفوف المصفوفة: أصحاب التصاريح (أو كل الموظفين / العربيات مع mAll أو «مش عنده») × الأنواع */
 function permitMatrixRows(kind, F) {
   const q = norm(F.q), types = permitTypesFor(kind);
   const hs = ((STATE.permitHolders || {})[kind === 'employee' ? 'employees' : 'vehicles'] || [])
-    .filter(h => (kind !== 'employee' || F.ended || !empEnded(h)) && (!F.company || h.companyId === F.company) && holderMatches(kind, h, q));
+    .filter(h => (kind !== 'employee' || F.ended || !empEnded(h) || permitsOf(kind, h.id).some(permitNeedsCancel))
+      && (!F.company || h.companyId === F.company) && holderMatches(kind, h, q));
   const rows = hs.map(h => ({ h, cells: types.map(tp => holderCurrentPermits(kind, h.id, tp.id)) }));
   const showAll = F.mAll || F.mState === 'none';
   return rows.filter(r => {
@@ -258,7 +310,7 @@ function permitMatrixHtml(kind, rows) {
         <div class="small muted num">${esc(kind === 'employee' ? h.id : [t(VEHICLE_TYPES[h.vehicleType] || ''), h.model].filter(Boolean).join(' · '))}</div></td>
       <td>${esc(companyName(h.companyId))}<div class="small muted">${esc(ccLabel(h.costCenter))}</div></td>
       ${cells.map((c, i) => c.length
-        ? `<td class="clickable" style="text-align:center" data-pid="${c[0].id}" title="${esc(c.map(p => (p.permitNo || '') + ' ' + fmtDate(p.expiryDate)).join(' · '))}">${datePill(c[0].expiryDate)}${c.length > 1 ? ` <small class="muted">+${c.length - 1}</small>` : ''}</td>`
+        ? `<td class="clickable" style="text-align:center" data-pid="${c[0].id}" title="${esc(c.map(p => (p.permitNo || '') + ' ' + fmtDate(p.expiryDate)).join(' · '))}">${datePill(c[0].expiryDate)}${c.length > 1 ? ` <small class="muted">+${c.length - 1}</small>` : ''}${c.some(permitNeedsCancel) ? ` <span title="${esc(t('لازم يتلغي'))}">⚠️</span>` : ''}</td>`
         : `<td class="clickable muted" style="text-align:center" data-add="${esc(h.id)}|${types[i].id}" title="${esc(t('إضافة تصريح'))}">—</td>`).join('')}</tr>`).join('')
       || `<tr><td colspan="${2 + types.length}" class="empty">${t('لا توجد تصاريح')}</td></tr>`}</tbody></table></div>`;
 }

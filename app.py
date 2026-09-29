@@ -1633,9 +1633,11 @@ def permit_holders(s, u):
     """بيانات الموظفين والسيارات اللي في نطاق المستخدم — للعرض في قسم التصاريح بس (من غير مرتب ولا جواز).
     مربوطة مش متنسخة: أي تعديل في مركز الموظفين / السيارات بيبان هنا على طول."""
     cc_co = db.cost_center_companies(s)
-    affs = {}
+    affs, first_project = {}, {}
     for a in s.scalars(select(M.EmployeeAffiliation).order_by(M.EmployeeAffiliation.employeeId, M.EmployeeAffiliation.position)):
         affs.setdefault(a.employeeId, []).append(a.companyId)
+        first_project.setdefault(a.employeeId, a.projectId)          # العقد اللي مسجّل عليه (الانتماء الأساسي)
+    proj_end = {p.id: p.expiryDate for p in s.scalars(select(M.Project))}
     emps, names = [], {}
     for e in s.scalars(select(M.Employee).order_by(M.Employee.name)):
         names[e.id] = (e.name, e.nameEn)
@@ -1644,15 +1646,40 @@ def permit_holders(s, u):
             continue
         emps.append({"id": e.id, "name": e.name, "nameEn": e.nameEn, "nationality": e.nationality, "nationalityEn": e.nationalityEn,
                      "profession": e.profession, "professionEn": e.professionEn, "companyId": a[0] if a else None,
-                     "costCenter": e.costCenter, "fileNo": e.fileNo, "employmentStatus": e.employmentStatus or "active"})
+                     "costCenter": e.costCenter, "fileNo": e.fileNo, "employmentStatus": e.employmentStatus or "active",
+                     "serviceEndDate": db.ser(e.serviceEndDate), "residencyExp": db.ser(e.residencyExp),
+                     "projectId": first_project.get(e.id), "contractEnd": db.ser(proj_end.get(first_project.get(e.id)))})
     vehs = []
     for v in s.scalars(select(M.Vehicle).order_by(M.Vehicle.plate)):
         if not (u.company_ok(v.companyId) if v.companyId else u.allCompanies):
             continue
         dn = names.get(v.driverId, (None, None))
         vehs.append({"id": v.id, "plate": v.plate, "model": v.model, "vehicleType": v.vehicleType, "companyId": v.companyId,
-                     "ownerCompanyId": v.ownerCompanyId, "costCenter": v.costCenter, "driverName": dn[0], "driverNameEn": dn[1]})
+                     "ownerCompanyId": v.ownerCompanyId, "costCenter": v.costCenter, "driverName": dn[0], "driverNameEn": dn[1],
+                     "projectId": v.projectId, "contractEnd": db.ser(proj_end.get(v.projectId)),
+                     "insuranceExpiry": db.ser(v.insuranceExpiry), "govLicenseExpiry": db.ser(v.govLicenseExpiry)})
     return {"employees": emps, "vehicles": vehs}
+
+
+def permit_cap(s, kind, hid):
+    """أقصى تاريخ لانتهاء التصريح = أقرب تاريخ من: الموظف ← انتهاء الإقامة ونهاية العقد اللي مسجّل عليه
+    (إذن العمل مش داخل)، والعربية ← نهاية العقد والتأمين والدفتر. بيرجّع [(الوصف، التاريخ)] الأقرب الأول."""
+    out, project = [], None
+    if kind == "employee":
+        e = s.get(M.Employee, hid)
+        if e is not None and e.residencyExp:
+            out.append(("انتهاء الإقامة", e.residencyExp))
+        aff = s.scalar(select(M.EmployeeAffiliation).where(M.EmployeeAffiliation.employeeId == hid)
+                       .order_by(M.EmployeeAffiliation.position).limit(1))
+        project = s.get(M.Project, aff.projectId) if aff is not None and aff.projectId else None
+    else:
+        v = s.get(M.Vehicle, hid)
+        if v is not None:
+            out += [(lab, getattr(v, f)) for f, lab in (("insuranceExpiry", "انتهاء التأمين"), ("govLicenseExpiry", "انتهاء الدفتر")) if getattr(v, f)]
+            project = s.get(M.Project, v.projectId) if v.projectId else None
+    if project is not None and project.expiryDate:
+        out.append((f"نهاية العقد «{project.nameAr}»", project.expiryDate))
+    return sorted(out, key=lambda x: x[1])
 
 
 def dump_permits(s, emp_ids, veh_ids):
@@ -1699,6 +1726,12 @@ def save_permit(pid=None):
             return err("تاريخ الانتهاء مطلوب")
         if issue and issue > expiry:
             return err("تاريخ الإصدار بعد تاريخ الانتهاء")
+        caps = permit_cap(s, kind, hid)          # التصريح مايعدّيش أقرب تاريخ (الإقامة / العقد / التأمين / الدفتر)
+        if caps and expiry > caps[0][1]:
+            center = ("العقود والمشاريع الحكومية" if "العقد" in caps[0][0]
+                      else "مركز الإقامات والموظفين" if kind == "employee" else "مركز السيارات")
+            return err(f"مش هينفع: التصريح بينتهي بعد {caps[0][0]} ({caps[0][1].strftime('%d/%m/%Y')}). "
+                       f"لو اتجدد، حدّث تاريخه في {center} الأول.", 400, block=True)
         pno = (d.get("permitNo") or "").strip() or None
         if pno:                                   # رقم التصريح مايتكررش في نفس النوع
             other = s.scalar(select(M.Permit).where(M.Permit.typeId == tp.id, M.Permit.permitNo == pno, M.Permit.id != (pid or "")))
@@ -3176,6 +3209,25 @@ def data_quality(s):
     add("veh_driver", "سيارات سايقها خدمته منتهية", "medium", vitems["veh_driver"])
     add("veh_no_company", "سيارات من غير شركة", "medium", vitems["veh_no_company"])
     add("veh_no_dates", "سيارات من غير تاريخ تأمين أو دفتر", "low", vitems["veh_no_dates"])
+
+    # ---------- التصاريح ----------
+    over, cancel = [], []
+    tnames = {t.id: t.nameAr for t in s.scalars(select(M.PermitType))}
+    vplates = {v.id: v.plate for v in s.scalars(select(M.Vehicle))}
+    for p in s.scalars(select(M.Permit).where(M.Permit.expiryDate >= today)):
+        hid = p.employeeId if p.holderKind == "employee" else p.vehicleId
+        who = f"{E[hid].name} ({hid})" if p.holderKind == "employee" and hid in E else vplates.get(hid, hid or "")
+        it = {"kind": "permit", "id": p.id, "label": f"{tnames.get(p.typeId, 'تصريح')} — {who}"}
+        caps = permit_cap(s, p.holderKind, hid)
+        if caps and p.expiryDate > caps[0][1]:
+            over.append({**it, "detail": f"بينتهي {fmt(p.expiryDate)} بعد {caps[0][0]} ({fmt(caps[0][1])})"})
+        e = E.get(hid) if p.holderKind == "employee" else None
+        if e is not None and (e.employmentStatus in ENDED or e.employmentStatus == "warning"):
+            cancel.append({**it, "detail": f"آخر يوم شغل {fmt(e.serviceEndDate) or '—'}"})
+    add("permit_cancel", "تصاريح لازم تتلغي (موظف مستقيل أو إنهاء خدمات أو في فترة إنذار)", "high", cancel,
+        "لغيها رسميًا وبعدين احذفها من قسم التصاريح.")
+    add("permit_over_cap", "تصاريح تاريخها بعد انتهاء الإقامة أو العقد أو التأمين أو الدفتر", "medium", over,
+        "اتسجلت قبل قاعدة «أقرب تاريخ» — راجع التاريخ أو حدّث الأصل.")
 
     # ---------- الحسابات ----------
     active_users = {u.username: u for u in s.scalars(select(M.User)) if u.active}
