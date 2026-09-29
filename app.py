@@ -1637,7 +1637,7 @@ def permit_holders(s, u):
     for a in s.scalars(select(M.EmployeeAffiliation).order_by(M.EmployeeAffiliation.employeeId, M.EmployeeAffiliation.position)):
         affs.setdefault(a.employeeId, []).append(a.companyId)
         first_project.setdefault(a.employeeId, a.projectId)          # العقد اللي مسجّل عليه (الانتماء الأساسي)
-    proj_end = {p.id: p.expiryDate for p in s.scalars(select(M.Project))}
+    proj_end = {p.id: p.expiryDate for p in s.scalars(select(M.Project)) if p.kind == "gov"}   # العقود الحكومية بس بتحد التصريح
     emps, names = [], {}
     for e in s.scalars(select(M.Employee).order_by(M.Employee.name)):
         names[e.id] = (e.name, e.nameEn)
@@ -1663,7 +1663,8 @@ def permit_holders(s, u):
 
 def permit_cap(s, kind, hid):
     """أقصى تاريخ لانتهاء التصريح = أقرب تاريخ من: الموظف ← انتهاء الإقامة ونهاية العقد اللي مسجّل عليه
-    (إذن العمل مش داخل)، والعربية ← نهاية العقد والتأمين والدفتر. بيرجّع [(الوصف، التاريخ)] الأقرب الأول."""
+    (إذن العمل مش داخل)، والعربية ← التأمين / الدفتر ونهاية عقدها. العقد بيدخل بس لو **عقد حكومي** (مش الترخيص
+    الرئيسي 650 — موظفينه ليهم وضع خاص لسه ماتقررش). بيرجّع [(الوصف، التاريخ)] الأقرب الأول."""
     out, project = [], None
     if kind == "employee":
         e = s.get(M.Employee, hid)
@@ -1677,7 +1678,7 @@ def permit_cap(s, kind, hid):
         if v is not None:
             out += [(lab, getattr(v, f)) for f, lab in (("insuranceExpiry", "انتهاء التأمين"), ("govLicenseExpiry", "انتهاء الدفتر")) if getattr(v, f)]
             project = s.get(M.Project, v.projectId) if v.projectId else None
-    if project is not None and project.expiryDate:
+    if project is not None and project.expiryDate and project.kind == "gov":
         out.append((f"نهاية العقد «{project.nameAr}»", project.expiryDate))
     return sorted(out, key=lambda x: x[1])
 
