@@ -278,6 +278,8 @@ def api_state():
             links.setdefault(r.agencyId, []).append(r.costCenterId)
         state["agencies"] = [{**db.to_dict(a), "costCenterIds": links.get(a.id, [])}
                              for a in s.scalars(select(M.Agency).order_by(M.Agency.position, M.Agency.nameAr))]
+        state.update(dump_permits(s, {e["id"] for e in state["employees"]} if u.can("employees.view") else set(),
+                                  {v["id"] for v in state["vehicles"]}))
         for cc in state.get("costCenters", []):                   # رمز المركز بيتحدد مرة واحدة ومايتغيّرش
             cc["codeLocked"] = bool(cc.get("code"))
     if not u.can("custody.all"):                                  # عمليات عهد المستخدمين التانيين مش ليه
@@ -553,6 +555,7 @@ def delete_employee(emp_id):
             return forbidden(OUT_OF_SCOPE)
         s.query(M.EmployeeAffiliation).filter(M.EmployeeAffiliation.employeeId == emp_id).delete()
         s.query(M.Vehicle).filter(M.Vehicle.driverId == emp_id).update({"driverId": None})
+        delete_permits_of(s, employee_id=emp_id)
         s.flush()
         db.log_audit(s, "employee_delete", f"حذف موظف: {e.name} ({emp_id})", uname())
         s.delete(e)
@@ -1275,6 +1278,7 @@ def delete_project(pid):
             return forbidden(OUT_OF_SCOPE)
         s.query(M.EmployeeAffiliation).filter(M.EmployeeAffiliation.projectId == pid).update({"projectId": None})
         s.query(M.Vehicle).filter(M.Vehicle.projectId == pid).update({"projectId": None})
+        s.query(M.Permit).filter(M.Permit.projectId == pid).update({"projectId": None})
         s.flush()
         p = s.get(M.Project, pid)
         if p:
@@ -1391,8 +1395,282 @@ def delete_vehicle(vid):
             return forbidden(OUT_OF_SCOPE)
         if v:
             db.log_audit(s, "vehicle_delete", f"حذف سيارة: {v.plate}", uname())
+            delete_permits_of(s, vehicle_id=vid)
             s.delete(v)
     return jsonify({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# التصاريح (للموظفين والسيارات) — القسم 24
+# صلاحية التصريح = صلاحية صاحبه (employees.* / vehicles.*) ونطاق شركاته. الأنواع والأماكن لمدير النظام بس.
+# ---------------------------------------------------------------------------
+PERMIT_HOLDERS = {"employee": "employees", "vehicle": "vehicles"}
+PERMIT_FILE_EXT = (".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
+
+
+def _permit_holder(s, kind, hid, action):
+    """صاحب التصريح ← (اسمه للسجل، رد خطأ أو None) بعد التأكد من صلاحية القسم ونطاق الشركات."""
+    mod = PERMIT_HOLDERS.get(kind)
+    if not mod:
+        return None, err("صاحب التصريح غير معروف")
+    if not me().can(f"{mod}.{action}"):
+        return None, forbidden()
+    if kind == "employee":
+        e = s.get(M.Employee, hid) if hid else None
+        if e is None:
+            return None, err("الموظف غير موجود", 404)
+        if not emp_ok(s, hid):
+            return None, forbidden(OUT_OF_SCOPE)
+        return f"{e.name} ({e.id})", None
+    v = s.get(M.Vehicle, hid) if hid else None
+    if v is None:
+        return None, err("السيارة غير موجودة", 404)
+    if not opt_company_ok(v.companyId):
+        return None, forbidden(OUT_OF_SCOPE)
+    return f"السيارة {v.plate}", None
+
+
+def _permit_of(s, pid, action):
+    """التصريح وصاحبه ← (التصريح، اسم صاحبه، رد خطأ أو None)."""
+    p = s.get(M.Permit, pid)
+    if p is None:
+        return None, None, err("التصريح غير موجود", 404)
+    who, e = _permit_holder(s, p.holderKind, p.employeeId if p.holderKind == "employee" else p.vehicleId, action)
+    return p, who, e
+
+
+def _drop_permit_file(p):
+    if p.filePath:
+        try:
+            os.remove(db.resolve_file(p.filePath))
+        except OSError:
+            pass
+    p.filePath = p.fileName = None
+
+
+def delete_permits_of(s, employee_id=None, vehicle_id=None):
+    """حذف موظف أو عربية ← تصاريحه وأماكنها ومرفقاتها."""
+    where = M.Permit.employeeId == employee_id if employee_id else M.Permit.vehicleId == vehicle_id
+    for p in s.scalars(select(M.Permit).where(where)).all():
+        _drop_permit_file(p)
+        s.query(M.PermitPlaceLink).filter(M.PermitPlaceLink.permitId == p.id).delete()
+        s.delete(p)
+    s.flush()
+
+
+def dump_permits(s, emp_ids, veh_ids):
+    """الأنواع والأماكن للكل، والتصاريح للموظفين والسيارات الظاهرين للمستخدم بس."""
+    places = {}
+    for r in s.scalars(select(M.PermitPlaceLink)):
+        places.setdefault(r.permitId, []).append(r.placeId)
+    permits = []
+    for p in s.scalars(select(M.Permit).order_by(M.Permit.expiryDate)):
+        if (p.holderKind == "employee" and p.employeeId in emp_ids) or (p.holderKind == "vehicle" and p.vehicleId in veh_ids):
+            d = db.to_dict(p)
+            d.pop("filePath", None)
+            d["placeIds"] = places.get(p.id, [])
+            d["fileUrl"] = f"/files/permit/{p.id}" if p.filePath else None
+            permits.append(d)
+    return {
+        "permitTypes": [db.to_dict(x) for x in s.scalars(select(M.PermitType).order_by(M.PermitType.position, M.PermitType.nameAr))],
+        "permitPlaces": [db.to_dict(x) for x in s.scalars(select(M.PermitPlace).order_by(M.PermitPlace.position, M.PermitPlace.nameAr))],
+        "permits": permits,
+    }
+
+
+@app.post("/api/permits")
+@app.put("/api/permits/<pid>")
+@login_required
+def save_permit(pid=None):
+    d = body()
+    with db.session_scope() as s:
+        p = s.get(M.Permit, pid) if pid else None
+        if pid and p is None:
+            return err("التصريح غير موجود", 404)
+        kind = p.holderKind if p is not None else d.get("holderKind")
+        hid = (p.employeeId if kind == "employee" else p.vehicleId) if p is not None else d.get("holderId")
+        who, e = _permit_holder(s, kind, hid, "edit")
+        if e:
+            return e
+        tp = s.get(M.PermitType, d.get("typeId") or "")
+        if tp is None:
+            return err("اختار نوع التصريح")
+        if tp.appliesTo and tp.appliesTo != kind:
+            return err("نوع التصريح ده مش للموظفين" if kind == "employee" else "نوع التصريح ده مش للسيارات")
+        issue, expiry = db.parse_date(d.get("issueDate")), db.parse_date(d.get("expiryDate"))
+        if not expiry:
+            return err("تاريخ الانتهاء مطلوب")
+        if issue and issue > expiry:
+            return err("تاريخ الإصدار بعد تاريخ الانتهاء")
+        pno = (d.get("permitNo") or "").strip() or None
+        if pno:                                   # رقم التصريح مايتكررش في نفس النوع
+            other = s.scalar(select(M.Permit).where(M.Permit.typeId == tp.id, M.Permit.permitNo == pno, M.Permit.id != (pid or "")))
+            if other is not None:
+                owner = s.get(M.Employee, other.employeeId) if other.employeeId else s.get(M.Vehicle, other.vehicleId)
+                name = (owner.name if other.employeeId else owner.plate) if owner is not None else ""
+                return err(f"رقم التصريح {pno} ({tp.nameAr}) مسجّل بالفعل لـ {name}", 409, block=True)
+        proj = d.get("projectId") or None
+        if proj and s.get(M.Project, proj) is None:
+            return err("العقد / المشروع غير موجود")
+        place_ids = [x for x in dict.fromkeys(d.get("placeIds") or []) if s.get(M.PermitPlace, x) is not None]
+        if p is None:
+            p = M.Permit(id=db.new_id("pm"), holderKind=kind, createdAt=db.now(), createdBy=uname())
+            if kind == "employee":
+                p.employeeId = hid
+            else:
+                p.vehicleId = hid
+            s.add(p)
+        p.typeId, p.permitNo, p.issuer = tp.id, pno, (d.get("issuer") or "").strip() or None
+        p.projectId, p.issueDate, p.expiryDate = proj, issue, expiry
+        p.notes = (d.get("notes") or "").strip() or None
+        p.updatedAt, p.updatedBy = db.now(), uname()
+        s.flush()
+        s.query(M.PermitPlaceLink).filter(M.PermitPlaceLink.permitId == p.id).delete()
+        for x in place_ids:
+            s.add(M.PermitPlaceLink(permitId=p.id, placeId=x))
+        label = f"{'تعديل' if pid else 'إضافة'} {tp.nameAr}{' رقم ' + pno if pno else ''} لـ {who} — ينتهي {expiry.strftime('%d/%m/%Y')}"
+        db.log_audit(s, "permit_edit" if pid else "permit_add", label, uname())
+        if kind == "employee":
+            db.push_timeline(s, hid, "permit", label, uname())
+        return jsonify({"ok": True, "id": p.id})
+
+
+@app.delete("/api/permits/<pid>")
+@login_required
+def delete_permit(pid):
+    with db.session_scope() as s:
+        p, who, e = _permit_of(s, pid, "delete")
+        if e:
+            return e
+        tp = s.get(M.PermitType, p.typeId)
+        label = f"حذف {tp.nameAr if tp else 'تصريح'}{' رقم ' + p.permitNo if p.permitNo else ''} من {who}"
+        db.log_audit(s, "permit_delete", label, uname())
+        if p.holderKind == "employee":
+            db.push_timeline(s, p.employeeId, "permit", label, uname())
+        _drop_permit_file(p)
+        s.query(M.PermitPlaceLink).filter(M.PermitPlaceLink.permitId == pid).delete()
+        s.flush()
+        s.delete(p)
+    return jsonify({"ok": True})
+
+
+@app.post("/api/permits/<pid>/file")
+@login_required
+def upload_permit_file(pid):
+    f = request.files.get("file")
+    if not f:
+        return err("لا يوجد ملف")
+    if os.path.splitext(f.filename or "")[1].lower() not in PERMIT_FILE_EXT:
+        return err("المرفق لازم يكون صورة أو PDF (بيتعرض جوّه البرنامج بس)")
+    with db.session_scope() as s:
+        p, who, e = _permit_of(s, pid, "edit")
+        if e:
+            return e
+        folder = os.path.join(UPLOADS, "permits")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, f"{pid}_{db.new_id('f')}_{secure_filename(f.filename) or 'file'}")
+        f.save(path)
+        _drop_permit_file(p)
+        p.filePath, p.fileName = db.rel_file(path), f.filename
+        p.updatedAt, p.updatedBy = db.now(), uname()
+        db.log_audit(s, "permit_file", f"رفع مرفق تصريح لـ {who}: {f.filename}", uname())
+    return jsonify({"ok": True})
+
+
+@app.delete("/api/permits/<pid>/file")
+@login_required
+def delete_permit_file(pid):
+    with db.session_scope() as s:
+        p, who, e = _permit_of(s, pid, "edit")
+        if e:
+            return e
+        if p.filePath:
+            db.log_audit(s, "permit_file", f"حذف مرفق تصريح من {who}: {p.fileName}", uname())
+        _drop_permit_file(p)
+    return jsonify({"ok": True})
+
+
+@app.get("/files/permit/<pid>")
+@login_required
+def get_permit_file(pid):
+    with db.session_scope(commit=False) as s:
+        p, _, e = _permit_of(s, pid, "view")
+        if p is None or not p.filePath:
+            abort(404)
+        if e:
+            abort(403)
+        path, name = db.resolve_file(p.filePath), p.fileName
+    if not os.path.exists(path):
+        abort(404)
+    return send_file(path, download_name=name, as_attachment=False)    # عرض بس
+
+
+def _save_permit_list(model, prefix, rid, extra=None):
+    d = body()
+    name = (d.get("nameAr") or "").strip()
+    if not name:
+        return err("الاسم مطلوب")
+    with db.session_scope() as s:
+        r = s.get(model, rid) if rid else None
+        if rid and r is None:
+            return err("غير موجود", 404)
+        if s.scalar(select(model).where(model.nameAr == name, model.id != (rid or ""))) is not None:
+            return err(f"«{name}» موجود بالفعل", 409, block=True)
+        if r is None:
+            n = s.scalar(select(func.count()).select_from(model)) or 0
+            r = model(id=db.new_id(prefix), position=n + 1, nameAr=name)
+            s.add(r)
+        r.nameAr, r.nameEn = name, (d.get("nameEn") or "").strip() or None
+        if extra:
+            extra(r, d)
+        what = "نوع" if model is M.PermitType else "مكان"
+        db.log_audit(s, "permit_list", f"{'تعديل' if rid else 'إضافة'} {what} تصاريح: {name}", uname())
+        return jsonify({"ok": True, "id": r.id})
+
+
+def _applies_to(r, d):
+    r.appliesTo = d.get("appliesTo") if d.get("appliesTo") in PERMIT_HOLDERS else None
+
+
+@app.post("/api/permit-types")
+@app.put("/api/permit-types/<rid>")
+@admin_required
+def save_permit_type(rid=None):
+    return _save_permit_list(M.PermitType, "pt", rid, _applies_to)
+
+
+@app.post("/api/permit-places")
+@app.put("/api/permit-places/<rid>")
+@admin_required
+def save_permit_place(rid=None):
+    return _save_permit_list(M.PermitPlace, "pl", rid)
+
+
+def _delete_permit_list(model, rid, used):
+    with db.session_scope() as s:
+        r = s.get(model, rid)
+        if r is None:
+            return jsonify({"ok": True})
+        n = s.scalar(used) or 0
+        if n:
+            return err(f"مش هينفع الحذف: عليه {n} تصريح", 409, block=True)
+        what = "نوع" if model is M.PermitType else "مكان"
+        db.log_audit(s, "permit_list", f"حذف {what} تصاريح: {r.nameAr}", uname())
+        s.delete(r)
+    return jsonify({"ok": True})
+
+
+@app.delete("/api/permit-types/<rid>")
+@admin_required
+def delete_permit_type(rid):
+    return _delete_permit_list(M.PermitType, rid, select(func.count()).select_from(M.Permit).where(M.Permit.typeId == rid))
+
+
+@app.delete("/api/permit-places/<rid>")
+@admin_required
+def delete_permit_place(rid):
+    return _delete_permit_list(M.PermitPlace, rid,
+                               select(func.count()).select_from(M.PermitPlaceLink).where(M.PermitPlaceLink.placeId == rid))
 
 
 @app.post("/api/cost-centers")

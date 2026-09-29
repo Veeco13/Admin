@@ -496,5 +496,53 @@ class AgencyCostCenter(Base):
     costCenterId: Mapped[str] = col("cost_center_id", ID, fk("cost_centers.id"), primary_key=True)
 
 
-# النسخ الاحتياطي: العهد والفواتير والوكالات كمان
-ALL_MODELS.extend([FeeItem, Custody, CustodyLine, Invoice, Agency, AgencyCostCenter])
+# ---------------------------------------------------------------------------
+# التصاريح (للموظفين والسيارات) — الأنواع والأماكن قايمتين بيتحكم فيهم مدير النظام
+# ---------------------------------------------------------------------------
+class PermitType(Base):
+    __tablename__ = "permit_types"
+    id: Mapped[str] = col("id", ID, primary_key=True)
+    nameAr: Mapped[str] = col("name_ar", NAME, nullable=False)
+    nameEn: Mapped[Optional[str]] = col("name_en", NAME)
+    appliesTo: Mapped[Optional[str]] = col("applies_to", String(10))           # employee | vehicle | فاضي = الاتنين
+    position: Mapped[int] = col("position", Integer, nullable=False, default=0)
+
+
+class PermitPlace(Base):
+    __tablename__ = "permit_places"
+    id: Mapped[str] = col("id", ID, primary_key=True)
+    nameAr: Mapped[str] = col("name_ar", NAME, nullable=False)
+    nameEn: Mapped[Optional[str]] = col("name_en", NAME)
+    position: Mapped[int] = col("position", Integer, nullable=False, default=0)
+
+
+class Permit(Base):
+    """تصريح لموظف أو لعربية: النوع والرقم والجهة المانحة والأماكن، ومربوط بعقد / مشروع (الافتراضي عقد صاحبه)."""
+    __tablename__ = "permits"
+    id: Mapped[str] = col("id", ID, primary_key=True)
+    holderKind: Mapped[str] = col("holder_kind", String(10), nullable=False)    # employee | vehicle
+    employeeId: Mapped[Optional[str]] = col("employee_id", ID, fk("employees.id"), index=True)
+    vehicleId: Mapped[Optional[str]] = col("vehicle_id", ID, fk("vehicles.id"), index=True)
+    typeId: Mapped[str] = col("type_id", ID, fk("permit_types.id"), nullable=False)
+    permitNo: Mapped[Optional[str]] = col("permit_no", SHORT)
+    issuer: Mapped[Optional[str]] = col("issuer", NAME)                          # الجهة المانحة
+    projectId: Mapped[Optional[str]] = col("project_id", ID, fk("projects.id"))
+    issueDate: Mapped[Optional[date]] = col("issue_date", Date)
+    expiryDate: Mapped[Optional[date]] = col("expiry_date", Date)
+    notes: Mapped[Optional[str]] = col("notes", TEXT)
+    filePath: Mapped[Optional[str]] = col("file_path", Unicode(500))             # المرفق (للعرض بس)
+    fileName: Mapped[Optional[str]] = col("file_name", Unicode(500))
+    createdAt: Mapped[Optional[datetime]] = col("created_at", DateTime)
+    createdBy: Mapped[Optional[str]] = col("created_by", NAME)
+    updatedAt: Mapped[Optional[datetime]] = col("updated_at", DateTime)
+    updatedBy: Mapped[Optional[str]] = col("updated_by", NAME)
+
+
+class PermitPlaceLink(Base):
+    __tablename__ = "permit_place_links"
+    permitId: Mapped[str] = col("permit_id", ID, fk("permits.id"), primary_key=True)
+    placeId: Mapped[str] = col("place_id", ID, fk("permit_places.id"), primary_key=True)
+
+
+# النسخ الاحتياطي: العهد والفواتير والوكالات والتصاريح كمان
+ALL_MODELS.extend([FeeItem, Custody, CustodyLine, Invoice, Agency, AgencyCostCenter, PermitType, PermitPlace, Permit, PermitPlaceLink])

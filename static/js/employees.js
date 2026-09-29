@@ -20,7 +20,11 @@ const EMP_COLUMNS = [
 ];
 
 // الفلاتر اللي بتاخد أكتر من اختيار (الموظف بيظهر لو طابق أي اختيار في الفلتر الواحد، ولازم يطابق كل الفلاتر)
-const EMP_MULTI = ['company', 'project', 'agency', 'status', 'stage', 'nationality', 'costCenter', 'profession'];
+const EMP_MULTI = ['company', 'project', 'agency', 'status', 'stage', 'nationality', 'costCenter', 'profession', 'permitPlace'];
+// فلاتر تقرير الموظفين (الجنسية ليها اختيار خاص في التقرير)
+const EMP_RB_MULTI = ['company', 'project', 'agency', 'status', 'costCenter', 'stage', 'profession', 'permitPlace'];
+/** فلتر «مكان التصريح» بيظهر بس لو فيه أماكن متسجّلة */
+function empMultiShown(k) { return k !== 'permitPlace' || (STATE.permitPlaces || []).length > 0; }
 function filteredEmployees(f = UI.emp) {
   const q = norm(f.q);
   const L = Object.fromEntries(EMP_MULTI.map(k => [k, asList(f[k])]));
@@ -35,6 +39,11 @@ function filteredEmployees(f = UI.emp) {
     if (L.stage.length && !L.stage.some(x => x === '__none' ? !e.govStage : x === '__note' ? !!e.govStageNote : e.govStage === x)) return false;
     if (L.nationality.length && !L.nationality.includes(e.nationality || '—')) return false;
     if (L.profession.length && !L.profession.includes(e.profession || '—')) return false;
+    // عنده تصريح ساري لمكان من المحددين (أو «بدون تصريح ساري»)
+    if (L.permitPlace.length) {
+      const valid = permitsOf('employee', e.id).filter(permitValid);
+      if (!L.permitPlace.some(pl => pl === '__none' ? !valid.length : valid.some(p => (p.placeIds || []).includes(pl)))) return false;
+    }
     // تقرير الموظفين: جنسيات محددة فقط (in) أو كل الجنسيات ماعدا المحددة (out)
     if ((f.natMode === 'in' || f.natMode === 'out') && f.nats && f.nats.length
         && f.nats.includes(e.nationality || '—') !== (f.natMode === 'in')) return false;
@@ -75,11 +84,12 @@ function empMsOptions(key, companies = []) {
   if (key === 'nationality') return counted(e => e.nationality, natLabel);
   if (key === 'profession') return counted(e => e.profession, profLabel);
   if (key === 'costCenter') return (STATE.costCenters || []).map(c => ({ v: c.name, l: ccLabel(c.name) }));
+  if (key === 'permitPlace') return [{ v: '__none', l: t('بدون تصريح ساري') }, ...(STATE.permitPlaces || []).map(pl => ({ v: pl.id, l: permitPlaceName(pl) }))];
   return [];
 }
 const EMP_MS_LABELS = { company: ['الشركة', '— كل الشركات —'], project: ['العقد / المشروع', '— كل العقود والمشاريع —'], agency: ['الوكالة', '— كل الوكالات —'], status: ['الحالة', '— كل الحالات —'],
   stage: ['المعاملة', '— كل مراحل المعاملات —'], nationality: ['الجنسية', '— كل الجنسيات —'], costCenter: ['مركز التكلفة', '— كل مراكز التكلفة —'],
-  profession: ['المهنة', '— كل المهن —'] };
+  profession: ['المهنة', '— كل المهن —'], permitPlace: ['مكان التصريح', '— كل أماكن التصاريح —'] };
 function empMsField(prefix, key, sel, companies) { const [title, all] = EMP_MS_LABELS[key]; return msField(prefix + key, title, all, empMsOptions(key, companies), sel); }
 function sortEmployees(list) {
   const col = EMP_COLUMNS.find(c => c.key === UI.emp.sort) || EMP_COLUMNS[0];
@@ -122,7 +132,7 @@ function renderEmployees() {
       </div></div>
     <div class="filters no-print">
       <input type="search" id="f-q" placeholder="بحث بالاسم، الرقم المدني، الجواز، رقم الملف…" value="${esc(f.q)}">
-      ${EMP_MULTI.map(k => empMsField('emp.', k, f[k], f.company)).join('')}
+      ${EMP_MULTI.filter(empMultiShown).map(k => empMsField('emp.', k, f[k], f.company)).join('')}
       <select id="f-tierfield">${opt('any', t('أي مستند'), f.tierField === 'any')}${EMP_DATE_FIELDS.map(x => opt(x.key, t(x.label), x.key === f.tierField)).join('')}</select>
       <select id="f-tier">${opt('', t('— كل المستويات —'), !f.tier)}${TIER_FILTERS.map(k => opt(k, t(TIERS[k].label), k === f.tier)).join('')}</select>
       <label class="chip clickable ${f.driver ? 'on' : ''}"><input type="checkbox" id="f-driver" ${f.driver ? 'checked' : ''} hidden>🚚 ${t('السائقين فقط')}</label>
@@ -178,7 +188,7 @@ function renderEmployees() {
   $('#f-tierfield').onchange = e => upd({ tierField: e.target.value });
   $('#f-tier').onchange = e => upd({ tier: e.target.value });
   $('#f-driver').onchange = e => upd({ driver: e.target.checked });
-  $('#f-clear').onclick = () => { msClose(); upd({ q: '', company: [], link: '', project: [], agency: [], status: [], stage: [], nationality: [], costCenter: [], profession: [], tier: '', tierField: 'any', driver: false }); };
+  $('#f-clear').onclick = () => { msClose(); upd({ q: '', company: [], link: '', project: [], agency: [], status: [], stage: [], nationality: [], costCenter: [], profession: [], permitPlace: [], tier: '', tierField: 'any', driver: false }); };
   $$('#emp-table th[data-sort]').forEach(th => th.onclick = () => { const k = th.dataset.sort; UI.emp.dir = UI.emp.sort === k ? -UI.emp.dir : 1; UI.emp.sort = k; saveUiStateToLocalStorage(); render(); });
   $('#pg-prev').onclick = () => upd({ page: f.page - 1 });
   $('#pg-next').onclick = () => upd({ page: f.page + 1 });
@@ -257,6 +267,7 @@ const EMP_REPORT_COLS = [
   { k: 'housingAmount', g: 'work', l: 'بدل السكن', money: true, perm: 'sensitive.salary' },
   { k: 'residencyExp', g: 'docs', l: 'انتهاء الإقامة', date: true },
   { k: 'workPermitExp', g: 'docs', l: 'انتهاء إذن العمل', date: true },
+  { k: 'permits', g: 'docs', l: 'التصاريح السارية', v: e => permitsOf('employee', e.id).filter(permitValid).map(permitShortText).join(' · ') },
   { k: 'passportNo', g: 'docs', l: 'رقم الجواز', v: e => e.passportNo, perm: 'sensitive.documents' },
   { k: 'passportExp', g: 'docs', l: 'انتهاء الجواز', date: true },
   { k: 'healthCardExp', g: 'docs', l: 'انتهاء البطاقة الصحية', date: true },
@@ -319,7 +330,7 @@ function empGroupKey(by, e) {
 function openEmployeeReportModal(selected = []) {
   const R = UI.report = Object.assign({ preset: 'general', cols: EMP_REPORT_PRESETS[0].cols, groupBy: '', sort: 'name', orientation: 'auto', summary: true, sign: false, colors: true, lang: LANG }, UI.report || {});
   const F = { ...UI.emp, tier: tierFilterValue(UI.emp.tier) };   // الفلاتر: نسخة من فلاتر الشاشة (مابتغيّرهاش)
-  const RF = Object.fromEntries(['company', 'project', 'agency', 'status', 'costCenter', 'stage', 'profession'].map(k => [k, asList(F[k])]));
+  const RF = Object.fromEntries(EMP_RB_MULTI.map(k => [k, asList(F[k])]));
   let scope = selected.length ? 'selected' : 'filters';
   const cols = empReportCols();
   const presets = EMP_REPORT_PRESETS.filter(p => !p.perm || can(p.perm));
@@ -343,7 +354,7 @@ function openEmployeeReportModal(selected = []) {
         ${selected.length ? `<div class="row" style="margin-bottom:8px"><label class="check"><input type="radio" name="rb-scope" value="selected" checked> ${t('المحددين فقط')} (${selected.length})</label>
           <label class="check"><input type="radio" name="rb-scope" value="filters"> ${t('حسب الفلاتر')}</label></div>` : ''}
         <div class="form" id="rb-filters">
-          ${['company', 'project', 'agency', 'status', 'costCenter', 'stage', 'profession'].map(k => `<label>${t(EMP_MS_LABELS[k][0])}${empMsField('rb.', k, RF[k])}</label>`).join('')}
+          ${EMP_RB_MULTI.filter(empMultiShown).map(k => `<label>${t(EMP_MS_LABELS[k][0])}${empMsField('rb.', k, RF[k])}</label>`).join('')}
           <label>${t('المستند')}<select name="tierField">${opt('any', t('أي مستند'), F.tierField === 'any')}${EMP_DATE_FIELDS.map(x => opt(x.key, t(x.label), x.key === F.tierField)).join('')}</select></label>
           <label>${t('المستوى')}<select name="tier">${opt('', t('— كل المستويات —'), !F.tier)}${TIER_FILTERS.map(k => opt(k, t(TIERS[k].label), k === F.tier)).join('')}</select></label>
           <label>${t('بحث')}<input name="q" value="${esc(F.q || '')}" placeholder="${esc(t('الاسم، الرقم المدني، الجواز…'))}"></label>
@@ -496,6 +507,7 @@ function printEmployeeReport(list, cols, { title, filters, selectedCount }) {
     if (f.outside) crit.push(t('برّه وكالة عقده'));
     list('status', 'الحالة', x => (EMP_STATUS_LABELS[x] || {})[LANG === 'en' ? 'en' : 'ar'] || x);
     list('nationality', 'الجنسية', natLabel);
+    list('permitPlace', 'مكان التصريح', x => x === '__none' ? t('بدون تصريح ساري') : permitPlaceName(IDX.permitPlace[x]));
     if ((f.natMode === 'in' || f.natMode === 'out') && f.nats && f.nats.length)
       crit.push(`${t(f.natMode === 'in' ? 'الجنسيات' : 'كل الجنسيات ماعدا')}: ${esc(f.nats.map(natLabel).join(sep))}`);
     list('profession', 'المهنة', profLabel);
@@ -685,6 +697,7 @@ async function openProfileCard(id, tab = 'info') {
   const moves = tl.filter(x => MOVE_ICONS[x.type]);
   const ccCo = costCenterCompanyId(e.costCenter);
   const vehicles = STATE.vehicles.filter(v => v.driverId === e.id);
+  const permits = permitsOf('employee', e.id);
   const field = (l, v) => `<div><span>${esc(t(l))}</span>${v || '<span class="muted">—</span>'}</div>`;
   const m = openModal({
     title: esc(t('بطاقة الموظف')), size: 'wide',
@@ -699,6 +712,7 @@ async function openProfileCard(id, tab = 'info') {
         <button data-tab="info" class="${tab === 'info' ? 'active' : ''}">البيانات</button>
         <button data-tab="docs" class="${tab === 'docs' ? 'active' : ''}">المستندات والتواريخ</button>
         <button data-tab="files" data-p="sensitive.documents" class="${tab === 'files' ? 'active' : ''}">المرفقات</button>
+        <button data-tab="permits" class="${tab === 'permits' ? 'active' : ''}">🪪 ${t('التصاريح')} (${permits.length})</button>
         <button data-tab="moves" class="${tab === 'moves' ? 'active' : ''}">🏢 ${t('التحركات')} (${moves.length})</button>
         <button data-tab="timeline" class="${tab === 'timeline' ? 'active' : ''}">السجل (${tl.length})</button>
       </div>
@@ -737,6 +751,8 @@ async function openProfileCard(id, tab = 'info') {
       </div>
       <div data-pane="files" ${tab !== 'files' ? 'hidden' : ''}><div id="emp-files"><div class="muted">${t('جاري التحميل…')}</div></div>
         <button class="btn write-only" data-p="employees.edit sensitive.documents" id="emp-upload" style="margin-top:10px">📎 ${t('رفع مرفق')}</button></div>
+      <div data-pane="permits" ${tab !== 'permits' ? 'hidden' : ''}>${permitListHtml(permits, 'employee')}
+        <button class="btn write-only" data-p="employees.edit" data-add-permit style="margin-top:10px">➕ ${t('إضافة تصريح')}</button></div>
       <div data-pane="moves" ${tab !== 'moves' ? 'hidden' : ''}>
         <div class="kv">${field('مسجّل على', (e.affiliations || []).map((a, i) => `${esc(companyName(a.companyId) || '—')}${a.projectId ? ` <span class="small muted">(${esc(projectName(a.projectId))})</span>` : ''}${i ? ` <span class="chip">${t('إضافي')}</span>` : ''}`).join('<br>'))}
           ${field('مركز التكلفة', esc(e.costCenter))}${field('شغال فعليًا في', esc(companyName(ccCo) || (e.costCenter ? t('غير محددة') : '')))}</div>
@@ -764,6 +780,10 @@ async function openProfileCard(id, tab = 'info') {
   if (tab === 'files' && can('sensitive.documents')) loadDriveFiles(e.id, m.el);
   $$('[data-renew]', m.el).forEach(b => b.onclick = () => { m.close(); openQuickRenewModal(e.id, b.dataset.renew); });
   const up = $('#emp-upload', m.el); if (up) up.onclick = () => uploadFileForEmployee(e.id, m.el);
+  // التصاريح: بعد الحفظ البطاقة بتتفتح تاني على نفس التبويب
+  const reopen = () => { m.close(); openProfileCard(e.id, 'permits'); };
+  bindPermitList(m.el, reopen);
+  $('[data-add-permit]', m.el).onclick = () => openPermitModal(null, { holderKind: 'employee', holderId: e.id }, reopen);
   $$('[data-a]', m.el).forEach(b => b.onclick = async () => {
     const a = b.dataset.a;
     if (a === 'edit') { m.close(); openEmployeeModal(e.id); }

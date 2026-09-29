@@ -17,14 +17,14 @@ function collectAllTrackedDates() {
 }
 
 function goEmployees(filters) {
-  UI.emp = Object.assign(UI.emp, { q: '', company: [], link: '', project: [], agency: [], status: [], stage: [], nationality: [], costCenter: [], profession: [], tier: '', tierField: 'any', driver: false, page: 1 },
+  UI.emp = Object.assign(UI.emp, { q: '', company: [], link: '', project: [], agency: [], status: [], stage: [], nationality: [], costCenter: [], profession: [], permitPlace: [], tier: '', tierField: 'any', driver: false, page: 1 },
     Object.fromEntries(Object.entries(filters).map(([k, v]) => [k, EMP_MULTI.includes(k) ? asList(v) : v])));
   saveUiStateToLocalStorage();
   setView('employees');
 }
 
 const DB_TIER_COLORS = { expired: 'var(--red)', d30: 'var(--orange)', d60: 'var(--yellow)', d90: 'var(--green)', ok: 'var(--blue)', none: 'color-mix(in srgb, var(--grey) 38%, var(--surface))' };
-const DB_AUDIT_ICONS = { employee: '👤', company: '🏢', candidate: '🧭', contract: '📄', vehicle: '🚗', custody: '💰', backup: '💾' };
+const DB_AUDIT_ICONS = { employee: '👤', company: '🏢', candidate: '🧭', contract: '📄', vehicle: '🚗', permit: '🪪', custody: '💰', backup: '💾' };
 
 /** سهم «روح لـ» حسب اتجاه اللغة */
 function dbArrow() { return LANG === 'en' ? '→' : '←'; }

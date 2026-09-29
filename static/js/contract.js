@@ -412,7 +412,7 @@ const COMPANY_HISTORY_TYPES = {
   project_renewed: '🔄 تجديد مشروع', residency_renewed: '🛂 تجديد إقامة',
   employee_joined: '👤➕ انضمام موظف', employee_left: '👤➖ خروج موظف',
 };
-const AUDIT_CATEGORIES = { employee: 'الموظفين', candidate: 'المترشّحين', company: 'الشركات', vehicle: 'السيارات', custody: 'العهد والمصروفات', backup: 'النسخ الاحتياطي' };
+const AUDIT_CATEGORIES = { employee: 'الموظفين', candidate: 'المترشّحين', company: 'الشركات', vehicle: 'السيارات', permit: 'التصاريح', custody: 'العهد والمصروفات', backup: 'النسخ الاحتياطي' };
 
 function renderCompanyLog() {
   const L = UI.log;

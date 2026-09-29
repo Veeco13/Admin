@@ -93,6 +93,7 @@ zahed/
 | `js/dashboard.js` | DASHBOARD، RENEWAL CALENDAR، ORG CHART | `renderDashboard`، `dbCard`، `dbBars`، `bindVizTips`، `openStuckListModal`، `collectAllTrackedDates`، `renderRenewalCalendarModal`، `renderOrgChartModal` |
 | `js/employees.js` | EMPLOYEES VIEW، EMPLOYEE MODAL، DUPLICATE PREVENTION، BULK ASSIGN، المرفقات | `filteredEmployees`، `renderEmployees`، `openProfileCard`، `handleImportCsv`، `exportEmployeesCsv`، `openEmployeeReportModal`، `printEmployeeReport`، `exportEmployeeReportCsv`، `openEmployeeModal`، `renderAffRows`، `collectAffRows`، `findDuplicateCivilId`، `findDuplicatePassport`، `findDuplicateNameNationality`، `saveEmployee`، `openBulkAssignModal`، `openBulkRenewModal`، `openQuickRenewModal`، `openGovStageModal`، `loadDriveFiles`، `uploadFileForEmployee` |
 | `js/org.js` | COMPANIES (الشركات + المشاريع + مراكز التكلفة)، VEHICLES | `renderCompanies`، `renderCompaniesTab`، `companyAlerts`، `openCompanyDetails`، `fillCompanyDetails`، `renderProjectsTab`، `projectsTable`، `renderCostCentersTab`، `openCompanyModal`، `openProjectModal`، `openSignatoryModal`، `openTrafficAuthModal`، `openCivilAffairsAuthModal`، `openCivilIdDocModal`، `renderVehicles`، `openVehicleModal`، `openCostCenterModal` |
+| `js/permits.js` | PERMITS (التصاريح للموظفين والسيارات) | `renderPermits`، `openPermitModal`، `permitListHtml`، `bindPermitList`، `openPermitsReportModal`، `printPermitsReport`، `openPermitListsModal`، `permitsOf`، `permitValid` |
 | `js/contract.js` | CONTRACT GENERATOR، COMPANY LOG / AUDIT LOG | `renderContractView`، `buildContractHtml`، `renderCompanyLog` |
 | `js/recruit.js` | RECRUITMENT، CANDIDATES REPORT + MODAL | `recruitStagesForSource`، `recruitStageInfo`، `migrateRecruitStages`، `renderRecruitFunnelCard`، `renderRecruitment`، `renderCandidatesReportModal`، `printCandidatesReport`، `openCandidateModal`، `convertCandidateToEmployee` |
 | `models.py` / `db.py` / `db_transfer.py` | DATABASE (SQLAlchemy) | الموديلات، `session_scope`، `init_db`، `to_dict`، `apply`، `coerce`، `dump_state`، `export_tables`، `import_tables`، `transfer` |
@@ -113,6 +114,7 @@ zahed/
 | `recruitment` | تسجيل موظف جديد (الاستقدام والتوظيف) | `renderRecruitment` |
 | `employees` | مركز إدارة الإقامات والموظفين | `renderEmployees` |
 | `vehicles` | مركز إدارة السيارات | `renderVehicles` |
+| `permits` | مركز التصاريح (للموظفين والسيارات — القسم 24) | `renderPermits` |
 | `custody` | العهد والمصروفات (القسم 21) | `renderCustody` |
 | `contract` | عقد العمل | `renderContractView` |
 | `companylog` | السجل التاريخي والتدقيق | `renderCompanyLog` |
@@ -250,6 +252,7 @@ zahed/
   - رخصة الشركة والتفويضين، وبطاقات المفوّضين.
   - العقود والمشاريع، ومعاها في نفس السطر عدد الموظفين اللي إقامتهم أو إذن عملهم بعد نهاية العقد، وعدد السيارات اللي تأمينها أو دفترها بعد نهايته (سطر واحد لكل عقد — مش سطر لكل موظف).
   - تأمين ودفتر السيارات.
+  - التصاريح (للموظف اللي في الخدمة وللعربية) — بتفتح بطاقة الموظف على تبويب «التصاريح».
   - للمترشّحين: التأشيرة، ومهلة الـ 60 يوم من الدخول، وإقامة الكفيل القديم.
   - لو أكتر من مستند لنفس الشخص/الشركة/السيارة بينتهي في نفس اليوم (زي الإقامة وإذن العمل) بيظهروا سطر واحد: "الإقامة + إذن العمل". العدّاد على 🔔 والتقويم بيعدّوا السطور دي.
 - **شريط التنبيه:** بيظهر لو فيه تاريخ منتهي، أو تاريخ هينتهي خلال 7 أيام، أو موظف عنده `govStageNote`.
@@ -402,6 +405,9 @@ fill_docx_template()  ← {{ field }} حتى لو متقسّم على أكتر �
 | POST | `/api/employees/<id>/clearance/<pdf\|docx>` | إقرار مخالصة عمالية نهائية. الجسم `{procedure: transfer\|travel, date, sig, signFirst, signSecond, person, company}` |
 | POST | `/api/employees/<id>/forms/<residency\|driving>`، `/api/candidates/<id>/forms/driving` | النموذج الرسمي PDF متعبّي. الجسم `{action, person, company}` (البيانات اللي اتكتبت في النافذة). الإقامة محتاجة `sensitive.documents` ومرفوضة للكويتيين والخليجيين |
 | POST / PUT / DELETE | `/api/companies`، `/api/projects`، `/api/signatories`، `/api/vehicles`، `/api/cost-centers`، `/api/candidates` | CRUD |
+| POST / PUT / DELETE | `/api/permits[/<id>]` | التصاريح — صلاحية صاحبها (`employees.*` / `vehicles.*`) ونطاقه — القسم 24 |
+| POST / DELETE | `/api/permits/<id>/file` | مرفق التصريح (صورة أو PDF)، والعرض من `/files/permit/<id>` (عرض بس) |
+| POST / PUT / DELETE | `/api/permit-types[/<id>]` · `/api/permit-places[/<id>]` | أنواع وأماكن التصاريح (مدير النظام بس) |
 | POST / PUT / DELETE | `/api/agencies[/<id>]` | الوكالات ومراكز التكلفة التابعة ليها (`companies.edit` / `companies.delete`) — القسم 23 |
 | POST | `/api/companies/<id>/docs/<kind>` | مستندات الشركة والشعار (`kind=logo`) |
 | POST | `/api/signatory-docs/<civilId>` | بطاقة المفوّض |
@@ -471,6 +477,7 @@ fill_docx_template()  ← {{ field }} حتى لو متقسّم على أكتر �
 | `0019` | رموز مراكز التكلفة: `cost_centers.code` (فريد — ABE، ABU، ABS، SUP، SCO، SMP، XCD، TGO، RSH، FRM، OTH للموجودين)، و`invoices.cc_code` / `closing_seq` / `closing_ref` — الفريد بقى (`cc_code`, `year`, `no`) |
 | `0018` | العهد لكل مستخدم: `users.custody_code` (رمز العهد — بيتعبّى تلقائيًا)، `custodies.owner_id` / `prefix` / `seq` (صاحبها ورقمها «AA-0001» — القديمة من `created_by`)، `custody_lines.dup_ok` |
 | `0020` | العقود والمشاريع الحكومية والوكالات: جدولين `agencies` و`agency_cost_centers` (سوبيرور ← SUP، سكومي ← SCO + SMP)، و`projects.kind` (`main` / `gov`) / `contract_no` / `agency_id` / `start_date`، و`vehicles.project_id` / `cost_center` / `vehicle_type`. البيانات الأولى من تراخيص الهيئة (ملف 100100253): الترخيص الرئيسي 3563650 والست عقود بأرقامها وتواريخها |
+| `0021` | التصاريح: `permit_types` (بـ `applies_to`: employee / vehicle / فاضي = الاتنين — بيتزرع تصريح دخول، بطاقة أمنية، تصريح مرور)، `permit_places`، `permits` (موظف أو عربية، النوع والرقم والجهة المانحة والعقد والإصدار والانتهاء والمرفق والملاحظات)، و`permit_place_links` |
 | `0017` | الحالة الوظيفية: `employees.service_end_type` (مستقيل / إنهاء خدمات — ومع فترة الإنذار الحالة اللي بعدها) و`employees.service_end_reason`؛ «منتهي خدمته» القديمة ← نوعها `terminated` |
 | `0009` | `companies.unified_number`؛ `employees` و`candidates`: `unified_number`، `blood_type`، `address_*`، `home_phone`؛ و`candidates.gender` — للنماذج الرسمية |
 
@@ -515,7 +522,7 @@ python manage_db.py transfer sqlite:///lunx.db "postgresql+psycopg://lunx:PASS@l
   - نسخ الإصدار ده.
   - نسخ v353-flask.1 و.2.
   - نسخة Lunx القديمة (STATE).
-- **الجداول:** كل جداول `ALL_MODELS` — ومنها العهد وبنودها والفواتير وجدول الرسوم والوكالات (قبل كده العهد والفواتير ماكانوش بيدخلوا في النسخة).
+- **الجداول:** كل جداول `ALL_MODELS` — ومنها العهد وبنودها والفواتير وجدول الرسوم والوكالات والتصاريح (من غير ملفات المرفقات) (قبل كده العهد والفواتير ماكانوش بيدخلوا في النسخة).
 - **المراجع اليتيمة** (زي سيارة سواقها اتحذف) بتتفضّى تلقائي وقت الاستعادة، وعددها بيظهر في النتيجة.
 
 > ممنوع أي SQL خاص بنوع قاعدة معيّن في الكود. أي استعلام يتكتب بالـ ORM أو بـ `select()`، وأي تغيير في الهيكل يتعمل بـ migration.
@@ -779,4 +786,15 @@ docker compose exec db pg_dump -U lunx lunx > lunx.sql          # نسخة SQL �
 - **السيارات:** نوع المركبة (`VEHICLE_TYPES`: خصوصي، شاحنة، شاحنة نصف، صهريج، حافلة، دراجة نارية، معدات، أخرى)، العقد / المشروع، ومركز التكلفة (بالاسم زي الموظف). **العقد لازم يكون تبع الشركة اللي العربية مسجّلة باسمها** (قايمة العقود في النافذة بتتغيّر مع الشركة، والسيرفر بيرفض غير كده). بطاقة السيارة فيها «مسجّلة باسم / العقد / شغالة فعليًا» و⚠️. فلاتر: العقد، الوكالة، النوع، مركز التكلفة («برّه وكالة عقدها»)، والـ CSV فيه الأعمدة الجديدة.
 - **تغيير اسم مركز تكلفة** بيحدّث السيارات كمان، و**حذفه** بيترفض لو عليه سيارات، وبيشيله من الوكالات.
 - **📊 توزيع العمالة والمركبات (`printDistributionReport`):** عربي أو إنجليزي (`withLang`)، مصفوفة: العقد × مكان الشغل الفعلي (برموز مراكز التكلفة) للموظفين وللسيارات، والخانات البرتقالي = برّه وكالة العقد، وملخص (عدد العقود، الموظفين، برّه الوكالة، السيارات). معاينة وطباعة بس، والطباعة بتتسجّل.
-- **المرحلة الجاية (لما تتطلب):** التصاريح للموظفين والسيارات (الأنواع، الأماكن، تاريخ الانتهاء) على نفس الربط بالعقد.
+- **التصاريح:** القسم 24 — على نفس الربط بالعقد.
+
+## 24. التصاريح للموظفين والسيارات (`static/js/permits.js`)
+- **التصريح:** تابع لموظف أو لعربية (`holderKind`)، وفيه: النوع، الرقم، الجهة المانحة، الأماكن (التصريح الواحد ممكن يغطي أكتر من مكان)، العقد / المشروع (**الافتراضي عقد صاحبه** — `empProjectId` / `vehicle.projectId`)، تاريخ الإصدار، **تاريخ الانتهاء (إجباري)**، ملاحظات، ومرفق (صورة أو PDF — للعرض والطباعة بس، `openFileViewer`).
+- **الأنواع والأماكن:** قايمتين بيتحكم فيهم **مدير النظام** من «⚙️ الأنواع والأماكن» في شاشة التصاريح. النوع ليه «لمين» (الموظفين / السيارات / الاتنين) وقايمة الأنواع في النافذة بتتغيّر حسب صاحب التصريح. الاسم مايتكررش، واللي عليه تصاريح مايتحذفش (يتعدّل اسمه بس).
+- **القواعد (السيرفر):** صلاحية التصريح = صلاحية صاحبه (`employees.view/edit/delete` أو `vehicles.*`) ونطاق شركاته؛ رقم التصريح مايتكررش في نفس النوع (⛔)؛ الإصدار مايبقاش بعد الانتهاء؛ النوع لازم يناسب صاحبه. كل إضافة / تعديل / حذف بيتسجّل في سجل التدقيق (فئة «التصاريح») وفي سجل الموظف.
+- **حذف موظف أو عربية** بيحذف تصاريحه ومرفقاتها، و**حذف عقد** بيسيب تصاريحه من غير عقد.
+- **شاشة «🪪 التصاريح»** (`employees.view` أو `vehicles.view`): جدول بكل التصاريح (الأقرب ينتهي الأول) — فلاتر: موظفين / سيارات، النوع، المكان، العقد، الوكالة، المستوى (خلال 30 / 60 / 90 يوم مع المنتهي)، و«مع المنتهية خدمتهم» (مخفيين افتراضيًا). فيها «➕ إضافة تصريح» (بتختار الموظف بالاسم أو الرقم المدني، أو العربية)، و«🖨️ تقرير التصاريح»، و«📤 تصدير CSV» (مدير النظام + كلمة سر التصدير).
+- **بطاقة الموظف:** تبويب «🪪 التصاريح (n)» فيه تصاريحه وإضافة وتعديل. **نافذة العربية:** جزء «🪪 التصاريح» بنفس الشكل. بعد الحفظ البطاقة بتتفتح تاني على نفس المكان.
+- **الفلاتر:** شاشة الموظفين وتقريرهم فيهم «مكان التصريح» (عنده تصريح **ساري** للمكان ده، أو «بدون تصريح ساري») — بيظهر بس لو فيه أماكن. شاشة السيارات فيها نفس الفلتر. تقرير الموظفين فيه عمود «التصاريح السارية».
+- **التنبيهات:** كل تصريح بينتهي خلال 90 يوم أو انتهى بيدخل مركز التنبيهات والرئيسية (الموظف اللي خدمته انتهت لأ)، ولو في نفس يوم مستند تاني لنفس الشخص بيتجمعوا في سطر واحد.
+- **تقرير التصاريح:** عربي أو إنجليزي (`withLang`)، حسب فلاتر الشاشة، ومجمّع بالعقد / النوع / المكان / صاحب التصريح / الوكالة (التصريح اللي بيغطي أكتر من مكان بيظهر تحت كل مكان). الملخص: العدد، للموظفين، للسيارات، المنتهي، خلال 30 يوم. معاينة وطباعة بس، والطباعة بتتسجّل.

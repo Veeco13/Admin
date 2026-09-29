@@ -14,6 +14,7 @@ const VIEWS = [
   { id: 'recruitment', label: 'تسجيل موظف جديد',        ico: '🧭', render: () => renderRecruitment() }, // الموظف الجديد بيتضاف من هنا بس
   { id: 'employees',   label: 'الإقامات والموظفين',      ico: '👥', render: () => renderEmployees() },
   { id: 'vehicles',    label: 'السيارات',               ico: '🚗', render: () => renderVehicles() },
+  { id: 'permits',     label: 'التصاريح',               ico: '🪪', render: () => renderPermits() },     // للموظفين والسيارات
   { id: 'custody',     label: 'العهد والمصروفات',        ico: '💰', render: () => renderCustody() },
   { id: 'contract',    label: 'عقد العمل',              ico: '📄', render: () => renderContractView() },
   { id: 'companylog',  label: 'السجل التاريخي والتدقيق', ico: '🗂️', render: () => renderCompanyLog() },
@@ -202,7 +203,11 @@ function buildIndex() {
     vehicle: Object.fromEntries(STATE.vehicles.map(v => [v.id, v])),
     candidate: Object.fromEntries(STATE.candidates.map(c => [c.id, c])),
     template: Object.fromEntries(STATE.templates.map(x => [x.id, x])),
+    permitType: Object.fromEntries((STATE.permitTypes || []).map(x => [x.id, x])),
+    permitPlace: Object.fromEntries((STATE.permitPlaces || []).map(x => [x.id, x])),
+    permitsOf: { employee: {}, vehicle: {} },          // تصاريح كل موظف / عربية
   };
+  for (const p of STATE.permits || []) (IDX.permitsOf[p.holderKind][p.holderKind === 'employee' ? p.employeeId : p.vehicleId] ||= []).push(p);
 }
 function companyName(id) { const c = IDX.company[id]; return c ? (LANG === 'en' && c.nameEn ? c.nameEn : c.nameAr) : ''; }
 function projectName(id) { const p = IDX.project[id]; return p ? (LANG === 'en' && p.nameEn ? p.nameEn : p.nameAr) : ''; }
@@ -274,7 +279,7 @@ const PERM_KEYS = [
 ];
 const VIEW_PERM = { employees: 'employees.view', companies: 'companies.view|costcenters.view', vehicles: 'vehicles.view',
   contract: 'contract.view employees.view sensitive.salary', recruitment: 'recruitment.view', companylog: 'companylog.view',
-  custody: 'custody.view' };
+  custody: 'custody.view', permits: 'employees.view|vehicles.view' };
 function can(key) {
   const m = STATE && STATE.me;
   if (!m) return false;
@@ -799,10 +804,11 @@ async function restoreBackup() {
    UI STATE — حفظ الفلاتر والصفحة
    ===================================================================== */
 let UI = Object.assign({
-  emp: { q: '', company: [], link: '', project: [], agency: [], status: [], stage: [], nationality: [], costCenter: [], profession: [], tier: '', tierField: 'any', driver: false, sort: 'name', dir: 1, page: 1, perPage: 50 },
+  emp: { q: '', company: [], link: '', project: [], agency: [], status: [], stage: [], nationality: [], costCenter: [], profession: [], permitPlace: [], tier: '', tierField: 'any', driver: false, sort: 'name', dir: 1, page: 1, perPage: 50 },
   cand: { q: '', source: '', stage: '', company: '' },
   log: { tab: 'history', company: '', category: '', q: '' },
-  vehicles: { q: '', project: '', agency: '', type: '', cc: '' },
+  vehicles: { q: '', project: '', agency: '', type: '', cc: '', place: '' },
+  permits: { q: '', holder: '', type: '', place: '', project: '', agency: '', tier: '' },
   co: { tab: '', projQ: '', projCompany: '', projAgency: '' },
   custody: { tab: 'list', q: '', status: '', type: '', custodian: '' },
 }, lsJson('mv_uiState', {}));
@@ -887,6 +893,12 @@ function trackedAlertItems(maxDays = 90) {
     push({ kind: 'vehicle', refId: v.id, name: v.plate, what: 'تأمين السيارة', date: v.insuranceExpiry });
     push({ kind: 'vehicle', refId: v.id, name: v.plate, what: 'دفتر السيارة', date: v.govLicenseExpiry });
   }
+  // التصاريح (الموظف اللي خدمته انتهت مالوش تنبيه) ← بتفتح على تبويب «التصاريح»
+  for (const p of STATE.permits || []) {
+    const e = p.holderKind === 'employee' && IDX.employee[p.employeeId], v = p.holderKind === 'vehicle' && IDX.vehicle[p.vehicleId];
+    if (e && !empEnded(e)) push({ kind: 'employee', refId: e.id, name: empName(e), what: permitLabel(p), date: p.expiryDate, tab: 'permits' });
+    else if (v && companyInScope(v.companyId)) push({ kind: 'vehicle', refId: v.id, name: v.plate, what: permitLabel(p), date: p.expiryDate });
+  }
   for (const c of STATE.candidates) {
     if (c.stage === 'rejected' || c.stage === 'all_completed' || c.source === 'kuwaiti') continue;
     if (c.source !== 'internal') {
@@ -900,7 +912,7 @@ function trackedAlertItems(maxDays = 90) {
 }
 function openAlertTarget(it) {
   closeSidePanel();
-  if (it.kind === 'employee') openProfileCard(it.refId);
+  if (it.kind === 'employee') openProfileCard(it.refId, it.tab || 'info');
   else if (it.kind === 'company' || it.kind === 'project') setView('companies', { focusCompany: it.refId, focusTab: it.kind === 'project' ? 'projects' : 'info' });
   else if (it.kind === 'vehicle') { setView('vehicles'); setTimeout(() => openVehicleModal(it.refId), 50); }
   else if (it.kind === 'candidate') { setView('recruitment'); setTimeout(() => openCandidateModal(it.refId), 50); }
