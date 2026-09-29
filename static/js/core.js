@@ -1136,7 +1136,8 @@ function openUserEditModal(u, roles, done) {
       <label><span class="req">${t('اسم المستخدم (للدخول)')}</span><input name="username" value="${v('username')}" dir="ltr" ${isNew ? '' : 'disabled'}></label>
       <label>${t('الاسم الظاهر')}<input name="displayName" value="${v('displayName')}"></label>
       <label>${t('الوظيفة')}<input name="jobTitle" value="${v('jobTitle')}" placeholder="${t('مثلًا: مندوب حكومي')}"></label>
-      <label>${t('رمز العهد')} <span class="small muted">(${t('حروف إنجليزي — أرقام عهده: AA-0001')})</span><input name="custodyCode" value="${v('custodyCode')}" dir="ltr" maxlength="6" style="text-transform:uppercase" placeholder="${t('تلقائي')}"></label>
+      <label>${t('رمز العهد')} <span class="small muted">(${t('حروف إنجليزي — أرقام عهده: AA-0001')})</span><input name="custodyCode" value="${v('custodyCode')}" dir="ltr" maxlength="6" style="text-transform:uppercase" placeholder="${t('تلقائي')}" ${u.custodyCodeLocked ? 'disabled' : ''}>
+        <span class="small muted">${u.custodyCodeLocked ? '🔒 ' + t('الرمز اتستخدم في عهد — مايتغيّرش') : t('بعد أول عهدة بالرمز ده مش هيتغيّر تاني.')}</span></label>
       <label>${t('البريد')}<input name="email" value="${v('email')}" dir="ltr"></label>
       <label>${t('الهاتف')}<input name="phone" value="${v('phone')}" dir="ltr"></label>
       <label>${isNew ? `<span class="req">${t('كلمة المرور')}</span>` : t('كلمة مرور جديدة (سيبها فاضية لو مش هتغيّرها)')}<input name="password" type="password" autocomplete="new-password" minlength="6"></label>
@@ -1167,6 +1168,7 @@ function openUserEditModal(u, roles, done) {
     d.companies = $$('[data-co]', f).filter(x => x.checked).map(x => x.dataset.co);
     d.costCenters = $$('[data-cc]', f).filter(x => x.checked).map(x => x.dataset.cc);
     if (!d.password) delete d.password;
+    if (u.custodyCodeLocked) delete d.custodyCode; else if (d.custodyCode) d.custodyCode = d.custodyCode.toUpperCase();
     if (isSelf) { delete d.active; delete d.roleId; }
     if (!isNew) delete d.username;
     try {

@@ -82,6 +82,7 @@ class CostCenter(Base):
     id: Mapped[str] = col("id", ID, primary_key=True)
     name: Mapped[str] = col("name", NAME, nullable=False, unique=True)
     nameEn: Mapped[Optional[str]] = col("name_en", NAME)
+    code: Mapped[Optional[str]] = col("code", String(10), unique=True)          # رمزه في أرقام الفواتير (SUP) — بيتقفل أول ما يتستخدم
     # الشركة اللي موظفين المركز شغالين فيها فعلًا (ممكن تختلف عن الشركة المسجّلين عليها) ← بتدخل في نطاق الشركات
     companyId: Mapped[Optional[str]] = col("company_id", ID, fk("companies.id"), index=True)
 
@@ -444,10 +445,13 @@ class Invoice(Base):
     """فاتورة من الشركة المُصدِرة لمركز تكلفة في تقفيل عهدة: الرسوم الحكومية + الدعم الإداري لكل موظف.
     INV-<السنة>-<مسلسل يبدأ من 1 كل سنة>. pending ← التقفيل بيتلغي وهي بتتمسح، approved (اعتمدتها الحسابات) ← نهائية."""
     __tablename__ = "invoices"
-    __table_args__ = (UniqueConstraint("year", "no"),)
+    __table_args__ = (UniqueConstraint("cc_code", "year", "no"),)
     id: Mapped[str] = col("id", ID, primary_key=True)
     year: Mapped[int] = col("year", Integer, nullable=False)
-    no: Mapped[int] = col("no", Integer, nullable=False)
+    no: Mapped[int] = col("no", Integer, nullable=False)                         # مسلسل لكل رمز مركز في السنة
+    ccCode: Mapped[Optional[str]] = col("cc_code", String(10))                   # رمز المركز وقت التقفيل ← INV-SUP-2026-0001
+    closingSeq: Mapped[Optional[int]] = col("closing_seq", Integer)              # مسلسل التقفيل في العهدة
+    closingRef: Mapped[Optional[str]] = col("closing_ref", String(30))            # رقم التقفيل «AA-0001/1» (بيتثبّت)
     custodyId: Mapped[str] = col("custody_id", ID, fk("custodies.id"), nullable=False, index=True)
     closingDate: Mapped[date] = col("closing_date", Date, nullable=False)          # تاريخ التقفيل اللي طلعت منه
     costCenter: Mapped[Optional[str]] = col("cost_center", NAME)                   # فاتورة إلى

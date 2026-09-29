@@ -491,6 +491,11 @@ def _invoice_note(support):
     return f"{en}.", f"{ar}."
 
 
+def _closed_by(inv):
+    """«a.ahmed — 29/09/2026 11:53» (مين قفّل وإمتى)"""
+    return f"{inv.createdBy or '—'} — {inv.createdAt.strftime('%d/%m/%Y %H:%M')}" if inv.createdAt else inv.createdBy or "—"
+
+
 def _invoice_lines(inv, lines):
     return [ln for ln in lines if (ln.costCenter or "") == (inv.costCenter or "")]
 
@@ -510,14 +515,15 @@ def _invoice_sheet(ws, s, c, inv, lines, issuer, user):
     number = custody.invoice_no(inv)
     row = _header(ws, n, issuer, ("INVOICE", "فاتورة"), number)
     cc_en, cc_ar, bill_co = _cost_center(s, inv.costCenter, inv.billCompanyId)
-    cc_label = _V(ws, cc_en, cc_ar)
+    cc_label = f"{inv.ccCode} — {_V(ws, cc_en, cc_ar)}" if inv.ccCode else _V(ws, cc_en, cc_ar)
     row, box = _info(ws, row, n, [
         (("Invoice No.", "رقم الفاتورة"), number),
         (("Invoice Date", "تاريخ الفاتورة"), _fmt(inv.closingDate)),
         (("Bill To", "فاتورة إلى"), cc_label),
         (("Company", "الشركة"), _company(ws, bill_co)),
         (("Request For", "نوع المعاملة"), _tx(ws, c)),
-        (("Custody No.", "رقم العهدة"), custody.custody_no(c)),
+        (("Custody / Closing", "العهدة / التقفيل"), f"{custody.custody_no(c)}   ·   {inv.closingRef or '—'}"),
+        (("Closed By", "أُقفلت بواسطة"), _closed_by(inv)),
         (("Status", "الحالة"), _status(ws, inv)),
     ], ("TOTAL DUE (KWD)", "إجمالي المستحق"), _count(ws, len(people), "Employees", "موظف"))
     ws.cell(row=row - 2, column=3).font = Font(name=FONT, size=10, bold=True,
@@ -569,20 +575,21 @@ def _details_sheet(wb, s, c, inv, lines, issuer, user, lang):
     ws = wb.create_sheet(_sheet_name(wb, f"{number[4:]} {'تفاصيل' if lang == 'ar' else 'Details'}"))
     _set_lang(ws, lang)
     cc_en, cc_ar, _ = _cost_center(s, inv.costCenter, inv.billCompanyId)
-    cc_label = _V(ws, cc_en, cc_ar)
+    cc_label = f"{inv.ccCode} — {_V(ws, cc_en, cc_ar)}" if inv.ccCode else _V(ws, cc_en, cc_ar)
     r = 1
     for i, p in enumerate(p for _, ps in _group_people(s, lines) for p in ps):
         if i:
             ws.row_breaks.append(Break(id=r - 1))
         r, _, _ = _closing_individual(ws, r, c, cc_label, issuer, p, float(inv.supportFee or 0), inv.closingDate,
-                                      inv.createdBy or user, i == 0, number)
+                                      inv.createdBy or user, i == 0, number, inv.closingRef)
     _print_setup(ws, False, None, f"{number} · {cc_label}", user)
     ws.sheet_properties.tabColor = ACCENT
 
 
-def _closing_individual(ws, row, c, cc_label, company, p, admin_fee, when, user, first_page, number):
+def _closing_individual(ws, row, c, cc_label, company, p, admin_fee, when, user, first_page, number, c_ref=""):
     """كشف فردي لموظف (نموذج T-104) — بيبدأ من row، وكل كشف في صفحة مطبوعة لوحده."""
     n = 6
+    c_ref = c_ref or custody.custody_no(c)
     if first_page:
         _widths(ws, [5, 46, 28, 16, 16, 20])
     title = ("EMPLOYEE STATEMENT", "كشف موظف")
@@ -594,7 +601,7 @@ def _closing_individual(ws, row, c, cc_label, company, p, admin_fee, when, user,
         (("Civil ID", "الرقم المدني"), p["civilId"]),
         (("Cost Center", "مركز التكلفة"), cc_label),
         (("Request For", "نوع المعاملة"), _tx(ws, c)),
-        (("Invoice No.", "رقم الفاتورة"), f"{number}   ·   {custody.custody_no(c)}"),
+        (("Invoice No.", "رقم الفاتورة"), f"{number}   ·   {c_ref}"),
         (("Invoice Date", "تاريخ الفاتورة"), _fmt(when)),
     ], ("TOTAL (KWD)", "الإجمالي"), _L(ws, "Kuwaiti Dinar", "دينار كويتي", " · "))
     head = row
@@ -671,8 +678,8 @@ def closing_workbook(s, c, when, user, individual=False, lang="both"):
         _invoice_sheet(ws, s, c, inv, inv_lines, issuer, user)
         if individual:
             _details_sheet(wb, s, c, inv, inv_lines, issuer, user, lang)
-        rows.append((inv, _V(ws, cc_en, cc_ar), bill_co, ws.title))
-    _closing_summary(summary, s, c, rows, issuer, when, user)
+        rows.append((inv, f"{inv.ccCode} — {_V(ws, cc_en, cc_ar)}" if inv.ccCode else _V(ws, cc_en, cc_ar), bill_co, ws.title))
+    _closing_summary(summary, s, c, rows, issuer, when, user, invoices[0] if invoices else None)
     return _save(wb)
 
 
@@ -691,20 +698,21 @@ def invoice_workbook(s, inv, user, individual=False, lang="both"):
     return _save(wb)
 
 
-def _closing_summary(ws, s, c, rows, issuer, when, user):
+def _closing_summary(ws, s, c, rows, issuer, when, user, first=None):
     """الملخص الداخلي بين المستلم والشركة المُصدِرة: الفواتير اللي طلعت من التقفيل، وتسوية العهدة كلها."""
     ws.title = _L(ws, "Summary", "الملخص", " ")
     headers = ["#", ("Invoice No.", "رقم الفاتورة"), ("Bill To (Cost Center)", "فاتورة إلى"), ("Company", "الشركة"),
                ("Status", "الحالة"), ("Employees", "الموظفين"), ("Government", "الرسوم الحكومية"),
                ("Admin Support", "الدعم الإداري"), ("Total (KWD)", "الإجمالي (د.ك)")]
     n = len(headers)
-    _widths(ws, [5, 15, 26, 30, 14, 11, 15, 13, 15])
+    _widths(ws, [5, 20, 26, 28, 13, 11, 14, 13, 15])
     number = custody.custody_no(c)
     row = _header(ws, n, issuer, ("CUSTODY CLOSING SUMMARY", "ملخص تقفيل العهدة"))
     row, box = _info(ws, row, n, [
-        (("Custody No.", "رقم العهدة"), number),
+        (("Custody / Closing", "العهدة / التقفيل"), f"{number}   ·   {first.closingRef if first is not None and first.closingRef else '—'}"),
         (("Request For", "نوع المعاملة"), _tx(ws, c)),
         (("Custodian", "المستلم"), c.custodian),
+        (("Closed By", "أُقفلت بواسطة"), _closed_by(first) if first is not None else user),
         (("Disbursed", "تاريخ الصرف"), f"{_fmt(c.disbursedDate)}   ·   {c.disbursedAmount or 0:,.3f} {_L(ws, 'KWD', 'د.ك', ' ')}"),
         (("Closing Date", "تاريخ التقفيل"), _fmt(when)),
     ], ("TOTAL INVOICED (KWD)", "إجمالي الفواتير"), _count(ws, len(rows), "Invoices", "فاتورة"))

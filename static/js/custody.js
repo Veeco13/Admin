@@ -186,20 +186,21 @@ function custodyInvoicesHtml() {
   const U = UI.custody, q = norm(U.iq), all = invoicesInView();
   const cus = Object.fromEntries((STATE.custodies || []).map(c => [c.id, c]));
   const list = all.filter(i => (!U.istatus || i.status === U.istatus) && (!U.icc || (i.costCenter || '') === U.icc)
-    && (!q || [i.number, i.costCenter, companyName(i.billCompanyId), cus[i.custodyId] && custodyNo(cus[i.custodyId]), cus[i.custodyId] && cus[i.custodyId].custodian].some(v => norm(v).includes(q))));
+    && (!q || [i.number, i.ccCode, i.closingRef, i.createdBy, i.costCenter, companyName(i.billCompanyId), cus[i.custodyId] && custodyNo(cus[i.custodyId]), cus[i.custodyId] && cus[i.custodyId].custodian].some(v => norm(v).includes(q))));
   return `<div class="filters"><input type="search" id="cif-q" placeholder="${esc(t('بحث برقم الفاتورة أو مركز التكلفة أو العهدة…'))}" value="${esc(U.iq)}">
       <select id="cif-status">${opt('', t('— كل الحالات —'), !U.istatus)}${Object.entries(INVOICE_STATUS).map(([k, [l]]) => opt(k, t(l), k === U.istatus)).join('')}</select>
       <select id="cif-cc">${opt('', t('— كل مراكز التكلفة —'), !U.icc)}${uniq(all.map(i => i.costCenter || '')).sort().map(x => opt(x, x || t('بدون مركز تكلفة'), x === U.icc)).join('')}</select>
       <button class="btn sm ghost" id="cif-clear">✕ ${t('مسح الفلاتر')}</button><span class="spacer"></span>${custodyLangSelect()}</div>
-    <div class="table-wrap"><table class="data"><thead><tr><th>${t('رقم الفاتورة')}</th><th>${t('التاريخ')}</th><th>${t('فاتورة إلى')}</th><th>${t('العهدة')}</th><th>${t('الموظفين')}</th>
+    <div class="table-wrap"><table class="data"><thead><tr><th>${t('رقم الفاتورة')}</th><th>${t('التاريخ')}</th><th>${t('فاتورة إلى')}</th><th>${t('العهدة')}</th><th>${t('التقفيل')}</th><th>${t('الموظفين')}</th>
       <th>${t('الرسوم الحكومية')}</th><th>${t('الدعم الإداري')}</th><th>${t('الإجمالي')}</th><th>${t('الحالة')}</th><th></th></tr></thead><tbody>
     ${list.map(i => { const c = cus[i.custodyId]; return `<tr class="clickable" data-inv-cu="${esc(i.custodyId)}"><td class="num nowrap"><b>${esc(i.number)}</b></td><td class="num small nowrap">${fmtDate(i.closingDate)}</td>
-      <td>${esc(i.costCenter || t('بدون مركز تكلفة'))}<div class="small muted">${esc(companyName(i.billCompanyId) || '')}</div></td>
+      <td>${i.ccCode ? `<span class="chip on num">${esc(i.ccCode)}</span> ` : ''}${esc(i.costCenter || t('بدون مركز تكلفة'))}<div class="small muted">${esc(companyName(i.billCompanyId) || '')}</div></td>
       <td class="small">${c ? `${esc(custodyNo(c))} · ${esc(custodyTypeLabel(c.txType))}<div class="muted">${esc(c.custodian)}</div>` : '—'}</td>
+      <td class="small nowrap"><b class="num">${esc(i.closingRef || '—')}</b><div class="muted">${esc(i.createdBy || '')}</div></td>
       <td class="num">${i.employees}</td><td class="num">${fmtMoney(i.govAmount)}</td><td class="num">${i.supportAmount ? fmtMoney(i.supportAmount) : '<span class="muted">—</span>'}</td>
       <td class="num nowrap"><b>${fmtMoney(i.total)}</b></td><td>${invoiceStatusChip(i)}</td><td class="nowrap">${invoiceButtons(i)}</td></tr>`; }).join('')
-      || `<tr><td colspan="10" class="empty">${t('لا توجد فواتير — الفواتير بتطلع لما تقفل عهدة')}</td></tr>`}
-    </tbody>${list.length ? `<tfoot><tr><td colspan="4">${t('الإجمالي')} (${list.length})</td><td class="num">${sum(list.map(i => i.employees))}</td><td class="num">${fmtMoney(sum(list.map(i => i.govAmount)))}</td>
+      || `<tr><td colspan="11" class="empty">${t('لا توجد فواتير — الفواتير بتطلع لما تقفل عهدة')}</td></tr>`}
+    </tbody>${list.length ? `<tfoot><tr><td colspan="5">${t('الإجمالي')} (${list.length})</td><td class="num">${sum(list.map(i => i.employees))}</td><td class="num">${fmtMoney(sum(list.map(i => i.govAmount)))}</td>
       <td class="num">${fmtMoney(sum(list.map(i => i.supportAmount)))}</td><td class="num"><b>${fmtMoney(sum(list.map(i => i.total)))}</b></td><td colspan="2"></td></tr></tfoot>` : ''}</table></div>`;
 }
 /** أزرار الفاتورة: معاينة وطباعة، «اعتمدتها الحسابات» أو الرجوع عنها */
@@ -573,13 +574,15 @@ function custodyClosingsHtml(c) {
   const dates = uniq([...Object.keys(by), ...invs.map(i => i.closingDate)]).sort();
   if (!dates.length) return '';
   return `<h4 class="cu-h">🔒 ${t('التقفيلات والفواتير')}</h4><div class="cu-closings">${dates.map(d => {
-    const ps = by[d] || [], list = invs.filter(i => i.closingDate === d).sort((a, b) => a.no - b.no), locked = list.some(i => i.status === 'approved');
-    return `<div class="cu-closing"><div><b>${t('تقفيل')} ${fmtDate(d)}</b><div class="small muted">${ps.length} ${t('شخص')} · ${list.length} ${t('فاتورة')} · ${fmtMoney(sum(list.map(i => i.total)))}</div></div>
+    const ps = by[d] || [], list = invs.filter(i => i.closingDate === d).sort((a, b) => (a.ccCode || '').localeCompare(b.ccCode || '')), locked = list.some(i => i.status === 'approved');
+    const f = list[0] || {};
+    return `<div class="cu-closing"><div><b>${t('تقفيل')} <span class="num">${esc(f.closingRef || '')}</span> · ${fmtDate(d)}</b>
+        <div class="small muted">${f.createdBy ? `${t('بواسطة')} ${esc(f.createdBy)}${f.createdAt ? ' · ' + fmtDateTime(f.createdAt) : ''} · ` : ''}${ps.length} ${t('شخص')} · ${list.length} ${t('فاتورة')} · ${fmtMoney(sum(list.map(i => i.total)))}</div></div>
       <span class="spacer"></span><button class="btn sm primary" data-closing="${d}">📄 ${t('الملخص والفواتير')}</button>
       <button class="btn sm" data-closing="${d}" data-layout="individual">👤 ${t('+ كشف فردي لكل موظف')}</button>
       ${can('custody.delete') && !locked ? `<button class="btn sm danger" data-reopen="${d}">↩️ ${t('إلغاء التقفيل')}</button>` : ''}
       ${locked ? `<span class="small muted" title="${esc(t('الحسابات اعتمدت فاتورة من التقفيل ده'))}">🔐 ${t('نهائي')}</span>` : ''}
-      <div class="cu-invoices">${list.map(i => `<div class="cu-invoice"><b class="num">${esc(i.number)}</b><span>${esc(i.costCenter || t('بدون مركز تكلفة'))}</span>
+      <div class="cu-invoices">${list.map(i => `<div class="cu-invoice"><b class="num">${esc(i.number)}</b>${i.ccCode ? `<span class="chip on num">${esc(i.ccCode)}</span>` : ''}<span>${esc(i.costCenter || t('بدون مركز تكلفة'))}</span>
         <span class="small muted">${i.employees} ${t('موظف')}${i.supportAmount ? '' : ' · ' + t('من غير دعم إداري')}</span><b class="num">${fmtMoney(i.total)}</b>${invoiceStatusChip(i)}
         <span class="spacer"></span>${invoiceButtons(i)}</div>`).join('')}</div></div>`; }).join('')}</div>`;
 }

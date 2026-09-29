@@ -60,6 +60,8 @@ SETTINGS_KEY = "custody_settings"
 DUP_DAYS = 90                     # نفس الشخص ونفس النوع اتقفل في آخر 90 يوم ← تأكيد قبل الطلب، والتقفيل بيرفضه
 DOC_LANGS = ("ar", "en", "both")  # لغة ملفات العهد (الفواتير، الملخص، طلب الصرف، كشف الموظف)
 CODE_RE = re.compile(r"^[A-Z][A-Z0-9]{1,5}$")
+CC_CODE_RE = re.compile(r"^[A-Z][A-Z0-9]{1,4}$")
+NO_CC_CODE = "GEN"                # فاتورة للي مالهمش مركز تكلفة
 
 
 def num(v):
@@ -222,8 +224,11 @@ def default_code(s, u):
 
 
 def check_code(s, uid, code):
-    """رمز جديد لمستخدم ← (الرمز، رسالة خطأ)."""
+    """رمز جديد لمستخدم ← (الرمز، رسالة خطأ). الرمز اللي اتستخدم في عهدة مايتغيّرش."""
     code = (code or "").strip().upper()
+    u = s.get(M.User, uid) if uid else None
+    if u is not None and u.custodyCode and code != u.custodyCode and user_code_used(s, u.custodyCode):
+        return None, f"رمز العهد {u.custodyCode} اتستخدم في عهد — مايتغيّرش"
     if not CODE_RE.match(code):
         return None, "رمز العهد: من 2 لـ 6 حروف وأرقام إنجليزي، ويبدأ بحرف (مثلًا AA أو AHM)"
     if s.scalar(select(func.count()).select_from(M.User).where(M.User.custodyCode == code, M.User.id != uid)):
@@ -307,11 +312,65 @@ def ready_people(s, c):
 
 
 def invoice_no(inv):
-    return f"INV-{inv.year}-{inv.no:04d}"
+    """«INV-SUP-2026-0001»: رمز المركز وقت التقفيل + السنة + مسلسل المركز في السنة."""
+    return f"INV-{inv.ccCode}-{inv.year}-{inv.no:04d}" if inv.ccCode else f"INV-{inv.year}-{inv.no:04d}"
+
+
+# ---------------------------------------------------------------------------
+# رمز مركز التكلفة (بيتقفل أول ما يتستخدم في فاتورة) — ورمز المستخدم (أول ما يتستخدم في عهدة)
+# ---------------------------------------------------------------------------
+def cc_default_code(s, cc):
+    """أول 3 حروف من الاسم الإنجليزي (Superior energy ← SUP)، أو حرف الكلمة الأولى + حرفين من التانية — من غير تكرار."""
+    taken = {x for x in s.scalars(select(M.CostCenter.code).where(M.CostCenter.id != cc.id)) if x} | {NO_CC_CODE}
+    words = [w.upper() for w in re.split(r"[^A-Za-z]+", cc.nameEn or "") if w]
+    cands = [words[0][:3]] if words else []
+    if len(words) > 1:
+        cands += [words[0][0] + words[1][:2], words[0][:2] + words[1][0]]
+    base = next((c for c in cands if len(c) >= 2 and c not in taken), (cands[0] if cands and len(cands[0]) >= 2 else "CC"))[:4]
+    code, n = base, 2
+    while code in taken:
+        code, n = f"{base}{n}", n + 1
+    return code
+
+
+def cc_code_used(s, code):
+    return bool(code) and bool(s.scalar(select(func.count()).select_from(M.Invoice).where(M.Invoice.ccCode == code)))
+
+
+def user_code_used(s, code):
+    return bool(code) and bool(s.scalar(select(func.count()).select_from(M.Custody).where(M.Custody.prefix == code)))
+
+
+def set_cc_code(s, cc, code):
+    """رمز جديد لمركز تكلفة ← رسالة خطأ أو None. الرمز اللي اتستخدم في فاتورة مايتغيّرش."""
+    code = (code or "").strip().upper()
+    if code == (cc.code or ""):
+        return None
+    if cc.code and cc_code_used(s, cc.code):
+        return f"رمز المركز {cc.code} اتستخدم في فواتير — مايتغيّرش"
+    if not CC_CODE_RE.match(code) or code == NO_CC_CODE:
+        return f"رمز المركز: من 2 لـ 5 حروف وأرقام إنجليزي، ويبدأ بحرف (مثلًا SUP) — و{NO_CC_CODE} محجوز"
+    if s.scalar(select(func.count()).select_from(M.CostCenter).where(M.CostCenter.code == code, M.CostCenter.id != cc.id)):
+        return f"الرمز {code} مستخدم لمركز تكلفة تاني"
+    cc.code = code
+    return None
+
+
+def cc_code_for(s, name):
+    """رمز مركز التكلفة بالاسم (بيتحدد لوحده لو مالوش) — ومن غير مركز ← GEN."""
+    cc = s.scalar(select(M.CostCenter).where(M.CostCenter.name == name)) if name else None
+    if cc is None:
+        return NO_CC_CODE
+    if not cc.code:
+        cc.code = cc_default_code(s, cc)
+    return cc.code
 
 
 def make_invoices(s, c, lines, fee, when, user):
-    """فاتورة لكل مركز تكلفة في التقفيل: الرسوم الفعلية + الدعم الإداري مرة لكل موظف (إلا مراكز الشركة نفسها)."""
+    """فاتورة لكل مركز تكلفة في التقفيل: الرسوم الفعلية + الدعم الإداري مرة لكل موظف (إلا مراكز الشركة نفسها).
+    رقمها «INV-رمز المركز-السنة-مسلسل المركز في السنة»، وكلهم بياخدوا رقم التقفيل «AA-0001/1»."""
+    seq = (s.scalar(select(func.max(M.Invoice.closingSeq)).where(M.Invoice.custodyId == c.id)) or 0) + 1
+    ref = f"{custody_no(c)}/{seq}"
     st = settings(s)
     cc_co = db.cost_center_companies(s)
     by_cc = {}
@@ -322,8 +381,10 @@ def make_invoices(s, c, lines, fee, when, user):
         people = len({ln.personId for ln in ls})
         gov = round(sum(amount(ln) for ln in ls), 3)
         support = 0.0 if cc in st["noSupportCostCenters"] else float(fee)
-        no = (s.scalar(select(func.max(M.Invoice.no)).where(M.Invoice.year == when.year)) or 0) + 1
-        inv = M.Invoice(id=db.new_id("inv"), year=when.year, no=no, custodyId=c.id, closingDate=when, costCenter=cc or None,
+        code = cc_code_for(s, cc)
+        no = (s.scalar(select(func.max(M.Invoice.no)).where(M.Invoice.year == when.year, M.Invoice.ccCode == code)) or 0) + 1
+        inv = M.Invoice(id=db.new_id("inv"), year=when.year, no=no, ccCode=code, closingSeq=seq, closingRef=ref,
+                        custodyId=c.id, closingDate=when, costCenter=cc or None,
                         billCompanyId=cc_co.get(cc) or next((ln.companyId for ln in ls if ln.companyId), None),
                         issuerCompanyId=st["issuerCompanyId"], employees=people, govAmount=gov, supportFee=support,
                         supportAmount=round(support * people, 3), total=round(gov + support * people, 3), status="pending",
@@ -405,7 +466,7 @@ def dump(s, ctx):
         out.append(d)
         visible.add(c.id)
     invoices = []
-    for inv in s.scalars(select(M.Invoice).order_by(M.Invoice.year.desc(), M.Invoice.no.desc())):
+    for inv in s.scalars(select(M.Invoice).order_by(M.Invoice.createdAt.desc(), M.Invoice.ccCode, M.Invoice.no.desc())):
         if inv.custodyId in visible:
             d = db.to_dict(inv)
             d["number"] = invoice_no(inv)
