@@ -278,8 +278,9 @@ def api_state():
             links.setdefault(r.agencyId, []).append(r.costCenterId)
         state["agencies"] = [{**db.to_dict(a), "costCenterIds": links.get(a.id, [])}
                              for a in s.scalars(select(M.Agency).order_by(M.Agency.position, M.Agency.nameAr))]
-        state.update(dump_permits(s, {e["id"] for e in state["employees"]} if u.can("employees.view") else set(),
-                                  {v["id"] for v in state["vehicles"]}))
+        holders = permit_holders(s, u) if u.can("permits.view") else {"employees": [], "vehicles": []}
+        state["permitHolders"] = holders
+        state.update(dump_permits(s, {e["id"] for e in holders["employees"]}, {v["id"] for v in holders["vehicles"]}))
         for cc in state.get("costCenters", []):                   # رمز المركز بيتحدد مرة واحدة ومايتغيّرش
             cc["codeLocked"] = bool(cc.get("code"))
     if not u.can("custody.all"):                                  # عمليات عهد المستخدمين التانيين مش ليه
@@ -1402,18 +1403,18 @@ def delete_vehicle(vid):
 
 # ---------------------------------------------------------------------------
 # التصاريح (للموظفين والسيارات) — القسم 24
-# صلاحية التصريح = صلاحية صاحبه (employees.* / vehicles.*) ونطاق شركاته. الأنواع والأماكن لمدير النظام بس.
+# قسم مستقل بصلاحية لوحده (permits.*) ونطاق شركات صاحب التصريح. بياخد بيانات الموظف / العربية للعرض بس
+# (permitHolders في الحالة). الأنواع والأماكن لمدير النظام بس.
 # ---------------------------------------------------------------------------
-PERMIT_HOLDERS = {"employee": "employees", "vehicle": "vehicles"}
+PERMIT_HOLDERS = ("employee", "vehicle")
 PERMIT_FILE_EXT = (".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
 
 
 def _permit_holder(s, kind, hid, action):
-    """صاحب التصريح ← (اسمه للسجل، رد خطأ أو None) بعد التأكد من صلاحية القسم ونطاق الشركات."""
-    mod = PERMIT_HOLDERS.get(kind)
-    if not mod:
+    """صاحب التصريح ← (اسمه للسجل، رد خطأ أو None) بعد التأكد من صلاحية قسم التصاريح ونطاق الشركات."""
+    if kind not in PERMIT_HOLDERS:
         return None, err("صاحب التصريح غير معروف")
-    if not me().can(f"{mod}.{action}"):
+    if not me().can(f"permits.{action}"):
         return None, forbidden()
     if kind == "employee":
         e = s.get(M.Employee, hid) if hid else None
@@ -1456,6 +1457,32 @@ def delete_permits_of(s, employee_id=None, vehicle_id=None):
         s.query(M.PermitPlaceLink).filter(M.PermitPlaceLink.permitId == p.id).delete()
         s.delete(p)
     s.flush()
+
+
+def permit_holders(s, u):
+    """بيانات الموظفين والسيارات اللي في نطاق المستخدم — للعرض في قسم التصاريح بس (من غير مرتب ولا جواز).
+    مربوطة مش متنسخة: أي تعديل في مركز الموظفين / السيارات بيبان هنا على طول."""
+    cc_co = db.cost_center_companies(s)
+    affs = {}
+    for a in s.scalars(select(M.EmployeeAffiliation).order_by(M.EmployeeAffiliation.employeeId, M.EmployeeAffiliation.position)):
+        affs.setdefault(a.employeeId, []).append(a.companyId)
+    emps, names = [], {}
+    for e in s.scalars(select(M.Employee).order_by(M.Employee.name)):
+        names[e.id] = (e.name, e.nameEn)
+        a = affs.get(e.id, [])
+        if not u.affs_ok([{"companyId": c} for c in a], cc_co.get(e.costCenter), e.costCenter):
+            continue
+        emps.append({"id": e.id, "name": e.name, "nameEn": e.nameEn, "nationality": e.nationality, "nationalityEn": e.nationalityEn,
+                     "profession": e.profession, "professionEn": e.professionEn, "companyId": a[0] if a else None,
+                     "costCenter": e.costCenter, "fileNo": e.fileNo, "employmentStatus": e.employmentStatus or "active"})
+    vehs = []
+    for v in s.scalars(select(M.Vehicle).order_by(M.Vehicle.plate)):
+        if not (u.company_ok(v.companyId) if v.companyId else u.allCompanies):
+            continue
+        dn = names.get(v.driverId, (None, None))
+        vehs.append({"id": v.id, "plate": v.plate, "model": v.model, "vehicleType": v.vehicleType, "companyId": v.companyId,
+                     "costCenter": v.costCenter, "driverName": dn[0], "driverNameEn": dn[1]})
+    return {"employees": emps, "vehicles": vehs}
 
 
 def dump_permits(s, emp_ids, veh_ids):
@@ -2646,7 +2673,7 @@ EXPORT_KEY = "export_password"
 def audit_print():
     """زرار «طباعة» في المعاينة ← سطر في سجل التدقيق (مين طبع إيه وإمتى)."""
     d = body()
-    kind = d.get("kind") if d.get("kind") in ("custody", "employee", "candidate") else "print"
+    kind = d.get("kind") if d.get("kind") in ("custody", "employee", "candidate", "permit") else "print"
     with db.session_scope() as s:
         db.log_audit(s, f"{kind}_print", f"طباعة: {(d.get('what') or '—')[:200]}", uname())
     return jsonify({"ok": True})

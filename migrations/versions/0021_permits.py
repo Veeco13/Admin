@@ -6,12 +6,15 @@
   والانتهاء والمرفق (للعرض بس) والملاحظات.
 - permit_place_links: التصريح الواحد ممكن يغطي أكتر من مكان.
 بيتزرع 3 أنواع للبداية (تصريح دخول، بطاقة أمنية، تصريح مرور) وتتعدّل أو تتشال من «⚙️ الأنواع والأماكن».
+صلاحية جديدة «التصاريح» (permits.view / edit / delete): الأدوار اللي كان معاها عرض / تعديل / حذف الموظفين أو
+السيارات بتاخد نفسها في التصاريح (عشان محدش يفقد حاجة كان بيعملها)، ومدير النظام يغيّرها من الأدوار.
 
 Revision ID: 0021
 Revises: 0020
 Create Date: 2026-09-29
 
 """
+import json
 from typing import Sequence, Union
 
 from alembic import op
@@ -81,6 +84,15 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("permit_id", "place_id", name=op.f("pk_permit_place_links")),
     )
     conn = op.get_bind()
+    for rid, raw in conn.execute(sa.text("SELECT id, permissions FROM roles")).fetchall():
+        try:
+            keys = json.loads(raw or "[]")
+        except ValueError:
+            continue
+        add = [f"permits.{a}" for a in ("view", "edit", "delete")
+               if (f"employees.{a}" in keys or f"vehicles.{a}" in keys) and f"permits.{a}" not in keys]
+        if add:
+            conn.execute(sa.text("UPDATE roles SET permissions = :p WHERE id = :i"), {"p": json.dumps(keys + add), "i": rid})
     for i, ar, en, applies, pos in TYPES:
         conn.execute(sa.text("INSERT INTO permit_types (id, name_ar, name_en, applies_to, position) VALUES (:i, :a, :e, :t, :p)"),
                      {"i": i, "a": ar, "e": en, "t": applies, "p": pos})

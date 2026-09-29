@@ -26,6 +26,7 @@ MODULES = [
     ("recruitment", "الاستقدام والتوظيف", ("view", "edit", "delete")),
     ("contract", "عقود العمل والقوالب", ("view", "edit")),
     ("custody", "العهد والمصروفات", ("view", "edit", "delete")),
+    ("permits", "التصاريح (للموظفين والسيارات)", ("view", "edit", "delete")),
     ("companylog", "السجل التاريخي والتدقيق", ("view",)),
 ]
 ACTION_LABELS = {"view": "عرض", "edit": "إضافة وتعديل", "delete": "حذف"}

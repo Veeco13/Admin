@@ -403,15 +403,12 @@ function printDistributionReport() {
    VEHICLES — مركز إدارة السيارات
    ===================================================================== */
 function renderVehicles() {
-  const V = UI.vehicles = Object.assign({ q: '', project: '', agency: '', type: '', cc: '', place: '' }, UI.vehicles || {});
-  const places = STATE.permitPlaces || [];
-  if (V.place && V.place !== '__none' && !IDX.permitPlace[V.place]) V.place = '';
+  const V = UI.vehicles = Object.assign({ q: '', project: '', agency: '', type: '', cc: '' }, UI.vehicles || {});
   const q = norm(V.q);
   const list = STATE.vehicles.filter(v => companyInScope(v.companyId) || !v.companyId)
     .filter(v => (!V.project || (V.project === '__none' ? !v.projectId : v.projectId === V.project))
       && (!V.agency || (projectAgency(v.projectId) || {}).id === V.agency) && (!V.type || v.vehicleType === V.type)
-      && (!V.cc || (V.cc === '__out' ? outsideAgency(v.projectId, v.costCenter) : v.costCenter === V.cc))
-      && (!V.place || (V.place === '__none' ? !permitsOf('vehicle', v.id).some(permitValid) : permitsOf('vehicle', v.id).some(p => permitValid(p) && (p.placeIds || []).includes(V.place)))))
+      && (!V.cc || (V.cc === '__out' ? outsideAgency(v.projectId, v.costCenter) : v.costCenter === V.cc)))
     .filter(v => !q || [v.plate, v.model, companyName(v.companyId), empName(IDX.employee[v.driverId]), projectName(v.projectId), v.costCenter].some(x => norm(x).includes(q)));
   viewRoot().innerHTML = `<div class="page-head"><div><h1>مركز إدارة السيارات</h1><div class="sub">${STATE.vehicles.length} ${t('سيارة')}</div></div>
     <div class="actions"><button class="btn primary write-only" data-p="vehicles.edit" id="v-add">➕ إضافة سيارة</button>${can('admin') ? '<button class="btn" id="v-export">📤 تصدير CSV</button>' : ''}</div></div>
@@ -420,7 +417,6 @@ function renderVehicles() {
       <select id="v-ag">${opt('', t('— كل الوكالات —'), !V.agency)}${(STATE.agencies || []).map(a => opt(a.id, agencyName(a), a.id === V.agency)).join('')}</select>
       <select id="v-type">${opt('', t('— كل الأنواع —'), !V.type)}${Object.entries(VEHICLE_TYPES).map(([k, l]) => opt(k, t(l), k === V.type)).join('')}</select>
       <select id="v-cc">${opt('', t('— كل مراكز التكلفة —'), !V.cc)}${opt('__out', '⚠️ ' + t('برّه وكالة عقدها'), V.cc === '__out')}${STATE.costCenters.map(c => opt(c.name, `${c.code || ''} ${ccLabel(c.name)}`, c.name === V.cc)).join('')}</select>
-      ${places.length ? `<select id="v-place">${opt('', t('— كل أماكن التصاريح —'), !V.place)}${opt('__none', t('بدون تصريح ساري'), V.place === '__none')}${places.map(pl => opt(pl.id, permitPlaceName(pl), pl.id === V.place)).join('')}</select>` : ''}
       <button class="btn sm ghost" id="v-clear">✕ ${t('مسح الفلاتر')}</button></div>
     <div class="table-wrap"><table class="data"><thead><tr><th>${t('رقم اللوحة')}</th><th>${t('النوع / الموديل')}</th><th>${t('الشركة')}</th><th>${t('العقد / المشروع')}</th><th>${t('مركز التكلفة')}</th><th>${t('السائق')}</th><th>${t('انتهاء التأمين')}</th><th>${t('انتهاء الدفتر')}</th></tr></thead>
     <tbody>${list.map(v => {
@@ -437,8 +433,7 @@ function renderVehicles() {
   $('#v-ag').onchange = e => vupd({ agency: e.target.value });
   $('#v-type').onchange = e => vupd({ type: e.target.value });
   $('#v-cc').onchange = e => vupd({ cc: e.target.value });
-  const vp = $('#v-place'); if (vp) vp.onchange = e => vupd({ place: e.target.value });
-  $('#v-clear').onclick = () => vupd({ q: '', project: '', agency: '', type: '', cc: '', place: '' });
+  $('#v-clear').onclick = () => vupd({ q: '', project: '', agency: '', type: '', cc: '' });
   $$('tr[data-id]', viewRoot()).forEach(tr => tr.onclick = () => openVehicleModal(tr.dataset.id));
   const vx = $('#v-export'); if (vx) vx.onclick = () => exportGuard(t('السيارات'), () => downloadBlob(toCsv([[t('رقم اللوحة'), t('النوع'), t('الموديل'), t('الشركة'), t('العقد / المشروع'), t('رقم العقد'), t('الوكالة'), t('مركز التكلفة'), t('السائق'), t('انتهاء التأمين'), t('انتهاء الدفتر')],
     ...list.map(v => [v.plate, t(VEHICLE_TYPES[v.vehicleType] || ''), v.model, companyName(v.companyId), projectName(v.projectId), (IDX.project[v.projectId] || {}).contractNo, agencyName(projectAgency(v.projectId)), v.costCenter, empName(IDX.employee[v.driverId]), v.insuranceExpiry, v.govLicenseExpiry])]), `vehicles-${todayISO()}.csv`, 'text/csv'));
@@ -463,9 +458,7 @@ function openVehicleModal(id) {
       <label>${t('انتهاء التأمين')}<input type="date" name="insuranceExpiry" value="${esc(v.insuranceExpiry || '')}"></label>
       <label>${t('انتهاء الدفتر')}<input type="date" name="govLicenseExpiry" value="${esc(v.govLicenseExpiry || '')}"></label>
       <label class="full">${t('ملاحظات')}<input name="notes" value="${esc(v.notes || '')}"></label></div>
-      <div class="small muted">${t('قائمة السائقين بتعرض الموظفين المعلَّم عليهم «سائق» فقط.')}</div>
-      ${id ? `<h4>🪪 ${t('التصاريح')} (${permitsOf('vehicle', id).length})</h4>${permitListHtml(permitsOf('vehicle', id), 'vehicle')}
-        <button class="btn sm write-only" data-p="vehicles.edit" data-add-permit style="margin-top:8px">➕ ${t('إضافة تصريح')}</button>` : ''}`,
+      <div class="small muted">${t('قائمة السائقين بتعرض الموظفين المعلَّم عليهم «سائق» فقط.')}</div>`,
     foot: `${id ? '<button class="btn danger write-only" data-p="vehicles.delete" data-del>🗑️ حذف</button><span class="spacer"></span>' : ''}<button class="btn primary write-only" data-p="vehicles.edit" data-save>حفظ</button><button class="btn" data-close>إلغاء</button>`,
   });
   // العقود / المشاريع بتاعة الشركة اللي العربية مسجّلة باسمها بس
@@ -485,13 +478,8 @@ function openVehicleModal(id) {
     if (dup) return openBlockAlert(t('رقم اللوحة مسجّل بالفعل'));
     try { await persist(id ? 'PUT' : 'POST', id ? '/api/vehicles/' + id : '/api/vehicles', d, 'تم الحفظ'); m.close(); } catch (e) { if (e.data && e.data.block) openBlockAlert(e.message); }
   };
-  if (id) {                                   // التصاريح: بعد الحفظ النافذة بتتفتح تاني
-    const reopen = () => { m.close(); openVehicleModal(id); };
-    bindPermitList(m.el, reopen);
-    $('[data-add-permit]', m.el).onclick = () => openPermitModal(null, { holderKind: 'vehicle', holderId: id }, reopen);
-  }
   const del = $('[data-del]', m.el);
-  if (del) del.onclick = async () => { if (await openConfirm(t('حذف السيارة؟') + (permitsOf('vehicle', id).length ? '\n' + t('تصاريحها هتتحذف معاها.') : ''), { danger: true })) { m.close(); await persist('DELETE', '/api/vehicles/' + id, undefined, 'تم الحذف'); } };
+  if (del) del.onclick = async () => { if (await openConfirm(t('حذف السيارة؟') + (permitsOf('vehicle', id).length ? `\n${t('تصاريحها في قسم التصاريح هتتحذف معاها')} (${permitsOf('vehicle', id).length}).` : ''), { danger: true })) { m.close(); await persist('DELETE', '/api/vehicles/' + id, undefined, 'تم الحذف'); } };
 }
 
 /* =====================================================================

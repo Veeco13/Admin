@@ -17,7 +17,7 @@ function collectAllTrackedDates() {
 }
 
 function goEmployees(filters) {
-  UI.emp = Object.assign(UI.emp, { q: '', company: [], link: '', project: [], agency: [], status: [], stage: [], nationality: [], costCenter: [], profession: [], permitPlace: [], tier: '', tierField: 'any', driver: false, page: 1 },
+  UI.emp = Object.assign(UI.emp, { q: '', company: [], link: '', project: [], agency: [], status: [], stage: [], nationality: [], costCenter: [], profession: [], tier: '', tierField: 'any', driver: false, page: 1 },
     Object.fromEntries(Object.entries(filters).map(([k, v]) => [k, EMP_MULTI.includes(k) ? asList(v) : v])));
   saveUiStateToLocalStorage();
   setView('employees');

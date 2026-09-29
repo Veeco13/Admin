@@ -206,6 +206,11 @@ function buildIndex() {
     permitType: Object.fromEntries((STATE.permitTypes || []).map(x => [x.id, x])),
     permitPlace: Object.fromEntries((STATE.permitPlaces || []).map(x => [x.id, x])),
     permitsOf: { employee: {}, vehicle: {} },          // تصاريح كل موظف / عربية
+    // بيانات أصحاب التصاريح (من مركز الموظفين والسيارات — للعرض بس في قسم التصاريح)
+    permitHolder: {
+      employee: Object.fromEntries(((STATE.permitHolders || {}).employees || []).map(x => [x.id, x])),
+      vehicle: Object.fromEntries(((STATE.permitHolders || {}).vehicles || []).map(x => [x.id, x])),
+    },
   };
   for (const p of STATE.permits || []) (IDX.permitsOf[p.holderKind][p.holderKind === 'employee' ? p.employeeId : p.vehicleId] ||= []).push(p);
 }
@@ -273,13 +278,13 @@ function isReadOnly() { return !!(STATE && STATE.me && STATE.me.readOnly); }
    can('employees.edit') · أي عنصر عليه data-p="مفتاح [مفتاح…]" بيختفي لو أي مفتاح منهم مش مسموح.
    scope.all = نطاق كل الشركات. */
 const PERM_KEYS = [
-  ...['employees', 'companies', 'vehicles', 'costcenters', 'recruitment'].flatMap(m => ['view', 'edit', 'delete'].map(a => `${m}.${a}`)),
+  ...['employees', 'companies', 'vehicles', 'costcenters', 'recruitment', 'permits'].flatMap(m => ['view', 'edit', 'delete'].map(a => `${m}.${a}`)),
   'contract.view', 'contract.edit', 'companylog.view',
   'sensitive.salary', 'sensitive.bank', 'sensitive.documents', 'system.import', 'system.backup', 'contract.sign', 'scope.all', 'admin',
 ];
 const VIEW_PERM = { employees: 'employees.view', companies: 'companies.view|costcenters.view', vehicles: 'vehicles.view',
   contract: 'contract.view employees.view sensitive.salary', recruitment: 'recruitment.view', companylog: 'companylog.view',
-  custody: 'custody.view', permits: 'employees.view|vehicles.view' };
+  custody: 'custody.view', permits: 'permits.view' };
 function can(key) {
   const m = STATE && STATE.me;
   if (!m) return false;
@@ -804,11 +809,11 @@ async function restoreBackup() {
    UI STATE — حفظ الفلاتر والصفحة
    ===================================================================== */
 let UI = Object.assign({
-  emp: { q: '', company: [], link: '', project: [], agency: [], status: [], stage: [], nationality: [], costCenter: [], profession: [], permitPlace: [], tier: '', tierField: 'any', driver: false, sort: 'name', dir: 1, page: 1, perPage: 50 },
+  emp: { q: '', company: [], link: '', project: [], agency: [], status: [], stage: [], nationality: [], costCenter: [], profession: [], tier: '', tierField: 'any', driver: false, sort: 'name', dir: 1, page: 1, perPage: 50 },
   cand: { q: '', source: '', stage: '', company: '' },
   log: { tab: 'history', company: '', category: '', q: '' },
-  vehicles: { q: '', project: '', agency: '', type: '', cc: '', place: '' },
-  permits: { q: '', holder: '', type: '', place: '', project: '', agency: '', tier: '' },
+  vehicles: { q: '', project: '', agency: '', type: '', cc: '' },
+  permits: { tab: 'employee', employee: {}, vehicle: {} },
   co: { tab: '', projQ: '', projCompany: '', projAgency: '' },
   custody: { tab: 'list', q: '', status: '', type: '', custodian: '' },
 }, lsJson('mv_uiState', {}));
@@ -893,11 +898,10 @@ function trackedAlertItems(maxDays = 90) {
     push({ kind: 'vehicle', refId: v.id, name: v.plate, what: 'تأمين السيارة', date: v.insuranceExpiry });
     push({ kind: 'vehicle', refId: v.id, name: v.plate, what: 'دفتر السيارة', date: v.govLicenseExpiry });
   }
-  // التصاريح (الموظف اللي خدمته انتهت مالوش تنبيه) ← بتفتح على تبويب «التصاريح»
+  // التصاريح (الموظف اللي خدمته انتهت مالوش تنبيه) ← بتفتح قسم التصاريح على التصريح نفسه
   for (const p of STATE.permits || []) {
-    const e = p.holderKind === 'employee' && IDX.employee[p.employeeId], v = p.holderKind === 'vehicle' && IDX.vehicle[p.vehicleId];
-    if (e && !empEnded(e)) push({ kind: 'employee', refId: e.id, name: empName(e), what: permitLabel(p), date: p.expiryDate, tab: 'permits' });
-    else if (v && companyInScope(v.companyId)) push({ kind: 'vehicle', refId: v.id, name: v.plate, what: permitLabel(p), date: p.expiryDate });
+    const h = permitHolder(p);
+    if (h && !(p.holderKind === 'employee' && empEnded(h))) push({ kind: 'permit', refId: p.id, name: permitHolderName(p), what: permitLabel(p), date: p.expiryDate });
   }
   for (const c of STATE.candidates) {
     if (c.stage === 'rejected' || c.stage === 'all_completed' || c.source === 'kuwaiti') continue;
@@ -912,7 +916,8 @@ function trackedAlertItems(maxDays = 90) {
 }
 function openAlertTarget(it) {
   closeSidePanel();
-  if (it.kind === 'employee') openProfileCard(it.refId, it.tab || 'info');
+  if (it.kind === 'employee') openProfileCard(it.refId);
+  else if (it.kind === 'permit') setView('permits', { focusPermit: it.refId });
   else if (it.kind === 'company' || it.kind === 'project') setView('companies', { focusCompany: it.refId, focusTab: it.kind === 'project' ? 'projects' : 'info' });
   else if (it.kind === 'vehicle') { setView('vehicles'); setTimeout(() => openVehicleModal(it.refId), 50); }
   else if (it.kind === 'candidate') { setView('recruitment'); setTimeout(() => openCandidateModal(it.refId), 50); }
@@ -931,7 +936,7 @@ function renderAlertCenterPanel(filter = 'all') {
     </div>
     <div class="body">${shown.length ? shown.map((it, i) => `
       <div class="alert-item" data-i="${i}">
-        <div><b>${esc(it.name)}</b><div class="small muted">${esc(t(it.what))} · ${esc(t({ employee: 'موظف', company: 'شركة', project: 'مشروع', vehicle: 'سيارة', candidate: 'مترشّح' }[it.kind]))}</div></div>
+        <div><b>${esc(it.name)}</b><div class="small muted">${esc(t(it.what))} · ${esc(t({ employee: 'موظف', company: 'شركة', project: 'مشروع', vehicle: 'سيارة', candidate: 'مترشّح', permit: 'التصاريح' }[it.kind]))}</div></div>
         <div style="text-align:end">${datePill(it.date)}<div class="small muted">${esc(daysText(it.days))}</div></div>
       </div>`).join('') : '<div class="empty">لا توجد تنبيهات 🎉</div>'}</div></div>`;
   translateDomText(root);
