@@ -966,6 +966,7 @@ def delete_company(cid):
             return err(f"لا يمكن حذف الشركة: مرتبط بها {n} موظف. انقلهم أولًا.")
         # فك الارتباطات بالترتيب (المفاتيح الأجنبية NO ACTION)
         s.query(M.Vehicle).filter(M.Vehicle.companyId == cid).update({"companyId": None})
+        s.query(M.Vehicle).filter(M.Vehicle.ownerCompanyId == cid).update({"ownerCompanyId": None})
         s.query(M.Candidate).filter(M.Candidate.targetCompanyId == cid).update({"targetCompanyId": None})
         s.query(M.CostCenter).filter(M.CostCenter.companyId == cid).update({"companyId": None})
         pids = [p.id for p in s.scalars(select(M.Project).where(M.Project.companyId == cid))]
@@ -1317,6 +1318,14 @@ def save_vehicle(vid=None):
                 return err("مركز التكلفة غير موجود")
         if "vehicleType" in d and d["vehicleType"] not in VEHICLE_TYPES:
             d["vehicleType"] = None
+        if "ownerCompanyId" in d:                  # المالك الفعلي: فاضي أو نفس المسجّلة باسمها = نفسها
+            reg = d["companyId"] if "companyId" in d else (old.companyId if old else None)
+            owner = d["ownerCompanyId"] or None
+            if owner and s.get(M.Company, owner) is None:
+                return err("الشركة المالكة غير موجودة")
+            if owner and owner != (old.ownerCompanyId if old else None) and not me().company_ok(owner):
+                return forbidden(NEW_OUT_OF_SCOPE)
+            d["ownerCompanyId"] = None if owner == (reg or None) else owner
         if "projectId" in d:
             d["projectId"] = d["projectId"] or None
         if vid:
@@ -1481,7 +1490,7 @@ def permit_holders(s, u):
             continue
         dn = names.get(v.driverId, (None, None))
         vehs.append({"id": v.id, "plate": v.plate, "model": v.model, "vehicleType": v.vehicleType, "companyId": v.companyId,
-                     "costCenter": v.costCenter, "driverName": dn[0], "driverNameEn": dn[1]})
+                     "ownerCompanyId": v.ownerCompanyId, "costCenter": v.costCenter, "driverName": dn[0], "driverNameEn": dn[1]})
     return {"employees": emps, "vehicles": vehs}
 
 

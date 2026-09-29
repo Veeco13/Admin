@@ -48,7 +48,8 @@ function holderCardHtml(kind, h) {
       + f('الجنسية', esc(personNat(h))) + f('المهنة', esc(personProf(h))) + f('الشركة', esc(companyName(h.companyId)))
       + f('مركز التكلفة', esc(ccLabel(h.costCenter))) + f('رقم الملف', esc(h.fileNo || '')) + f('الحالة الوظيفية', statusPill(h.employmentStatus))
     : f('رقم اللوحة', `<b class="num">${esc(h.plate)}</b>`) + f('نوع المركبة', esc(t(VEHICLE_TYPES[h.vehicleType] || ''))) + f('الموديل', esc(h.model || ''))
-      + f('الشركة', esc(companyName(h.companyId))) + f('مركز التكلفة', esc(ccLabel(h.costCenter))) + f('السائق', esc(holderDriver(h)));
+      + f('الشركة', esc(companyName(h.companyId)) + (h.ownerCompanyId && h.ownerCompanyId !== h.companyId ? `<div class="small muted">🔑 ${t('المالك الفعلي')}: ${esc(companyName(h.ownerCompanyId))}</div>` : ''))
+      + f('مركز التكلفة', esc(ccLabel(h.costCenter))) + f('السائق', esc(holderDriver(h)));
   return `<div class="kv">${body}</div>
     <div class="small muted" style="margin-top:4px">ℹ️ ${t(kind === 'employee' ? 'البيانات من مركز الإقامات والموظفين — للعرض بس' : 'البيانات من مركز السيارات — للعرض بس')}</div>`;
 }

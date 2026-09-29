@@ -4,7 +4,8 @@
   لكل وكالة (للمقارنة والتقارير بس — مراكز التكلفة نفسها مابتتغيّرش).
 - projects: النوع (main ترخيص رئيسي / gov عقد حكومي)، رقم العقد، الوكالة، تاريخ البداية. file_number = الرقم
   المدني للترخيص (زي ما هو)، و expiry_date = نهاية الترخيص.
-- vehicles: العقد / المشروع المسجّلة عليه (project_id)، مركز التكلفة (مكان الشغل الفعلي — بالاسم زي الموظف)، ونوع المركبة.
+- vehicles: العقد / المشروع المسجّلة عليه (project_id)، مركز التكلفة (مكان الشغل الفعلي — بالاسم زي الموظف)، نوع المركبة،
+  والمالك الفعلي (owner_company_id — لو العربية مملوكة لشركة غير المسجّلة باسمها، فاضي = نفسها).
 البيانات الأولى من تفاصيل تراخيص الهيئة (ملف 100100253): الترخيص الرئيسي 3563650 والست عقود الحكومية.
 
 Revision ID: 0020
@@ -65,7 +66,9 @@ def upgrade() -> None:
         batch.add_column(sa.Column("project_id", sa.String(length=64), nullable=True))
         batch.add_column(sa.Column("cost_center", sa.Unicode(length=300), nullable=True))
         batch.add_column(sa.Column("vehicle_type", sa.String(length=20), nullable=True))
+        batch.add_column(sa.Column("owner_company_id", sa.String(length=64), nullable=True))
         batch.create_foreign_key(op.f("fk_vehicles_project_id_projects"), "projects", ["project_id"], ["id"])
+        batch.create_foreign_key(op.f("fk_vehicles_owner_company_id_companies"), "companies", ["owner_company_id"], ["id"])
 
     conn = op.get_bind()
     rows = {r[1]: (r[0], r[2]) for r in conn.execute(sa.text("SELECT id, file_number, company_id FROM projects")).fetchall() if r[1]}
@@ -89,7 +92,9 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     with op.batch_alter_table("vehicles") as batch:
+        batch.drop_constraint("fk_vehicles_owner_company_id_companies", type_="foreignkey")
         batch.drop_constraint("fk_vehicles_project_id_projects", type_="foreignkey")
+        batch.drop_column("owner_company_id")
         batch.drop_column("vehicle_type")
         batch.drop_column("cost_center")
         batch.drop_column("project_id")

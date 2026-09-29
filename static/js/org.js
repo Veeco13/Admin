@@ -402,26 +402,33 @@ function printDistributionReport() {
 /* =====================================================================
    VEHICLES — مركز إدارة السيارات
    ===================================================================== */
+/** المالك الفعلي للعربية (لو فاضي = الشركة المسجّلة باسمها) */
+function vehicleOwnerId(v) { return v.ownerCompanyId || v.companyId || null; }
+function vehicleOwnerLine(v) {
+  return v.ownerCompanyId && v.ownerCompanyId !== v.companyId ? `<div class="small muted">🔑 ${t('المالك الفعلي')}: ${esc(companyName(v.ownerCompanyId))}</div>` : '';
+}
 function renderVehicles() {
-  const V = UI.vehicles = Object.assign({ q: '', project: '', agency: '', type: '', cc: '' }, UI.vehicles || {});
+  const V = UI.vehicles = Object.assign({ q: '', project: '', agency: '', type: '', cc: '', owner: '' }, UI.vehicles || {});
   const q = norm(V.q);
   const list = STATE.vehicles.filter(v => companyInScope(v.companyId) || !v.companyId)
     .filter(v => (!V.project || (V.project === '__none' ? !v.projectId : v.projectId === V.project))
       && (!V.agency || (projectAgency(v.projectId) || {}).id === V.agency) && (!V.type || v.vehicleType === V.type)
-      && (!V.cc || (V.cc === '__out' ? outsideAgency(v.projectId, v.costCenter) : v.costCenter === V.cc)))
-    .filter(v => !q || [v.plate, v.model, companyName(v.companyId), empName(IDX.employee[v.driverId]), projectName(v.projectId), v.costCenter].some(x => norm(x).includes(q)));
+      && (!V.cc || (V.cc === '__out' ? outsideAgency(v.projectId, v.costCenter) : v.costCenter === V.cc))
+      && (!V.owner || (V.owner === '__diff' ? !!(v.ownerCompanyId && v.ownerCompanyId !== v.companyId) : vehicleOwnerId(v) === V.owner)))
+    .filter(v => !q || [v.plate, v.model, companyName(v.companyId), companyName(v.ownerCompanyId), empName(IDX.employee[v.driverId]), projectName(v.projectId), v.costCenter].some(x => norm(x).includes(q)));
   viewRoot().innerHTML = `<div class="page-head"><div><h1>مركز إدارة السيارات</h1><div class="sub">${STATE.vehicles.length} ${t('سيارة')}</div></div>
     <div class="actions"><button class="btn primary write-only" data-p="vehicles.edit" id="v-add">➕ إضافة سيارة</button>${can('admin') ? '<button class="btn" id="v-export">📤 تصدير CSV</button>' : ''}</div></div>
     <div class="filters"><input type="search" id="v-q" placeholder="${esc(t('بحث باللوحة أو السائق أو العقد…'))}" value="${esc(V.q)}">
       <select id="v-proj">${opt('', t('— كل العقود والمشاريع —'), !V.project)}${opt('__none', t('بدون عقد / مشروع'), V.project === '__none')}${scopedProjects().slice().sort((a, b) => projectSortKey(a).localeCompare(projectSortKey(b), 'ar')).map(p => opt(p.id, projectName(p.id), p.id === V.project)).join('')}</select>
       <select id="v-ag">${opt('', t('— كل الوكالات —'), !V.agency)}${(STATE.agencies || []).map(a => opt(a.id, agencyName(a), a.id === V.agency)).join('')}</select>
       <select id="v-type">${opt('', t('— كل الأنواع —'), !V.type)}${Object.entries(VEHICLE_TYPES).map(([k, l]) => opt(k, t(l), k === V.type)).join('')}</select>
+      <select id="v-owner">${opt('', t('— كل الملاك —'), !V.owner)}${opt('__diff', '🔑 ' + t('مملوكة لشركة غير المسجّلة باسمها'), V.owner === '__diff')}${scopedCompanies().map(c => opt(c.id, `${t('المالك الفعلي')}: ${companyName(c.id)}`, c.id === V.owner)).join('')}</select>
       <select id="v-cc">${opt('', t('— كل مراكز التكلفة —'), !V.cc)}${opt('__out', '⚠️ ' + t('برّه وكالة عقدها'), V.cc === '__out')}${STATE.costCenters.map(c => opt(c.name, `${c.code || ''} ${ccLabel(c.name)}`, c.name === V.cc)).join('')}</select>
       <button class="btn sm ghost" id="v-clear">✕ ${t('مسح الفلاتر')}</button></div>
     <div class="table-wrap"><table class="data"><thead><tr><th>${t('رقم اللوحة')}</th><th>${t('النوع / الموديل')}</th><th>${t('الشركة')}</th><th>${t('العقد / المشروع')}</th><th>${t('مركز التكلفة')}</th><th>${t('السائق')}</th><th>${t('انتهاء التأمين')}</th><th>${t('انتهاء الدفتر')}</th></tr></thead>
     <tbody>${list.map(v => {
       const d = IDX.employee[v.driverId], p = IDX.project[v.projectId], out = outsideAgency(v.projectId, v.costCenter);
-      return `<tr class="clickable" data-id="${v.id}"><td><b class="num">${esc(v.plate)}</b></td><td>${v.vehicleType ? `<span class="chip">${esc(t(VEHICLE_TYPES[v.vehicleType]))}</span> ` : ''}${esc(v.model || '')}</td><td>${esc(companyName(v.companyId))}</td>
+      return `<tr class="clickable" data-id="${v.id}"><td><b class="num">${esc(v.plate)}</b></td><td>${v.vehicleType ? `<span class="chip">${esc(t(VEHICLE_TYPES[v.vehicleType]))}</span> ` : ''}${esc(v.model || '')}</td><td>${esc(companyName(v.companyId))}${vehicleOwnerLine(v)}</td>
       <td>${p ? `${esc(projectName(p.id))}<div class="small muted">${esc(projectSummary(p))}</div>` : '<span class="muted">—</span>'}</td>
       <td>${esc(v.costCenter || '—')}${out ? `<div class="small" style="color:var(--orange)">⚠️ ${t('برّه وكالة عقدها')}</div>` : ''}</td>
       <td>${d ? esc(empName(d)) + (d.drivingLicenseExp ? ' ' + datePill(d.drivingLicenseExp) : '') : '<span class="muted">—</span>'}</td><td>${datePill(v.insuranceExpiry)}</td><td>${datePill(v.govLicenseExpiry)}</td></tr>`;
@@ -433,25 +440,27 @@ function renderVehicles() {
   $('#v-ag').onchange = e => vupd({ agency: e.target.value });
   $('#v-type').onchange = e => vupd({ type: e.target.value });
   $('#v-cc').onchange = e => vupd({ cc: e.target.value });
-  $('#v-clear').onclick = () => vupd({ q: '', project: '', agency: '', type: '', cc: '' });
+  $('#v-owner').onchange = e => vupd({ owner: e.target.value });
+  $('#v-clear').onclick = () => vupd({ q: '', project: '', agency: '', type: '', cc: '', owner: '' });
   $$('tr[data-id]', viewRoot()).forEach(tr => tr.onclick = () => openVehicleModal(tr.dataset.id));
-  const vx = $('#v-export'); if (vx) vx.onclick = () => exportGuard(t('السيارات'), () => downloadBlob(toCsv([[t('رقم اللوحة'), t('النوع'), t('الموديل'), t('الشركة'), t('العقد / المشروع'), t('رقم العقد'), t('الوكالة'), t('مركز التكلفة'), t('السائق'), t('انتهاء التأمين'), t('انتهاء الدفتر')],
-    ...list.map(v => [v.plate, t(VEHICLE_TYPES[v.vehicleType] || ''), v.model, companyName(v.companyId), projectName(v.projectId), (IDX.project[v.projectId] || {}).contractNo, agencyName(projectAgency(v.projectId)), v.costCenter, empName(IDX.employee[v.driverId]), v.insuranceExpiry, v.govLicenseExpiry])]), `vehicles-${todayISO()}.csv`, 'text/csv'));
+  const vx = $('#v-export'); if (vx) vx.onclick = () => exportGuard(t('السيارات'), () => downloadBlob(toCsv([[t('رقم اللوحة'), t('النوع'), t('الموديل'), t('الشركة'), t('المالك الفعلي'), t('العقد / المشروع'), t('رقم العقد'), t('الوكالة'), t('مركز التكلفة'), t('السائق'), t('انتهاء التأمين'), t('انتهاء الدفتر')],
+    ...list.map(v => [v.plate, t(VEHICLE_TYPES[v.vehicleType] || ''), v.model, companyName(v.companyId), companyName(vehicleOwnerId(v)), projectName(v.projectId), (IDX.project[v.projectId] || {}).contractNo, agencyName(projectAgency(v.projectId)), v.costCenter, empName(IDX.employee[v.driverId]), v.insuranceExpiry, v.govLicenseExpiry])]), `vehicles-${todayISO()}.csv`, 'text/csv'));
 }
 function openVehicleModal(id) {
   const v = id ? IDX.vehicle[id] : {};
   const drivers = STATE.employees.filter(e => e.isDriver || e.id === v.driverId).sort((a, b) => a.name.localeCompare(b.name, 'ar'));
   const m = openModal({
     title: id ? t('تعديل سيارة') + ' ' + esc(v.plate) : t('إضافة سيارة'),
-    body: `${v.projectId ? `<div class="emp-license" style="margin-bottom:10px">
-        <div><span>${t('مسجّلة باسم')}</span><b>${esc(companyName(v.companyId) || '—')}</b></div>
-        <div><span>${t('العقد / المشروع')}</span><b>${esc(projectName(v.projectId))}</b><div class="small muted">${esc(projectSummary(IDX.project[v.projectId]))}</div>
+    body: `${v.projectId || v.ownerCompanyId ? `<div class="emp-license" style="margin-bottom:10px">
+        <div><span>${t('مسجّلة باسم')}</span><b>${esc(companyName(v.companyId) || '—')}</b>${vehicleOwnerLine(v)}</div>
+        <div><span>${t('العقد / المشروع')}</span><b>${esc(projectName(v.projectId) || '—')}</b><div class="small muted">${esc(projectSummary(IDX.project[v.projectId]))}</div>
           ${(IDX.project[v.projectId] || {}).expiryDate ? `<div class="small">${t('ينتهي')} ${datePill(IDX.project[v.projectId].expiryDate)}</div>` : ''}</div>
         <div><span>${t('شغالة فعليًا')}</span><b>${esc(v.costCenter || '—')}</b>${outsideAgency(v.projectId, v.costCenter) ? `<div class="small" style="color:var(--orange)">⚠️ ${t('برّه وكالة عقدها')}</div>` : ''}</div></div>` : ''}
       <div class="form"><label><span class="req">${t('رقم اللوحة')}</span><input name="plate" value="${esc(v.plate || '')}"></label>
       <label>${t('نوع المركبة')}<select name="vehicleType">${opt('', '—', !v.vehicleType)}${Object.entries(VEHICLE_TYPES).map(([k, l]) => opt(k, t(l), k === v.vehicleType)).join('')}</select></label>
       <label>${t('الموديل')}<input name="model" value="${esc(v.model || '')}"></label>
       <label>${t('الشركة (مسجّلة باسم)')}<select name="companyId">${companyOptions(v.companyId)}</select></label>
+      <label title="${esc(t('الشركة اللي مالكة العربية فعليًا لو غير المسجّلة باسمها'))}">🔑 ${t('المالك الفعلي')}<select name="ownerCompanyId">${companyOptions(v.ownerCompanyId, '— نفس الشركة المسجّلة باسمها —')}</select></label>
       <label>${t('العقد / المشروع')}<select name="projectId"></select></label>
       <label>${t('مركز التكلفة (مكان الشغل الفعلي)')}<select name="costCenter">${costCenterOptions(v.costCenter)}</select></label>
       <label>${t('السائق')}<select name="driverId">${opt('', '—', !v.driverId)}${drivers.map(e => opt(e.id, e.name + ' — ' + e.id, e.id === v.driverId)).join('')}</select></label>

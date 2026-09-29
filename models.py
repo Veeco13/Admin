@@ -104,6 +104,8 @@ class Vehicle(Base):
     projectId: Mapped[Optional[str]] = col("project_id", ID, fk("projects.id"))     # العقد / المشروع المسجّلة عليه
     costCenter: Mapped[Optional[str]] = col("cost_center", NAME)                    # مكان الشغل الفعلي (بالاسم زي الموظف)
     vehicleType: Mapped[Optional[str]] = col("vehicle_type", String(20))            # نوع المركبة (تصنيف الهيئة)
+    # المالك الفعلي لو غير الشركة المسجّلة باسمها (فاضي = نفسها)
+    ownerCompanyId: Mapped[Optional[str]] = col("owner_company_id", ID, fk("companies.id"))
 
 
 class Employee(Base):
