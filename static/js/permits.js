@@ -1,6 +1,7 @@
 /* =====================================================================
    PERMITS — التصاريح للموظفين والسيارات (القسم 24)
-   التصريح تابع لموظف أو لعربية، ومربوط بعقد / مشروع (الافتراضي عقد صاحبه). الأنواع والأماكن قايمتين
+   التصريح تابع لموظف أو لعربية، والعقد / المشروع اللي طالع عليه اختياري (ممكن يختلف عن عقد صاحبه
+   ومكان شغله — بيطلع على مشروع ويشتغل بيه في مشروع تاني). الأنواع والأماكن قايمتين
    بيتحكم فيهم مدير النظام. صلاحية التصريح = صلاحية صاحبه (employees.* / vehicles.*).
    ===================================================================== */
 const PERMIT_HOLDERS = { employee: { l: 'موظف', ico: '👤', mod: 'employees' }, vehicle: { l: 'سيارة', ico: '🚗', mod: 'vehicles' } };
@@ -26,11 +27,6 @@ function permitHolderSub(p) {
 function permitHolderId(p) { return p.holderKind === 'employee' ? p.employeeId : p.vehicleId; }
 function permitCan(kind, act) { return can(PERMIT_HOLDERS[kind].mod + '.' + act); }
 function permitTypesFor(kind) { return (STATE.permitTypes || []).filter(tp => !tp.appliesTo || tp.appliesTo === kind); }
-/** العقد الافتراضي للتصريح = عقد صاحبه */
-function permitDefaultProject(kind, id) {
-  const h = kind === 'employee' ? IDX.employee[id] : IDX.vehicle[id];
-  return h ? (kind === 'employee' ? empProjectId(h) : h.projectId) || '' : '';
-}
 function permitPlaceChips(p) { return (p.placeIds || []).map(x => `<span class="chip">${esc(permitPlaceName(IDX.permitPlace[x]))}</span>`).join(' ') || '<span class="muted">—</span>'; }
 function permitProjectOptions(sel) {
   return opt('', t('— بدون —'), !sel) + scopedProjects().slice().sort((a, b) => projectSortKey(a).localeCompare(projectSortKey(b), 'ar'))
@@ -68,7 +64,7 @@ function openPermitModal(id, preset, after) {
   if (!kinds.length) return toast('مش مسموح', 'err');
   let kind = kinds[0];
   const holderId = p ? permitHolderId(p) : fixed ? preset.holderId : '';
-  const x = p || { projectId: fixed ? permitDefaultProject(kind, holderId) : '' };
+  const x = p || {};
   const mod = PERMIT_HOLDERS[kind].mod;
   const emps = scopedEmployees().filter(e => !empEnded(e));
   const vehs = STATE.vehicles.filter(v => companyInScope(v.companyId) || !v.companyId);
@@ -89,7 +85,7 @@ function openPermitModal(id, preset, after) {
         <label><span class="req">${t('نوع التصريح')}</span><select name="typeId"></select></label>
         <label>${t('رقم التصريح')}<input name="permitNo" value="${esc(x.permitNo || '')}" dir="ltr"></label>
         <label>${t('الجهة المانحة')}<input name="issuer" list="dl-permit-issuer" value="${esc(x.issuer || '')}"><datalist id="dl-permit-issuer">${issuers.map(i => `<option value="${esc(i)}">`).join('')}</datalist></label>
-        <label>${t('العقد / المشروع')}<select name="projectId">${permitProjectOptions(x.projectId)}</select></label>
+        <label title="${esc(t('العقد أو المشروع اللي التصريح طالع عليه — ممكن يختلف عن عقد صاحبه ومكان شغله'))}">${t('العقد / المشروع (اختياري)')}<select name="projectId">${permitProjectOptions(x.projectId)}</select></label>
         <label>${t('تاريخ الإصدار')}<input type="date" name="issueDate" value="${esc(x.issueDate || '')}"></label>
         <label><span class="req">${t('تاريخ الانتهاء')}</span><input type="date" name="expiryDate" value="${esc(x.expiryDate || '')}"></label>
         <div class="full"><div class="small muted" style="margin-bottom:4px">${t('الأماكن')}</div>
@@ -106,9 +102,7 @@ function openPermitModal(id, preset, after) {
     foot: `${p ? `<button class="btn danger write-only" data-p="${mod}.delete" data-permit-del>🗑️ ${t('حذف')}</button><span class="spacer"></span>` : ''}
       <button class="btn primary write-only" data-p="${mod}.edit" data-save>${t('حفظ')}</button><button class="btn" data-close>${t('إلغاء')}</button>`,
   });
-  const E = m.el, typeSel = $('[name=typeId]', E), projSel = $('[name=projectId]', E);
-  let projTouched = !!p;
-  projSel.addEventListener('change', () => { projTouched = true; });
+  const E = m.el, typeSel = $('[name=typeId]', E);
   const pickedHolder = () => {
     if (fixed) return holderId;
     if (kind === 'employee') { const id = ($('[name=empPick]', E).value || '').split(' — ')[0].trim(); return IDX.employee[id] ? id : ''; }
@@ -122,7 +116,6 @@ function openPermitModal(id, preset, after) {
   const syncHolder = () => {
     if (!fixed) $$('[data-holder]', E).forEach(l => { l.hidden = l.dataset.holder !== kind; });
     fillTypes();
-    if (!projTouched) { const h = pickedHolder(); projSel.value = h ? permitDefaultProject(kind, h) : ''; }
   };
   syncHolder();
   const hk = $('[name=holderKind]', E); if (hk) hk.onchange = () => { kind = hk.value; syncHolder(); };
