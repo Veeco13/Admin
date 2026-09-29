@@ -270,6 +270,7 @@ class User(Base):
     email: Mapped[Optional[str]] = col("email", SHORT)
     phone: Mapped[Optional[str]] = col("phone", SHORT)
     lastLogin: Mapped[Optional[datetime]] = col("last_login", DateTime)
+    custodyCode: Mapped[Optional[str]] = col("custody_code", String(10))          # رمزه في أرقام العهد (AA-0001)
     createdAt: Mapped[Optional[datetime]] = col("created_at", DateTime)
 
 
@@ -408,6 +409,9 @@ class Custody(Base):
     notes: Mapped[Optional[str]] = col("notes", TEXT)
     createdBy: Mapped[Optional[str]] = col("created_by", NAME)
     createdAt: Mapped[Optional[datetime]] = col("created_at", DateTime)
+    ownerId: Mapped[Optional[int]] = col("owner_id", Integer)                     # صاحب العهدة (بيشوفها هو بس)
+    prefix: Mapped[Optional[str]] = col("prefix", String(10))                     # رمز صاحبها وقت الطلب
+    seq: Mapped[Optional[int]] = col("seq", Integer)                              # مسلسل لكل رمز ← «AA-0001»
 
 
 class CustodyLine(Base):
@@ -433,6 +437,7 @@ class CustodyLine(Base):
     doneDate: Mapped[Optional[date]] = col("done_date", Date)
     receiptNo: Mapped[Optional[str]] = col("receipt_no", SHORT)
     closedDate: Mapped[Optional[date]] = col("closed_date", Date)                 # اتقفل في كشف التقفيل بتاريخ ده
+    dupOk: Mapped[bool] = col("dup_ok", Boolean, nullable=False, default=False)   # اتطلب تاني خلال 90 يوم بتأكيد
 
 
 class Invoice(Base):

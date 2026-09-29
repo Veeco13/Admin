@@ -12,6 +12,7 @@ import io
 import json
 import os
 import re
+import time
 from datetime import datetime
 from functools import wraps
 
@@ -271,6 +272,9 @@ def api_state():
         state.update(custody.dump(s, u) if u.can("custody.view")
                      else {"custodies": [], "invoices": [], "feeItems": [], "custodySettings": None})
         state["valueTranslations"] = value_i18n.merged(s)       # الجنسيات والمهن للتقارير الإنجليزية
+        state["exportPasswordSet"] = bool(u.isAdmin and db.get_meta(s, EXPORT_KEY))
+    if not u.can("custody.all"):                                  # عمليات عهد المستخدمين التانيين مش ليه
+        state["auditLog"] = [a for a in state.get("auditLog", []) if a.get("category") != "custody" or a.get("user") == u.display]
     for t in state.get("templates", []):     # خيارات التوقيع بتظهر بس لو القالب فيه مكانها
         path = os.path.join(TEMPLATE_DOCS, t["filename"])
         fields = contracts.template_fields(path) if os.path.exists(path) else set()
@@ -278,6 +282,7 @@ def api_state():
     state["me"] = u.to_api()
     state["version"] = APP_VERSION
     state["pdfAvailable"] = bool(contracts.backend())
+    state["sheetPdfAvailable"] = bool(contracts._soffice() or contracts._excel_installed())   # معاينة كشوف العهد
     state["contractBatchMax"] = contracts.MAX_BATCH
     state["database"] = db.engine.dialect.name
     state["schemaRevision"] = db.current_revision()
@@ -801,6 +806,8 @@ CLEARANCE_PERSON_KEYS = {"nameEn", "nationality", "dateOfHire", "serviceEndDate"
 def employee_clearance(emp_id, fmt):
     if fmt not in ("pdf", "docx"):
         abort(404)
+    if fmt == "docx":
+        return forbidden(NO_DOWNLOAD)
     d = body()
     _check_sign_args(d)
     with db.session_scope(commit=False) as s:
@@ -894,8 +901,7 @@ def get_emp_file(fid):
             abort(403)
     if not r:
         abort(404)
-    return send_file(db.resolve_file(r.path), download_name=r.name,
-                     as_attachment=request.args.get("dl") == "1")
+    return send_file(db.resolve_file(r.path), download_name=r.name, as_attachment=False)    # عرض بس
 
 
 # ---------------------------------------------------------------------------
@@ -1448,10 +1454,14 @@ def convert_candidate(cand_id):
 # العهد والمصروفات (custody.py)
 # ---------------------------------------------------------------------------
 def _custody_or_404(s, cid):
+    """العهدة لصاحبها أو لصاحب «عرض عهد كل المستخدمين» بس (غير كده كأنها مش موجودة)."""
     c = s.get(M.Custody, cid)
-    if not c:
+    if not c or not custody.can_see(me(), c):
         abort(404, "العهدة غير موجودة")
     return c
+
+
+NO_DOWNLOAD = "تنزيل الملفات مقفول — المعاينة والطباعة من جوّه البرنامج بس"
 
 
 @app.post("/api/custodies")
@@ -1473,13 +1483,25 @@ def save_custody(cid=None):
         c = _custody_or_404(s, cid) if cid else None
         if c and c.status != "requested":
             return err("العهدة اتصرفت خلاص، مينفعش الطلب يتعدّل")
+        # منع التكرار (على عهد كل المستخدمين): مفتوحة ← ممنوع، اتقفلت خلال 90 يوم ← تأكيد
+        open_, recent = custody.duplicates(s, tx, [p.get("id") for p in d.get("persons") or []], exclude=cid)
+        if open_:
+            return err("مينفعش يتطلبوا مرتين — موجودين في عهد مفتوحة من نفس النوع: " + "، ".join(
+                f"{n} ({no}{' — ' + o if o else ''})" for n, no, o in open_.values()), 409, block=True)
+        if recent and not d.get("force"):
+            return err(f"اتقفل لهم نفس النوع خلال آخر {custody.DUP_DAYS} يوم: " + "، ".join(
+                f"{n} ({no} — {dt.strftime('%d/%m/%Y')})" for n, no, dt in recent.values()) + " — متأكد إنك عايز تطلبهم تاني؟",
+                       409, warn=True)
         lines, msg = custody.build_lines(s, tx, d.get("persons") or [], me())
         if msg:
             return err(msg)
+        for x in lines:
+            x.dupOk = x.personId in recent
         if c:
             s.query(M.CustodyLine).filter(M.CustodyLine.custodyId == c.id).delete()
         else:
             c = M.Custody(id=db.new_id("cus"), no=custody.next_no(s), status="requested", createdBy=uname(), createdAt=db.now())
+            custody.assign_owner(s, c, me().id)            # صاحبها ورقمها برمزه «AA-0001»
             s.add(c)
         c.txType, c.custodian, c.companyId, c.notes = tx, who, co, (d.get("notes") or "").strip() or None
         c.requestDate = db.parse_date(d.get("requestDate")) or datetime.now().date()
@@ -1490,9 +1512,9 @@ def save_custody(cid=None):
             s.add(x)
         n = len({x.personId for x in lines})
         db.log_audit(s, "custody_edit" if cid else "custody_add",
-                     f"{'تعديل طلب' if cid else 'طلب'} عهدة رقم {c.no} ({custody.TX_TYPES[tx]['label']}) — المستلم: {who} — "
+                     f"{'تعديل طلب' if cid else 'طلب'} عهدة {custody.custody_no(c)} ({custody.TX_TYPES[tx]['label']}) — المستلم: {who} — "
                      f"{n} شخص — {c.requestedAmount:g} د.ك", uname())
-        return jsonify({"ok": True, "id": c.id, "no": c.no})
+        return jsonify({"ok": True, "id": c.id, "no": c.no, "number": custody.custody_no(c)})
 
 
 @app.post("/api/custodies/<cid>/disburse")
@@ -1509,7 +1531,7 @@ def disburse_custody(cid):
             return err("العهدة مقفولة أو ملغاة")
         first = c.status == "requested"
         c.status, c.disbursedAmount, c.disbursedDate = "disbursed", amount, when
-        db.log_audit(s, "custody_edit", f"{'صرف' if first else 'تعديل صرف'} عهدة رقم {c.no}: {amount:g} د.ك بتاريخ "
+        db.log_audit(s, "custody_edit", f"{'صرف' if first else 'تعديل صرف'} عهدة {custody.custody_no(c)}: {amount:g} د.ك بتاريخ "
                                         f"{when.isoformat()} — المستلم: {c.custodian}", uname())
     return jsonify({"ok": True})
 
@@ -1555,7 +1577,7 @@ def close_custody(cid):
             return err(msg)
         n = len({ln.personId for ln in lines})
         db.log_audit(s, "custody_close",
-                     f"تقفيل عهدة رقم {c.no}: {n} شخص — {len(invoices)} فاتورة: "
+                     f"تقفيل عهدة {custody.custody_no(c)}: {n} شخص — {len(invoices)} فاتورة: "
                      + "، ".join(f"{custody.invoice_no(i)} ({i.costCenter or '—'}) {i.total:g} د.ك" for i in invoices)
                      + (" — العهدة اتقفلت بالكامل" if c.status == "closed" else ""), uname())
         return jsonify({"ok": True, "date": when.isoformat(), "count": n, "status": c.status,
@@ -1578,16 +1600,52 @@ def reopen_custody(cid):
             return err(msg)
         if not n:
             return err("مفيش تقفيل بالتاريخ ده")
-        db.log_audit(s, "custody_edit", f"إلغاء تقفيل عهدة رقم {c.no} بتاريخ {when.isoformat()} ({n} بند)"
+        db.log_audit(s, "custody_edit", f"إلغاء تقفيل عهدة {custody.custody_no(c)} بتاريخ {when.isoformat()} ({n} بند)"
                                         + (f" — اتمسحت الفواتير: {'، '.join(numbers)}" if numbers else ""), uname())
     return jsonify({"ok": True})
 
 
 def _invoice_or_404(s, iid):
     inv = s.get(M.Invoice, iid)
-    if not inv:
+    c = s.get(M.Custody, inv.custodyId) if inv else None
+    if not inv or c is None or not custody.can_see(me(), c):
         abort(404, "الفاتورة غير موجودة")
     return inv
+
+
+def _doc_lang(s):
+    """لغة ملفات العهد: ?lang=ar|en|both، وإلا الافتراضي من «إعدادات الفواتير»."""
+    lang = request.args.get("lang")
+    return lang if lang in custody.DOC_LANGS else custody.settings(s)["docLang"]
+
+
+def _custody_pdf(s, data, name, what):
+    """كشف Excel ← PDF للمعاينة والطباعة (مابيتنزّلش)، ومعاينته بتتسجّل."""
+    try:
+        pdf = contracts.xlsx_to_pdf(data)
+    except RuntimeError as e:
+        return err(str(e), 501)
+    db.log_audit(s, "custody_print", f"معاينة وطباعة: {what}", uname())
+    return _send_pdf(pdf, name)
+
+
+@app.post("/api/custodies/<cid>/transfer")
+@admin_required
+def transfer_custody(cid):
+    """نقل ملكية العهدة لمستخدم تاني ← رقم جديد برمزه (القديم بيتسجّل)."""
+    uid = body().get("userId")
+    with db.session_scope() as s:
+        c = _custody_or_404(s, cid)
+        u = s.get(M.User, int(uid)) if str(uid or "").isdigit() else None
+        if u is None:
+            return err("المستخدم غير موجود")
+        if u.id == c.ownerId:
+            return err("العهدة أصلًا بتاعة المستخدم ده")
+        old_no, old_owner = custody.custody_no(c), custody.user_names(s).get(c.ownerId, "—")
+        custody.assign_owner(s, c, u.id)
+        db.log_audit(s, "custody_edit", f"نقل ملكية عهدة {old_no} من {old_owner} إلى {u.displayName or u.username} — "
+                                        f"رقمها الجديد {custody.custody_no(c)}", uname())
+        return jsonify({"ok": True, "number": custody.custody_no(c)})
 
 
 @app.post("/api/invoices/<iid>/approve")
@@ -1619,14 +1677,15 @@ def unapprove_invoice(iid):
     return jsonify({"ok": True})
 
 
-@app.get("/api/invoices/<iid>.xlsx")
+@app.get("/api/invoices/<iid>.pdf")
 @require("custody.view")
-def invoice_xlsx(iid):
-    """فاتورة Excel (?layout=individual ← + ملحق كشف فردي لكل موظف)."""
-    with db.session_scope(commit=False) as s:
+def invoice_pdf(iid):
+    """فاتورة للمعاينة والطباعة (?layout=individual ← + ملحق كشف فردي لكل موظف، ?lang=ar|en|both)."""
+    with db.session_scope() as s:
         inv = _invoice_or_404(s, iid)
-        data = custody_excel.invoice_workbook(s, inv, uname(), request.args.get("layout") == "individual")
-        return _xlsx(data, f"فاتورة {custody.invoice_no(inv)} - {inv.costCenter or 'بدون مركز تكلفة'}.xlsx")
+        data = custody_excel.invoice_workbook(s, inv, uname(), request.args.get("layout") == "individual", _doc_lang(s))
+        no = custody.invoice_no(inv)
+        return _custody_pdf(s, data, f"فاتورة {no}.pdf", f"فاتورة {no} ({inv.costCenter or '—'})")
 
 
 @app.put("/api/custody-settings")
@@ -1642,18 +1701,13 @@ def save_custody_settings():
         return jsonify({"ok": True, "settings": st})
 
 
-def _xlsx(data, name):
-    return send_file(io.BytesIO(data), as_attachment=True, download_name=name,
-                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-
-@app.get("/api/custodies/<cid>/closing.xlsx")
+@app.get("/api/custodies/<cid>/closing.pdf")
 @require("custody.view")
-def custody_closing_xlsx(cid):
+def custody_closing_pdf(cid):
     """تقفيل Excel بتاريخه (?date= — الافتراضي آخر تقفيل): الملخص + فاتورة لكل مركز تكلفة
     (?layout=individual ← + ملحق كشف فردي لكل موظف)."""
     when = db.parse_date(request.args.get("date"))
-    with db.session_scope(commit=False) as s:
+    with db.session_scope() as s:
         c = _custody_or_404(s, cid)
         q = select(func.max(M.Invoice.closingDate)).where(M.Invoice.custodyId == c.id)
         if when:
@@ -1661,17 +1715,19 @@ def custody_closing_xlsx(cid):
         when = s.scalar(q)
         if not when:
             return err("مفيش تقفيل للعهدة دي" + (" بالتاريخ ده" if request.args.get("date") else ""), 404)
-        data = custody_excel.closing_workbook(s, c, when, uname(), request.args.get("layout") == "individual")
-        return _xlsx(data, f"تقفيل عهدة CUS-{c.no:04d} - {when.isoformat()}.xlsx")
+        data = custody_excel.closing_workbook(s, c, when, uname(), request.args.get("layout") == "individual", _doc_lang(s))
+        no = custody.custody_no(c)
+        return _custody_pdf(s, data, f"تقفيل عهدة {no} - {when.isoformat()}.pdf", f"تقفيل عهدة {no} بتاريخ {when.isoformat()}")
 
 
-@app.get("/api/custodies/<cid>/request.xlsx")
+@app.get("/api/custodies/<cid>/request.pdf")
 @require("custody.view")
-def custody_request_xlsx(cid):
-    with db.session_scope(commit=False) as s:
+def custody_request_pdf(cid):
+    with db.session_scope() as s:
         c = _custody_or_404(s, cid)
-        data = custody_excel.request_workbook(s, c, uname())
-        return _xlsx(data, f"طلب صرف عهدة CUS-{c.no:04d}.xlsx")
+        data = custody_excel.request_workbook(s, c, uname(), _doc_lang(s))
+        no = custody.custody_no(c)
+        return _custody_pdf(s, data, f"طلب صرف عهدة {no}.pdf", f"طلب صرف عهدة {no}")
 
 
 @app.post("/api/custodies/<cid>/cancel")
@@ -1682,7 +1738,7 @@ def cancel_custody(cid):
         if c.status != "requested":
             return err("العهدة اتصرفت خلاص، مينفعش تتلغي")
         c.status = "cancelled"
-        db.log_audit(s, "custody_delete", f"إلغاء عهدة رقم {c.no} — المستلم: {c.custodian}", uname())
+        db.log_audit(s, "custody_delete", f"إلغاء عهدة {custody.custody_no(c)} — المستلم: {c.custodian}", uname())
     return jsonify({"ok": True})
 
 
@@ -1831,9 +1887,7 @@ def contract_preview():
 @app.get("/api/contract/docx")
 @require("contract.view", "employees.view", "sensitive.salary")
 def contract_docx():
-    emp, data, _ = _contract_bundle(request.args)
-    return send_file(io.BytesIO(data), as_attachment=True, download_name=f"عقد عمل - {emp['name']}.docx",
-                     mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    return forbidden(NO_DOWNLOAD)                  # ملف Word بيتعدّل برّه البرنامج — معاينة PDF وطباعة بس
 
 
 @app.get("/api/contract/pdf")
@@ -1844,8 +1898,9 @@ def contract_pdf():
         pdf = contracts.to_pdf(data)
     except RuntimeError as e:
         return err(str(e), 501)
-    return send_file(io.BytesIO(pdf), as_attachment=request.args.get("dl") == "1",
-                     download_name=f"عقد عمل - {emp['name']}.pdf", mimetype="application/pdf")
+    with db.session_scope() as s:
+        db.log_audit(s, "employee_contract", f"معاينة وطباعة عقد عمل: {emp['name']} ({emp['id']})", uname())
+    return _send_pdf(pdf, f"عقد عمل - {emp['name']}.pdf")
 
 
 # --- عقد عمل لمترشّح (مرحلة «عقد العمل» في الاستقدام) ---
@@ -1885,7 +1940,9 @@ def candidate_contract_preview(cand_id):
 @app.get("/api/candidates/<cand_id>/contract/<fmt>")
 @require("contract.view", "recruitment.view", "sensitive.salary")
 def candidate_contract_file(cand_id, fmt):
-    """Word أو PDF — ممنوع لو فيه أي بيان ناقص في العقد."""
+    """PDF للمعاينة والطباعة (Word مقفول) — ممنوع لو فيه أي بيان ناقص في العقد."""
+    if fmt != "pdf":
+        return forbidden(NO_DOWNLOAD)
     if fmt not in ("docx", "pdf"):
         abort(404)
     _check_sign_args(request.args)
@@ -1903,7 +1960,7 @@ def candidate_contract_file(cand_id, fmt):
         db.log_audit(s, "candidate_contract", f"إصدار عقد عمل ({fmt.upper()}) للمترشّح: {name}", uname())
     mime = "application/pdf" if fmt == "pdf" else \
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    return send_file(io.BytesIO(data), as_attachment=True, download_name=f"عقد عمل - {name}.{fmt}", mimetype=mime)
+    return send_file(io.BytesIO(data), as_attachment=False, download_name=f"عقد عمل - {name}.{fmt}", mimetype=mime)
 
 
 # --- عقود كتير مرة واحدة ---
@@ -1972,6 +2029,8 @@ def contract_batch():
     format=files ← PDF منفصل لكل موظف باسمه (JSON: الاسم + المحتوى base64، والواجهة بتنزّلهم ملف ملف)."""
     d, ids = _batch_args()
     fmt = d.get("format") or "pdf"
+    if fmt != "pdf":
+        return forbidden(NO_DOWNLOAD)             # ZIP Word وملف لكل موظف = تنزيل ← PDF واحد للمعاينة والطباعة بس
     named = []
     with db.session_scope(commit=False) as s:
         tpl = _contract_template(s, d.get("tpl"))
@@ -2009,7 +2068,7 @@ def contract_batch():
         db.log_audit(s, "contract_batch", f"إنشاء {len(named)} عقد عمل ({kind}) — قالب: {tpl.name}{chosen}", uname())
     if files is not None:
         return jsonify({"files": files})
-    return send_file(io.BytesIO(out), as_attachment=d.get("dl", True), download_name=name, mimetype=mime)
+    return send_file(io.BytesIO(out), as_attachment=False, download_name=name, mimetype=mime)
 
 
 @app.post("/api/templates")
@@ -2059,6 +2118,8 @@ def delete_template(tid):
 @app.get("/api/templates/<tid>/file")
 @require("contract.view")
 def download_template(tid):
+    if not me().isAdmin:                          # القالب بيتعدّل في Word ويترفع تاني ← لمدير النظام بس
+        return forbidden(NO_DOWNLOAD)
     with db.session_scope(commit=False) as s:
         t = s.get(M.Template, tid)
     if not t:
@@ -2072,6 +2133,8 @@ def download_template(tid):
 @app.get("/api/backup")
 @require("system.backup", "sensitive.salary", "sensitive.bank", "sensitive.documents", all_companies=True)
 def backup():
+    if not me().isAdmin:                          # النسخة الاحتياطية لمدير النظام بس
+        return forbidden(NO_DOWNLOAD)
     with db.session_scope() as s:
         out = {"app": "Lunx", "version": APP_VERSION, "createdAt": db.now_iso(), "database": db.engine.dialect.name,
                "tables": db.export_tables(s)}
@@ -2113,7 +2176,7 @@ def _user_api(u, scopes, cc_scopes):
     return {"id": u.id, "username": u.username, "displayName": u.displayName, "roleId": u.roleId,
             "allCompanies": bool(u.allCompanies), "companies": scopes.get(u.id, []),
             "costCenters": cc_scopes.get(u.id, []), "active": bool(u.active),
-            "jobTitle": u.jobTitle, "email": u.email, "phone": u.phone,
+            "jobTitle": u.jobTitle, "email": u.email, "phone": u.phone, "custodyCode": u.custodyCode,
             "lastLogin": db.ser(u.lastLogin), "createdAt": db.ser(u.createdAt)}
 
 
@@ -2134,6 +2197,13 @@ def _set_user_fields(s, u, d):
     for k in ("displayName", "jobTitle", "email", "phone"):
         if k in d:
             setattr(u, k, (d[k] or "").strip() or None)
+    if (d.get("custodyCode") or "").strip():               # رمزه في أرقام العهد (AA-0001) — العهد القديمة بتفضل بأرقامها
+        code, msg = custody.check_code(s, u.id, d["custodyCode"])
+        if msg:
+            return msg
+        u.custodyCode = code
+    elif not u.custodyCode:
+        u.custodyCode = custody.default_code(s, u)
     if "active" in d:
         u.active = bool(d["active"])
     if "allCompanies" in d:
@@ -2157,6 +2227,56 @@ def _set_user_fields(s, u, d):
             return "كلمة المرور لازم 6 أحرف على الأقل"
         u.passwordHash = generate_password_hash(d["password"])
     return None
+
+
+# ---------------------------------------------------------------------------
+# كلمة سر التصدير: تصدير CSV لمدير النظام بس، وبكلمة سر بيحددها هو (غير كلمة سر الدخول)
+# ---------------------------------------------------------------------------
+EXPORT_KEY = "export_password"
+
+
+@app.post("/api/audit/print")
+@login_required
+def audit_print():
+    """زرار «طباعة» في المعاينة ← سطر في سجل التدقيق (مين طبع إيه وإمتى)."""
+    d = body()
+    kind = d.get("kind") if d.get("kind") in ("custody", "employee", "candidate") else "print"
+    with db.session_scope() as s:
+        db.log_audit(s, f"{kind}_print", f"طباعة: {(d.get('what') or '—')[:200]}", uname())
+    return jsonify({"ok": True})
+
+
+@app.put("/api/export-password")
+@admin_required
+def set_export_password():
+    """{old, password} — القديمة لازمة لو فيه كلمة سر متحددة."""
+    d = body()
+    with db.session_scope() as s:
+        cur = db.get_meta(s, EXPORT_KEY)
+        if cur and not check_password_hash(cur, d.get("old") or ""):
+            return err("كلمة سر التصدير الحالية غلط", 403)
+        if len(d.get("password") or "") < 6:
+            return err("كلمة السر لازم 6 حروف على الأقل")
+        db.set_meta(s, EXPORT_KEY, generate_password_hash(d["password"]))
+        db.log_audit(s, "backup_export", "تغيير كلمة سر التصدير" if cur else "تحديد كلمة سر التصدير", uname())
+    return jsonify({"ok": True})
+
+
+@app.post("/api/export/verify")
+@admin_required
+def verify_export():
+    """{password, what} ← قبل أي تصدير CSV. الغلط والصح بيتسجّلوا."""
+    d = body()
+    with db.session_scope() as s:
+        cur = db.get_meta(s, EXPORT_KEY)
+        if not cur:
+            return err("حدد كلمة سر التصدير الأول (من قايمة المستخدم ← «🔑 كلمة سر التصدير»)", 409)
+        ok = check_password_hash(cur, d.get("password") or "")
+        db.log_audit(s, "backup_export", f"{'تصدير' if ok else 'محاولة تصدير بكلمة سر غلط'}: {(d.get('what') or '')[:200]}", uname())
+    if not ok:
+        time.sleep(1)
+        return err("كلمة سر التصدير غلط", 403)
+    return jsonify({"ok": True})
 
 
 @app.get("/api/users")

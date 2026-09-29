@@ -113,7 +113,7 @@ function renderEmployees() {
       <div class="actions">
 
         <button class="btn write-only" data-p="employees.edit system.import sensitive.salary sensitive.bank sensitive.documents scope.all" id="e-import">📥 استيراد Excel/CSV</button>
-        <button class="btn" id="e-export">📤 تصدير CSV</button>
+        ${can('admin') ? `<button class="btn" id="e-export">📤 ${t('تصدير CSV')}</button>` : ''}
         <button class="btn" id="e-print">🖨️ تقرير</button>
         <button class="btn" id="e-cal">📅 تقويم التجديدات</button>
       </div></div>
@@ -130,7 +130,7 @@ function renderEmployees() {
       <button class="btn sm write-only" data-p="employees.edit" id="b-assign">🏢 تعيين جماعي</button>
       <button class="btn sm write-only" data-p="employees.edit" id="b-renew">🔄 تجديد جماعي</button>
       <button class="btn sm" data-p="contract.view sensitive.salary" id="b-contracts">📄 عقود المحدد (PDF)</button>
-      <button class="btn sm" id="b-export">📤 تصدير المحدد</button>
+      ${can('admin') ? `<button class="btn sm" id="b-export">📤 ${t('تصدير المحدد')}</button>` : ''}
       <button class="btn sm" id="b-print">🖨️ طباعة المحدد</button>
       <span class="spacer"></span><button class="btn sm ghost" id="b-clear">${t('إلغاء التحديد')}</button></div>` : ''}
     <div class="table-wrap"><table class="data" id="emp-table"><thead><tr>
@@ -191,7 +191,7 @@ function renderEmployees() {
     openProfileCard(tr.dataset.id);
   });
   $('#e-import').onclick = handleImportCsv;
-  $('#e-export').onclick = () => exportEmployeesCsv(list);
+  const ex = $('#e-export'); if (ex) ex.onclick = () => exportGuard(`${t('الموظفين')} (${list.length})`, () => exportEmployeesCsv(list));
   $('#e-print').onclick = () => openEmployeeReportModal();
   $('#e-cal').onclick = () => renderRenewalCalendarModal();
   if (sel) {
@@ -199,7 +199,7 @@ function renderEmployees() {
     $('#b-assign').onclick = () => openBulkAssignModal([...EMP_SELECTED]);
     $('#b-renew').onclick = () => openBulkRenewModal([...EMP_SELECTED]);
     $('#b-contracts').onclick = () => openBatchContractModal(selected().map(e => e.id));
-    $('#b-export').onclick = () => exportEmployeesCsv(selected());
+    const bx = $('#b-export'); if (bx) bx.onclick = () => exportGuard(`${t('الموظفين المحددين')} (${selected().length})`, () => exportEmployeesCsv(selected()));
     $('#b-print').onclick = () => openEmployeeReportModal(selected().map(e => e.id));
     $('#b-clear').onclick = () => { EMP_SELECTED.clear(); render(); };
   }
@@ -364,7 +364,7 @@ function openEmployeeReportModal(selected = []) {
           <label class="check"><input type="checkbox" id="rb-sign" ${R.sign ? 'checked' : ''}> ${t('خانات التوقيع (أعده / راجعه / اعتمده)')}</label>
         </div></div>
       </div>`,
-    foot: `<button class="btn primary" data-go="print">🖨️ ${t('معاينة وطباعة')}</button><button class="btn" data-go="csv">📤 ${t('Excel (CSV) بنفس الأعمدة')}</button>
+    foot: `<button class="btn primary" data-go="print">🖨️ ${t('معاينة وطباعة')}</button>${can('admin') ? `<button class="btn" data-go="csv">📤 ${t('Excel (CSV) بنفس الأعمدة')}</button>` : ''}
       <span class="spacer"></span><button class="btn" data-close>إلغاء</button>`,
   });
   const E = m.el;
@@ -453,8 +453,8 @@ function openEmployeeReportModal(selected = []) {
     if (!list.length) return toast('مفيش موظفين بالفلاتر دي', 'err');
     const f = filters();
     msClose();
-    withLang(R.lang, () => {                             // التقرير (والـ CSV) بلغة التقرير حتى لو البرنامج شغال بلغة تانية
-      if (b.dataset.go === 'csv') return exportEmployeeReportCsv(list, chosen());
+    if (b.dataset.go === 'csv') return exportGuard(`${t('تقرير الموظفين')} (${list.length})`, () => withLang(R.lang, () => exportEmployeeReportCsv(list, chosen())));
+    withLang(R.lang, () => {                             // التقرير بلغة التقرير حتى لو البرنامج شغال بلغة تانية
       printEmployeeReport(list, chosen(), { title: $('#rb-title', E).value.trim() || t('تقرير الموظفين'), filters: scope === 'selected' ? null : f,
         selectedCount: scope === 'selected' ? list.length : 0 });
     });
@@ -650,14 +650,14 @@ function importResultHtml(r, preview) {
     ${miss.length ? `<div class="notice warn" style="margin-top:8px">⚠️ ${w('هيتخطّى', 'تم تخطّي')} <b>${miss.length}</b> ${t('صف، لأن الرقم المدني مش مسجّل في السيستم')}:
       <ul class="imp-miss">${miss.map(x => `<li><b>${esc(x.name || '—')}</b> — <span class="num">${esc(x.id)}</span>${x.candidate ? ` <span class="small muted">(${t('موجود كمترشّح في «تسجيل موظف جديد»')})</span>` : ''}</li>`).join('')}</ul>
       <div>${t('لو ده موظف جديد، سجّله من «تسجيل موظف جديد».')}</div>
-      <div class="row" style="margin-top:6px"><button class="btn sm" data-imp-csv>📤 ${t('تنزيل القائمة')}</button>
+      <div class="row" style="margin-top:6px">${can('admin') ? `<button class="btn sm" data-imp-csv>📤 ${t('تنزيل القائمة')}</button>` : ''}
         ${viewAllowed('recruitment') ? `<button class="btn sm" data-imp-rec>🧭 ${t('فتح تسجيل موظف جديد')}</button>` : ''}</div></div>` : ''}`;
 }
 function bindImportResult(m, r) {
   const miss = r.notRegistered || [];
   const csv = $('[data-imp-csv]', m.el);
-  if (csv) csv.onclick = () => downloadBlob(toCsv([[t('الرقم المدني'), t('الاسم'), t('ملاحظة')],
-    ...miss.map(x => [x.id, x.name, x.candidate ? t('موجود كمترشّح في «تسجيل موظف جديد»') : ''])]), `import-not-registered-${todayISO()}.csv`, 'text/csv;charset=utf-8');
+  if (csv) csv.onclick = () => exportGuard(t('قائمة الاستيراد'), () => downloadBlob(toCsv([[t('الرقم المدني'), t('الاسم'), t('ملاحظة')],
+    ...miss.map(x => [x.id, x.name, x.candidate ? t('موجود كمترشّح في «تسجيل موظف جديد»') : ''])]), `import-not-registered-${todayISO()}.csv`, 'text/csv;charset=utf-8'));
   const go = $('[data-imp-rec]', m.el);
   if (go) go.onclick = () => { m.close(); setView('recruitment'); };
 }
@@ -1055,8 +1055,8 @@ function openClearanceModal(id) {
         <label class="check" data-p="contract.sign"><input type="checkbox" name="__signFirst"> ✍️ ${t('بتوقيع المفوّض')}</label>
         <label class="check" data-p="contract.sign"><input type="checkbox" name="__signSecond"> ✍️ ${t('بتوقيع الموظف')}</label>
         ${kit.html()}</div>${kit.notice()}`,
-    foot: `${STATE.pdfAvailable ? `<button class="btn primary" data-go="pdf">📄 ${t('حفظ وعرض الإقرار')}</button>` : ''}
-      <button class="btn ${STATE.pdfAvailable ? '' : 'primary'}" data-go="docx">⬇️ Word</button>
+    foot: `${STATE.pdfAvailable ? `<button class="btn primary" data-go="pdf">📄 ${t('حفظ وعرض الإقرار')}</button>`
+        : `<span class="small muted">${t('عرض الإقرار محتاج Microsoft Word أو LibreOffice على السيرفر.')}</span>`}
       <span class="spacer"></span><button class="btn" data-close>إلغاء</button>`,
   });
   $$('[data-go]', m.el).forEach(b => b.onclick = async () => {
@@ -1069,8 +1069,7 @@ function openClearanceModal(id) {
     try {
       const res = await fetchBlob(`/api/employees/${encodeURIComponent(e.id)}/clearance/${b.dataset.go}`,
         { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...opts, ...data }) });
-      if (b.dataset.go === 'pdf') { m.close(); openPdfPreviewModal(res.blob, res.name, 1); }
-      else { downloadBlob(res.blob, res.name); toast('تم التنزيل', 'ok'); b.disabled = false; }
+      m.close(); openPdfPreviewModal(res.blob, res.name, 1);
     } catch (err) { toast(err.message, 'err'); b.disabled = false; }
   });
 }
@@ -1080,10 +1079,11 @@ async function loadDriveFiles(empId, root) {
   const box = $('#emp-files', root);
   try {
     const files = await api('GET', `/api/employees/${encodeURIComponent(empId)}/files`);
-    box.innerHTML = files.length ? `<table class="data"><tbody>${files.map(f => `<tr><td>📄 <a href="/files/emp/${f.id}" target="_blank">${esc(f.name)}</a></td>
+    box.innerHTML = files.length ? `<table class="data"><tbody>${files.map(f => `<tr><td>📄 <a href="#" data-view="${f.id}" data-name="${esc(f.name)}">${esc(f.name)}</a></td>
       <td class="small muted">${(f.size / 1024).toFixed(0)} KB</td><td class="small muted">${fmtDateTime(f.uploaded_at)} ${esc(f.uploaded_by || '')}</td>
-      <td><a class="btn sm" href="/files/emp/${f.id}?dl=1">⬇️</a> <button class="btn sm danger write-only" data-p="employees.edit" data-del="${f.id}">🗑️</button></td></tr>`).join('')}</tbody></table>`
+      <td><button class="btn sm" data-view="${f.id}" data-name="${esc(f.name)}">👁️</button> <button class="btn sm danger write-only" data-p="employees.edit" data-del="${f.id}">🗑️</button></td></tr>`).join('')}</tbody></table>`
       : `<div class="empty">${t('لا توجد مرفقات')}</div>`;
+    $$('[data-view]', box).forEach(b => b.onclick = ev => { ev.preventDefault(); openFileViewer(`/files/emp/${b.dataset.view}`, b.dataset.name); });
     $$('[data-del]', box).forEach(b => b.onclick = async () => {
       if (!await openConfirm(t('حذف المرفق؟'), { danger: true })) return;
       await api('DELETE', '/api/files/' + b.dataset.del); loadDriveFiles(empId, root);

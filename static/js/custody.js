@@ -30,7 +30,33 @@ function custodySettings() { return STATE.custodySettings || { issuerCompanyId: 
 const custodyNoSupport = cc => (custodySettings().noSupportCostCenters || []).includes(cc || '');
 const CUSTODY_STATUS = { requested: ['مطلوبة', 'orange'], disbursed: ['تم الصرف', 'blue'], closed: ['مقفولة', 'green'], cancelled: ['ملغاة', 'grey'] };
 
-function custodyNo(c) { return 'ع-' + String(c.no).padStart(4, '0'); }
+/** رقم العهدة: رمز صاحبها وقت الطلب + مسلسله «AA-0001» (custody.custody_no على السيرفر) */
+function custodyNo(c) { return c.number || 'CUS-' + String(c.no).padStart(4, '0'); }
+/** العهد اللي ظاهرة في الشاشة: السيرفر بيبعت عهد المستخدم بس، وصاحب «عرض عهد كل المستخدمين» بيختار (عهدي / الكل / مستخدم) */
+function custodySeeAll() { return can('custody.all'); }
+function custodiesInView() {
+  const all = STATE.custodies || [], o = UI.custody.owner || 'me';
+  if (!custodySeeAll() || o === 'all') return all;
+  const uid = String(o === 'me' ? STATE.me.id : o);
+  return all.filter(c => String(c.ownerId) === uid);
+}
+function invoicesInView() { const ids = new Set(custodiesInView().map(c => c.id)); return (STATE.invoices || []).filter(i => ids.has(i.custodyId)); }
+/** لغة ملفات العهد (الفواتير، الملخص، طلب الصرف): آخر اختيار، وإلا الافتراضي من «إعدادات الفواتير» */
+const CUSTODY_LANGS = [['ar', 'عربي'], ['en', 'English'], ['both', 'ثنائي اللغة']];
+function custodyDocLang() { const v = lsGet('mv_cuDocLang'); return ['ar', 'en', 'both'].includes(v) ? v : custodySettings().docLang || 'both'; }
+function custodyLangSelect() {
+  return `<label class="row small cu-lang" style="gap:6px">📄 ${t('لغة الملفات')}<select data-cu-lang>${CUSTODY_LANGS.map(([k, l]) => opt(k, t(l), k === custodyDocLang())).join('')}</select></label>`;
+}
+function bindCustodyLang(root) { $$('[data-cu-lang]', root).forEach(s => s.onchange = () => { lsSet('mv_cuDocLang', s.value); $$('[data-cu-lang]').forEach(x => { x.value = s.value; }); }); }
+/** معاينة كشف عهدة PDF بلغة الملفات (مابيتنزّلش) */
+async function custodyPreview(url) {
+  if (!STATE.sheetPdfAvailable) return openBlockAlert(t('معاينة كشوف العهد محتاجة Microsoft Excel أو LibreOffice على السيرفر.'));
+  toast(t('جاري تجهيز المعاينة…'));
+  try {
+    const r = await fetchBlob(url + (url.includes('?') ? '&' : '?') + 'lang=' + custodyDocLang());
+    openPdfPreviewModal(r.blob, r.name, 1, 'custody');
+  } catch (e) { toast(e.message, 'err'); }
+}
 function custodyTypeLabel(tx) { return t((CUSTODY_TYPES[tx] || { label: tx }).label); }
 function custodyStatusChip(st) {
   const [l, col] = CUSTODY_STATUS[st] || [st, 'grey'];
@@ -64,7 +90,7 @@ function custodyTotals(c) {
 /** أرصدة المستلمين: اتصرف له كام، ونفّذ كام، والباقي معاه (العهد اللي اتصرفت بس) */
 function custodianBalances() {
   const by = {};
-  (STATE.custodies || []).filter(c => c.status !== 'cancelled').forEach(c => {
+  custodiesInView().filter(c => c.status !== 'cancelled').forEach(c => {
     const tt = custodyTotals(c), b = by[c.custodian] || (by[c.custodian] = { name: c.custodian, received: 0, spent: 0, open: 0, requested: 0 });
     b.received += tt.received;
     if (c.status !== 'requested') b.spent += tt.spent;
@@ -76,16 +102,19 @@ function custodianBalances() {
 
 /* ---------- الشاشة ---------- */
 function renderCustody() {
-  const U = UI.custody = Object.assign({ tab: 'list', q: '', status: '', type: '', custodian: '', iq: '', istatus: '', icc: '' }, UI.custody || {});
-  const all = STATE.custodies || [];
+  const U = UI.custody = Object.assign({ tab: 'list', q: '', status: '', type: '', custodian: '', iq: '', istatus: '', icc: '', owner: 'me' }, UI.custody || {});
+  const all = custodiesInView();
   const open = all.filter(c => c.status === 'disbursed').map(custodyTotals);
-  const pending = (STATE.invoices || []).filter(i => i.status === 'pending');
+  const pending = invoicesInView().filter(i => i.status === 'pending');
+  const owners = STATE.custodyUsers || [];
   const kpi = [[all.filter(c => c.status === 'requested').length, 'طلبات لسه ماتصرفتش', 'orange'], [open.length, 'عهد مفتوحة', 'blue'],
     [fmtMoney(sum(open.map(x => x.received))), 'اتصرف للمستلمين', ''], [fmtMoney(sum(open.map(x => x.spent))), 'اتنفّذ فعلًا', ''],
     [fmtMoney(sum(open.map(x => x.remaining))), 'الرصيد مع المستلمين', 'purple'], [sum(open.map(x => x.ready)), 'شخص جاهز للتقفيل', 'green'],
     [`${pending.length} · ${fmtMoney(sum(pending.map(i => i.total)))}`, 'فواتير بانتظار الحسابات', 'orange']];
   viewRoot().innerHTML = `<div class="page-head"><div><h1>${t('العهد والمصروفات')}</h1><div class="sub">${all.length} ${t('عهدة')}</div></div>
-    <div class="actions"><button class="btn primary write-only" data-p="custody.edit" id="cu-add">➕ ${t('طلب عهدة')}</button>
+    <div class="actions">${custodySeeAll() ? `<select id="cu-owner" title="${esc(t('عهد مين'))}">${opt('me', '👤 ' + t('عهدي أنا'), U.owner === 'me')}${opt('all', '👥 ' + t('كل المستخدمين'), U.owner === 'all')}
+        ${owners.filter(u => String(u.id) !== String(STATE.me.id)).map(u => opt(String(u.id), `${u.name}${u.code ? ' · ' + u.code : ''}`, String(U.owner) === String(u.id))).join('')}</select>` : ''}
+      <button class="btn primary write-only" data-p="custody.edit" id="cu-add">➕ ${t('طلب عهدة')}</button>
       <button class="btn" data-p="custody.fees" id="cu-fees">⚙️ ${t('جدول الرسوم')}</button>
       <button class="btn" data-p="custody.fees" id="cu-set">🧾 ${t('إعدادات الفواتير')}</button></div></div>
     <div class="cu-kpis">${kpi.map(([v, l, c]) => `<div class="card cu-kpi"${c ? ` style="border-top:3px solid var(--${c})"` : ''}><b class="num">${esc(v)}</b><span>${esc(t(l))}</span></div>`).join('')}</div>
@@ -96,6 +125,8 @@ function renderCustody() {
   const add = $('#cu-add'); if (add) add.onclick = () => openCustodyRequestModal();
   const fees = $('#cu-fees'); if (fees) fees.onclick = () => openFeeItemsModal();
   const set = $('#cu-set'); if (set) set.onclick = () => openCustodySettingsModal();
+  const own = $('#cu-owner'); if (own) own.onchange = e => upd({ owner: e.target.value, custodian: '' });
+  bindCustodyLang(viewRoot());
   if (U.tab === 'invoices') {
     const iq = $('#cif-q');
     iq.addEventListener('input', debounce(e => { UI.custody.iq = e.target.value; render(); const i = $('#cif-q'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 250));
@@ -120,22 +151,23 @@ function renderCustody() {
 }
 function custodyListHtml() {
   const U = UI.custody, q = norm(U.q);
-  const list = (STATE.custodies || []).filter(c => (!U.status || c.status === U.status) && (!U.type || c.txType === U.type)
+  const showOwner = custodySeeAll() && U.owner !== 'me';
+  const list = custodiesInView().filter(c => (!U.status || c.status === U.status) && (!U.type || c.txType === U.type)
     && (!U.custodian || c.custodian === U.custodian)
-    && (!q || [c.custodian, custodyNo(c), String(c.no), c.notes, ...(c.lines || []).flatMap(l => [l.personName, l.civilId])].some(v => norm(v).includes(q))));
+    && (!q || [c.custodian, custodyNo(c), c.ownerName, c.notes, ...(c.lines || []).flatMap(l => [l.personName, l.civilId])].some(v => norm(v).includes(q))));
   return `<div class="filters"><input type="search" id="cuf-q" placeholder="${esc(t('بحث بالرقم أو المستلم أو اسم موظف…'))}" value="${esc(U.q)}">
       <select id="cuf-status">${opt('', t('— كل الحالات —'), !U.status)}${Object.entries(CUSTODY_STATUS).map(([k, [l]]) => opt(k, t(l), k === U.status)).join('')}</select>
       <select id="cuf-type">${opt('', t('— كل الأنواع —'), !U.type)}${Object.entries(CUSTODY_TYPES).map(([k, v]) => opt(k, t(v.label), k === U.type)).join('')}</select>
-      <select id="cuf-cust">${opt('', t('— كل المستلمين —'), !U.custodian)}${uniq((STATE.custodies || []).map(c => c.custodian)).sort().map(x => opt(x, x, x === U.custodian)).join('')}</select>
+      <select id="cuf-cust">${opt('', t('— كل المستلمين —'), !U.custodian)}${uniq(custodiesInView().map(c => c.custodian)).sort().map(x => opt(x, x, x === U.custodian)).join('')}</select>
       <button class="btn sm ghost" id="cuf-clear">✕ ${t('مسح الفلاتر')}</button></div>
-    <div class="table-wrap"><table class="data"><thead><tr><th>${t('الرقم')}</th><th>${t('النوع')}</th><th>${t('المستلم')}</th><th>${t('الأشخاص')}</th>
+    <div class="table-wrap"><table class="data"><thead><tr><th>${t('الرقم')}</th>${showOwner ? `<th>${t('صاحب العهدة')}</th>` : ''}<th>${t('النوع')}</th><th>${t('المستلم')}</th><th>${t('الأشخاص')}</th>
       <th>${t('المطلوب')}</th><th>${t('اتصرف')}</th><th>${t('اتنفّذ')}</th><th>${t('الرصيد')}</th><th>${t('البنود')}</th><th>${t('الحالة')}</th><th>${t('تاريخ الطلب')}</th></tr></thead><tbody>
-    ${list.map(c => { const tt = custodyTotals(c); return `<tr class="clickable" data-cu="${c.id}"><td class="num"><b>${esc(custodyNo(c))}</b></td><td>${esc(custodyTypeLabel(c.txType))}</td>
+    ${list.map(c => { const tt = custodyTotals(c); return `<tr class="clickable" data-cu="${c.id}"><td class="num nowrap"><b>${esc(custodyNo(c))}</b></td>${showOwner ? `<td class="small">${esc(c.ownerName || '—')}</td>` : ''}<td>${esc(custodyTypeLabel(c.txType))}</td>
       <td>${esc(c.custodian)}</td><td class="num">${tt.persons}${tt.ready ? ` <span class="small" style="color:var(--green)">(✓ ${tt.ready})</span>` : ''}</td>
       <td class="num">${fmtMoney(tt.planned)}</td><td class="num">${tt.received ? fmtMoney(tt.received) : '—'}</td><td class="num">${fmtMoney(tt.spent)}</td>
       <td class="num" style="${tt.remaining < 0 ? 'color:var(--red)' : ''}">${tt.received ? fmtMoney(tt.remaining) : '—'}</td>
       <td><div class="small">${tt.itemsDone}/${tt.items}</div><div class="progress" style="width:80px"><i style="width:${tt.items ? 100 * tt.itemsDone / tt.items : 0}%"></i></div></td>
-      <td>${custodyStatusChip(c.status)}</td><td class="num small">${fmtDate(c.requestDate)}</td></tr>`; }).join('') || `<tr><td colspan="11" class="empty">${t('لا توجد عهد')}</td></tr>`}
+      <td>${custodyStatusChip(c.status)}</td><td class="num small">${fmtDate(c.requestDate)}</td></tr>`; }).join('') || `<tr><td colspan="12" class="empty">${t('لا توجد عهد')}</td></tr>`}
     </tbody></table></div>`;
 }
 function custodyBalancesHtml() {
@@ -151,14 +183,14 @@ function custodyBalancesHtml() {
 
 /* ---------- الفواتير: فاتورة لكل مركز تكلفة في كل تقفيل ---------- */
 function custodyInvoicesHtml() {
-  const U = UI.custody, q = norm(U.iq), all = STATE.invoices || [];
+  const U = UI.custody, q = norm(U.iq), all = invoicesInView();
   const cus = Object.fromEntries((STATE.custodies || []).map(c => [c.id, c]));
   const list = all.filter(i => (!U.istatus || i.status === U.istatus) && (!U.icc || (i.costCenter || '') === U.icc)
     && (!q || [i.number, i.costCenter, companyName(i.billCompanyId), cus[i.custodyId] && custodyNo(cus[i.custodyId]), cus[i.custodyId] && cus[i.custodyId].custodian].some(v => norm(v).includes(q))));
   return `<div class="filters"><input type="search" id="cif-q" placeholder="${esc(t('بحث برقم الفاتورة أو مركز التكلفة أو العهدة…'))}" value="${esc(U.iq)}">
       <select id="cif-status">${opt('', t('— كل الحالات —'), !U.istatus)}${Object.entries(INVOICE_STATUS).map(([k, [l]]) => opt(k, t(l), k === U.istatus)).join('')}</select>
       <select id="cif-cc">${opt('', t('— كل مراكز التكلفة —'), !U.icc)}${uniq(all.map(i => i.costCenter || '')).sort().map(x => opt(x, x || t('بدون مركز تكلفة'), x === U.icc)).join('')}</select>
-      <button class="btn sm ghost" id="cif-clear">✕ ${t('مسح الفلاتر')}</button></div>
+      <button class="btn sm ghost" id="cif-clear">✕ ${t('مسح الفلاتر')}</button><span class="spacer"></span>${custodyLangSelect()}</div>
     <div class="table-wrap"><table class="data"><thead><tr><th>${t('رقم الفاتورة')}</th><th>${t('التاريخ')}</th><th>${t('فاتورة إلى')}</th><th>${t('العهدة')}</th><th>${t('الموظفين')}</th>
       <th>${t('الرسوم الحكومية')}</th><th>${t('الدعم الإداري')}</th><th>${t('الإجمالي')}</th><th>${t('الحالة')}</th><th></th></tr></thead><tbody>
     ${list.map(i => { const c = cus[i.custodyId]; return `<tr class="clickable" data-inv-cu="${esc(i.custodyId)}"><td class="num nowrap"><b>${esc(i.number)}</b></td><td class="num small nowrap">${fmtDate(i.closingDate)}</td>
@@ -170,15 +202,15 @@ function custodyInvoicesHtml() {
     </tbody>${list.length ? `<tfoot><tr><td colspan="4">${t('الإجمالي')} (${list.length})</td><td class="num">${sum(list.map(i => i.employees))}</td><td class="num">${fmtMoney(sum(list.map(i => i.govAmount)))}</td>
       <td class="num">${fmtMoney(sum(list.map(i => i.supportAmount)))}</td><td class="num"><b>${fmtMoney(sum(list.map(i => i.total)))}</b></td><td colspan="2"></td></tr></tfoot>` : ''}</table></div>`;
 }
-/** أزرار الفاتورة: تنزيل، «اعتمدتها الحسابات» أو الرجوع عنها */
+/** أزرار الفاتورة: معاينة وطباعة، «اعتمدتها الحسابات» أو الرجوع عنها */
 function invoiceButtons(i) {
-  return `<button class="btn sm" data-inv-dl="${i.id}" title="${esc(t('الفاتورة Excel'))} — ${esc(i.number)}">📊 Excel</button>
+  return `<button class="btn sm" data-inv-dl="${i.id}" title="${esc(t('معاينة وطباعة'))} — ${esc(i.number)}">📄 ${t('معاينة')}</button>
     ${i.status === 'pending' && can('custody.edit') ? `<button class="btn sm primary" data-inv-ok="${i.id}">✅ ${t('اعتمدتها الحسابات')}</button>` : ''}
     ${i.status === 'approved' && can('custody.delete') ? `<button class="btn sm ghost" data-inv-undo="${i.id}" title="${esc(t('إلغاء اعتماد الحسابات'))}">↩️</button>` : ''}`;
 }
 function bindInvoiceActions(root, after) {
   const find = id => (STATE.invoices || []).find(i => i.id === id);
-  $$('[data-inv-dl]', root).forEach(b => b.onclick = ev => { ev.stopPropagation(); custodyDownload(`/api/invoices/${b.dataset.invDl}.xlsx`); });
+  $$('[data-inv-dl]', root).forEach(b => b.onclick = ev => { ev.stopPropagation(); custodyPreview(`/api/invoices/${b.dataset.invDl}.pdf`); });
   $$('[data-inv-ok]', root).forEach(b => b.onclick = ev => { ev.stopPropagation(); openInvoiceApproveModal(find(b.dataset.invOk), after); });
   $$('[data-inv-undo]', root).forEach(b => b.onclick = async ev => {
     ev.stopPropagation();
@@ -208,7 +240,8 @@ function openCustodySettingsModal() {
     title: '🧾 ' + t('إعدادات الفواتير'),
     body: `<div class="form" id="cs-form">
         <label class="full">${t('الشركة المُصدِرة (شعارها واسمها على طلب الصرف والفواتير)')}<select name="issuerCompanyId">${companyOptions(st.issuerCompanyId || '')}</select></label>
-        <label>${t('الدعم الإداري لكل موظف (د.ك)')}<input type="number" step="0.001" min="0" name="supportFee" value="${esc(st.supportFee ?? 20)}"></label></div>
+        <label>${t('الدعم الإداري لكل موظف (د.ك)')}<input type="number" step="0.001" min="0" name="supportFee" value="${esc(st.supportFee ?? 20)}"></label>
+        <label>${t('لغة ملفات العهد (الافتراضي)')}<select name="docLang">${CUSTODY_LANGS.map(([k, l]) => opt(k, t(l), k === (st.docLang || 'both'))).join('')}</select></label></div>
       <h4 class="cu-h">${t('مراكز تكلفة من غير دعم إداري')} <span class="small muted">(${t('موظفين الشركة المُصدِرة نفسها')})</span></h4>
       <div class="cu-pick-list" style="max-height:260px">${ccs.map(cc => `<label class="${st.noSupportCostCenters.includes(cc) ? 'on' : ''}"><input type="checkbox" data-nosup="${esc(cc)}" ${st.noSupportCostCenters.includes(cc) ? 'checked' : ''}><b>${esc(cc)}</b>
         <span class="small muted">${esc(((STATE.costCenters || []).find(c => c.name === cc) || {}).nameEn || '')}</span></label>`).join('') || `<div class="empty">${t('لا توجد مراكز تكلفة')}</div>`}</div>
@@ -240,18 +273,21 @@ function openCustodyRequestModal(id = null) {
         <label><span class="req">${t('المستلم')}</span><input name="custodian" list="dl-custodians" value="${esc(old ? old.custodian : '')}" placeholder="${esc(t('اسم المندوب'))}"></label>
         <label>${t('تاريخ الطلب')}<input type="date" name="requestDate" value="${esc(old ? old.requestDate || '' : todayISO())}"></label>
         <label class="full">${t('ملاحظات')}<input name="notes" value="${esc(old ? old.notes || '' : '')}"></label></div>
-      <datalist id="dl-custodians">${uniq((STATE.custodies || []).map(c => c.custodian)).map(x => `<option value="${esc(x)}">`).join('')}</datalist>
+      <datalist id="dl-custodians">${uniq(custodiesInView().map(c => c.custodian)).map(x => `<option value="${esc(x)}">`).join('')}</datalist>
       <h4 class="cu-h">${t('الأشخاص')} <span class="small muted" id="cu-kind"></span></h4>
       <div class="row" style="gap:8px;flex-wrap:wrap"><input type="search" id="cu-q" placeholder="${esc(t('بحث بالاسم أو الرقم المدني…'))}" style="flex:1;min-width:200px">
         <span id="cu-quick"></span><span class="small muted" id="cu-sel-n"></span></div>
       <div class="cu-pick-list" id="cu-pick"></div>
       <h4 class="cu-h">${t('البنود والمبالغ')} <span class="small muted">(${t('شيل علامة البند اللي الشخص مش محتاجه')})</span></h4>
       <div id="cu-matrix"></div>`,
-    foot: `<button class="btn primary" data-save="print">🖨️ ${t('حفظ وطباعة الطلب')}</button><button class="btn" data-save="">💾 ${t('حفظ')}</button>
+    foot: `<button class="btn primary" data-save="print">🖨️ ${t('حفظ ومعاينة الطلب')}</button><button class="btn" data-save="">💾 ${t('حفظ')}</button>
       <span class="spacer"></span><button class="btn" data-close>${t('إلغاء')}</button>`,
   });
   const E = m.el;
   const kind = () => CUSTODY_TYPES[S.tx].kind;
+  // منع التكرار (من كل المستخدمين): الشخص في عهدة مفتوحة من نفس النوع ← مقفول، واتقفل له خلال 90 يوم ← تنبيه
+  const busy = (pid, state) => (STATE.custodyBusy || []).find(b => b.txType === S.tx && b.kind === kind() && b.personId === pid
+    && b.state === state && (!old || b.custodyId !== old.id));
   const eligible = () => {
     const ty = CUSTODY_TYPES[S.tx];
     if (ty.kind === 'employee') return STATE.employees.filter(e => !empEnded(e) && isKuwaitiStaff(e) === ty.kuwaiti)
@@ -273,8 +309,11 @@ function openCustodyRequestModal(id = null) {
     $('#cu-quick', E).innerHTML = S.tx === 'renewal' ? `<span class="chip clickable ${S.quick === 'soon' ? 'on' : ''}" data-quick="soon">${t('الإقامة بتنتهي خلال 90 يوم')}</span>` : '';
     const list = eligible().filter(p => (!q || norm(p.name + ' ' + p.sub).includes(q)) && (S.quick !== 'soon' || (p.exp && p.exp <= soon)))
       .sort((a, b) => (S.persons.has(b.id) - S.persons.has(a.id)) || (a.exp && b.exp ? a.exp.localeCompare(b.exp) : 0) || a.name.localeCompare(b.name, 'ar'));
-    $('#cu-pick', E).innerHTML = list.slice(0, 300).map(p => `<label class="${S.persons.has(p.id) ? 'on' : ''}"><input type="checkbox" data-pick="${esc(p.id)}" ${S.persons.has(p.id) ? 'checked' : ''}>
-        <b>${esc(p.name)}</b><span class="small muted">${esc(p.sub)}</span><span class="spacer"></span><span class="small">${p.tag || ''}</span></label>`).join('')
+    $('#cu-pick', E).innerHTML = list.slice(0, 300).map(p => { const bo = busy(p.id, 'open'), br = busy(p.id, 'recent'); return `<label class="${S.persons.has(p.id) ? 'on' : ''} ${bo ? 'cu-busy' : ''}"><input type="checkbox" data-pick="${esc(p.id)}" ${S.persons.has(p.id) ? 'checked' : ''} ${bo && !S.persons.has(p.id) ? 'disabled' : ''}>
+        <b>${esc(p.name)}</b><span class="small muted">${esc(p.sub)}</span><span class="spacer"></span>
+        ${bo ? `<span class="chip" style="background:var(--red-soft);color:var(--red)">🔒 ${t('موجود في')} ${esc(bo.number)}${bo.owner ? ' · ' + esc(bo.owner) : ''}</span>`
+          : br ? `<span class="chip" style="background:var(--orange-soft);color:var(--orange)">↩️ ${t('اتقفل في')} ${esc(br.number)} · ${fmtDate(br.closedDate)}</span>` : ''}
+        <span class="small">${p.tag || ''}</span></label>`; }).join('')
       + (list.length > 300 ? `<div class="small muted" style="padding:6px 10px">${t('فيه نتائج أكتر — ضيّق البحث')}</div>` : '')
       || `<div class="empty">${t(kind() === 'employee' ? 'مفيش موظفين' : 'مفيش مترشّحين في المراحل دي')}</div>`;
     if (CUSTODY_TYPES[S.tx].kuwaiti === false && !CUSTODY_TYPES[S.tx].doc) $('#cu-pick', E).insertAdjacentHTML('beforeend', `<div class="small muted" style="padding:6px 10px">🇰🇼 ${t('العمالة الوطنية ليها «تجديد إذن عمل — عمالة وطنية»')}</div>`);
@@ -340,14 +379,18 @@ function openCustodyRequestModal(id = null) {
     if (!persons.length) return openBlockAlert(t('اختار موظف واحد على الأقل وبند واحد على الأقل'));
     const open = persons.filter(p => Object.values(p.items).some(v => v === null || v === '')).length;
     if (open && !await openConfirm(`${t('فيه بنود من غير مبلغ (زي التصديقات) عند')} ${open} ${t('شخص — هتتحسب صفر في الطلب لحد ما تتكتب. تكمل؟')}`)) return;
-    try {
-      const res = await persist(old ? 'PUT' : 'POST', old ? `/api/custodies/${old.id}` : '/api/custodies', { ...d, txType: S.tx, persons }, 'تم الحفظ');
-      m.close();
-      const c = (STATE.custodies || []).find(x => x.id === (old ? old.id : res.id));
-      if (!c) return;
-      if (b.dataset.save === 'print') printCustodyRequest(c);
-      openCustodyDetails(c.id);
-    } catch (e) { /* persist عرض الخطأ */ }
+    const send = force => persist(old ? 'PUT' : 'POST', old ? `/api/custodies/${old.id}` : '/api/custodies', { ...d, txType: S.tx, persons, force }, 'تم الحفظ');
+    let res;
+    try { res = await send(false); } catch (e) {
+      // اتقفل لهم نفس النوع خلال 90 يوم ← تأكيد (والتقفيل بعد كده بيعدّيهم)
+      if (!(e.status === 409 && e.data && e.data.warn) || !await openConfirm(esc(e.message), { okLabel: t('اطلبهم تاني') })) return;
+      try { res = await send(true); } catch (e2) { return; }
+    }
+    m.close();
+    const c = (STATE.custodies || []).find(x => x.id === (old ? old.id : res.id));
+    if (!c) return;
+    openCustodyDetails(c.id);
+    if (b.dataset.save === 'print') STATE.sheetPdfAvailable ? custodyPreview(`/api/custodies/${c.id}/request.pdf`) : printCustodyRequest(c);
   });
 }
 
@@ -363,7 +406,8 @@ function openCustodyDetails(id) {
     const kv = (l, v) => `<div><span>${esc(t(l))}</span>${v || '<span class="muted">—</span>'}</div>`;
     const chip = (l, v, col) => `<span class="chip" style="font-size:13px;padding:4px 10px${col ? `;background:var(--${col}-soft);color:var(--${col})` : ''}">${esc(t(l))}: <b class="num">${v}</b></span>`;
     $('#cu-d', E).innerHTML = `<div class="kv">${kv('المستلم', `<b>${esc(c.custodian)}</b>`)}${kv('الحالة', custodyStatusChip(c.status))}${kv('تاريخ الطلب', fmtDate(c.requestDate))}
-        ${kv('تاريخ الصرف', fmtDate(c.disbursedDate))}${kv('أعده', esc(c.createdBy))}${c.notes ? kv('ملاحظات', esc(c.notes)) : ''}</div>
+        ${kv('تاريخ الصرف', fmtDate(c.disbursedDate))}${kv('صاحب العهدة', esc(c.ownerName || c.createdBy))}${c.notes ? kv('ملاحظات', esc(c.notes)) : ''}</div>
+      <div class="row" style="margin-top:8px">${custodyLangSelect()}</div>
       <div class="row" style="gap:6px;flex-wrap:wrap;margin:10px 0">${chip('المطلوب', fmtMoney(tt.planned))}${chip('اتصرف', tt.received ? fmtMoney(tt.received) : '—', 'blue')}
         ${chip('اتنفّذ', fmtMoney(tt.spent))}${tt.received ? chip('الرصيد مع المستلم', fmtMoney(tt.remaining), tt.remaining < 0 ? 'red' : 'purple') : ''}${chip('جاهز للتقفيل', `${tt.ready}/${tt.persons}`, 'green')}</div>
       ${c.status === 'requested' ? `<div class="notice small">${t('اطبع الطلب واعتمده من المسؤول والإدارة المالية، وبعد الصرف اضغط «💵 تم الصرف» وسجّل المبلغ.')}</div>` : ''}
@@ -381,7 +425,8 @@ function openCustodyDetails(id) {
       ${custodyClosingsHtml(c)}`;
     const f = $('#cu-df', E);
     f.innerHTML = `${edit && c.status === 'disbursed' && tt.ready ? `<button class="btn primary" data-a="close">🔒 ${t('تقفيل')} (${tt.ready})</button>` : ''}
-      <button class="btn" data-a="print">🖨️ ${t('طباعة طلب الصرف')}</button><button class="btn" data-a="reqxlsx">📊 ${t('طلب الصرف Excel')}</button>
+      <button class="btn" data-a="print">📄 ${t('طلب الصرف (معاينة وطباعة)')}</button>
+      ${can('admin') ? `<button class="btn" data-a="transfer">👤 ${t('نقل الملكية')}</button>` : ''}
       ${edit ? `<button class="btn primary" data-a="disburse">💵 ${t(c.status === 'requested' ? 'تم الصرف' : 'تعديل الصرف')}</button>` : ''}
       ${edit && c.status === 'requested' ? `<button class="btn" data-a="edit">✏️ ${t('تعديل الطلب')}</button>` : ''}
       <span class="spacer"></span>
@@ -390,8 +435,8 @@ function openCustodyDetails(id) {
     $('[data-close]', f).onclick = () => m.close();
     $$('[data-a]', f).forEach(b => b.onclick = async () => {
       const a = b.dataset.a;
-      if (a === 'print') printCustodyRequest(c);
-      else if (a === 'reqxlsx') custodyDownload(`/api/custodies/${c.id}/request.xlsx`);
+      if (a === 'print') STATE.sheetPdfAvailable ? custodyPreview(`/api/custodies/${c.id}/request.pdf`) : printCustodyRequest(c);
+      else if (a === 'transfer') openCustodyTransferModal(c, draw);
       else if (a === 'close') openCustodyCloseModal(c, draw);
       else if (a === 'disburse') openCustodyDisburseModal(c, draw);
       else if (a === 'edit') { m.close(); openCustodyRequestModal(c.id); }
@@ -399,7 +444,8 @@ function openCustodyDetails(id) {
         await persist('POST', `/api/custodies/${c.id}/cancel`, {}, 'تم الإلغاء'); draw();
       }
     });
-    $$('[data-closing]', E).forEach(b => b.onclick = () => custodyDownload(`/api/custodies/${c.id}/closing.xlsx?date=${b.dataset.closing}${b.dataset.layout ? '&layout=' + b.dataset.layout : ''}`));
+    $$('[data-closing]', E).forEach(b => b.onclick = () => custodyPreview(`/api/custodies/${c.id}/closing.pdf?date=${b.dataset.closing}${b.dataset.layout ? '&layout=' + b.dataset.layout : ''}`));
+    bindCustodyLang(E);
     bindInvoiceActions(E, draw);
     $$('[data-reopen]', E).forEach(b => b.onclick = async () => {
       if (!await openConfirm(`${t('إلغاء تقفيل')} ${fmtDate(b.dataset.reopen)}؟ ${t('الفواتير بتاعته هتتمسح، والبنود هترجع مفتوحة وتقدر تعدّلها وتقفلها تاني.')}`, { danger: true, okLabel: t('إلغاء التقفيل') })) return;
@@ -505,9 +551,19 @@ function openFeeItemsModal(tx = 'renewal') {
   load();
 }
 
-/* ---------- التقفيل: فاتورة لكل مركز تكلفة + الملخص Excel (custody_excel.py) ---------- */
-async function custodyDownload(url) {
-  try { const r = await fetchBlob(url); downloadBlob(r.blob, r.name); toast('تم التنزيل', 'ok'); } catch (e) { toast(e.message, 'err'); }
+/* ---------- التقفيل: فاتورة لكل مركز تكلفة + الملخص (custody_excel.py ← PDF للمعاينة والطباعة) ---------- */
+/** نقل ملكية العهدة لمستخدم تاني (مدير النظام) ← رقم جديد برمزه */
+function openCustodyTransferModal(c, after) {
+  const users = (STATE.custodyUsers || []).filter(u => String(u.id) !== String(c.ownerId));
+  const m = openModal({
+    title: `👤 ${t('نقل ملكية العهدة')} ${esc(custodyNo(c))}`, size: 'narrow',
+    body: `<div class="form"><label class="full">${t('إلى المستخدم')}<select name="userId">${users.map(u => opt(String(u.id), `${u.name}${u.code ? ' · ' + u.code : ''}`, false)).join('')}</select></label></div>
+      <div class="notice small" style="margin-top:8px">${t('العهدة بتاخد رقم جديد برمز المستخدم الجديد، وبتظهر عنده هو. الرقم القديم بيتسجّل في سجل التدقيق.')} (${t('صاحبها دلوقتي')}: ${esc(c.ownerName || '—')})</div>`,
+    foot: `<button class="btn primary" data-save>👤 ${t('نقل')}</button><button class="btn" data-close>${t('إلغاء')}</button>`,
+  });
+  $('[data-save]', m.el).onclick = async () => {
+    try { const r = await persist('POST', `/api/custodies/${c.id}/transfer`, formValues(m.el), 'تم النقل'); m.close(); toast(`${t('رقمها الجديد')}: ${r.number}`, 'ok'); if (after) after(); } catch (e) { /* ظاهر */ }
+  };
 }
 /** التقفيلات (بتاريخها) وفواتيرها: تنزيل الملخص والفواتير، اعتماد الحسابات، وإلغاء التقفيل لو كل فواتيره لسه بانتظار الحسابات */
 function custodyClosingsHtml(c) {
@@ -519,7 +575,7 @@ function custodyClosingsHtml(c) {
   return `<h4 class="cu-h">🔒 ${t('التقفيلات والفواتير')}</h4><div class="cu-closings">${dates.map(d => {
     const ps = by[d] || [], list = invs.filter(i => i.closingDate === d).sort((a, b) => a.no - b.no), locked = list.some(i => i.status === 'approved');
     return `<div class="cu-closing"><div><b>${t('تقفيل')} ${fmtDate(d)}</b><div class="small muted">${ps.length} ${t('شخص')} · ${list.length} ${t('فاتورة')} · ${fmtMoney(sum(list.map(i => i.total)))}</div></div>
-      <span class="spacer"></span><button class="btn sm primary" data-closing="${d}">📊 ${t('الملخص والفواتير Excel')}</button>
+      <span class="spacer"></span><button class="btn sm primary" data-closing="${d}">📄 ${t('الملخص والفواتير')}</button>
       <button class="btn sm" data-closing="${d}" data-layout="individual">👤 ${t('+ كشف فردي لكل موظف')}</button>
       ${can('custody.delete') && !locked ? `<button class="btn sm danger" data-reopen="${d}">↩️ ${t('إلغاء التقفيل')}</button>` : ''}
       ${locked ? `<span class="small muted" title="${esc(t('الحسابات اعتمدت فاتورة من التقفيل ده'))}">🔐 ${t('نهائي')}</span>` : ''}
@@ -546,7 +602,7 @@ function openCustodyCloseModal(c, after) {
           <td class="small">${p.lines.map(l => esc(l.itemName)).join('، ')}</td><td class="num">${fmtMoney(gov(p))}</td></tr>`).join('')}`).join('')}
       </tbody></table></div>
       <div class="row cu-cl-sum" id="cl-sum"></div>`,
-    foot: `<button class="btn primary" data-go>🔒 ${t('تقفيل وتنزيل الفواتير')}</button><span class="spacer"></span><button class="btn" data-close>${t('إلغاء')}</button>`,
+    foot: `<button class="btn primary" data-go>🔒 ${t('تقفيل ومعاينة الفواتير')}</button><span class="spacer"></span><button class="btn" data-close>${t('إلغاء')}</button>`,
   });
   const E = m.el;
   const chosen = () => $$('[data-cl]', E).filter(x => x.checked).map(x => x.dataset.cl);
@@ -567,7 +623,7 @@ function openCustodyCloseModal(c, after) {
     try {
       const r = await persist('POST', `/api/custodies/${c.id}/close`, { persons, adminFee: d.adminFee, date: d.date }, 'تم التقفيل');
       m.close();
-      await custodyDownload(`/api/custodies/${c.id}/closing.xlsx?date=${r.date}${d.layout ? '&layout=' + d.layout : ''}`);
+      await custodyPreview(`/api/custodies/${c.id}/closing.pdf?date=${r.date}${d.layout ? '&layout=' + d.layout : ''}`);
       if (after) after();
     } catch (e) { /* ظاهر */ }
   };

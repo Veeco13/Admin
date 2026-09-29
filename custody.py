@@ -11,9 +11,14 @@ Lunx — العهد والمصروفات.
   البند، بيتعلّم «تم» لوحده (sync_person) والمبلغ الفعلي = المحدد لحد ما يتعدّل.
 - الرصيد مع المستلم = المصروف له − المنفّذ فعلًا (البنود اللي «تم»).
 - الفاتورة «بانتظار موافقة الحسابات» ← التقفيل بيتلغي وهي بتتمسح. «اعتمدتها الحسابات» ← نهائية.
+- كل عهدة ليها صاحب (المستخدم اللي طلبها) ورقمها برمزه «AA-0001». المستخدم بيشوف عهده بس، وصاحب
+  «custody.all» (عرض عهد كل المستخدمين — مدير النظام) بيشوف الكل. مدير النظام بينقل الملكية.
+- منع التكرار (على عهد كل المستخدمين): الشخص مايتطلبش في عهدتين مفتوحتين من نفس النوع، ولو اتقفل له نفس النوع
+  في آخر 90 يوم لازم تأكيد (dup_ok)، والتقفيل بيرفض شخص اتقفل له نفس النوع في عهدة تانية في آخر 90 يوم.
 """
 import json
-from datetime import date
+import re
+from datetime import date, timedelta
 
 from sqlalchemy import func, select
 
@@ -52,6 +57,9 @@ FLOWS = {
 STATUSES = {"requested": "مطلوبة", "disbursed": "تم الصرف", "closed": "مقفولة", "cancelled": "ملغاة"}
 OPEN = ("requested", "disbursed")
 SETTINGS_KEY = "custody_settings"
+DUP_DAYS = 90                     # نفس الشخص ونفس النوع اتقفل في آخر 90 يوم ← تأكيد قبل الطلب، والتقفيل بيرفضه
+DOC_LANGS = ("ar", "en", "both")  # لغة ملفات العهد (الفواتير، الملخص، طلب الصرف، كشف الموظف)
+CODE_RE = re.compile(r"^[A-Z][A-Z0-9]{1,5}$")
 
 
 def num(v):
@@ -87,7 +95,7 @@ def settings(s):
         no_support = [cc.name for cc in s.scalars(select(M.CostCenter))
                       if key and (cc.nameEn or "").strip() and (cc.nameEn or "").strip().lower() in key]
     return {"issuerCompanyId": issuer, "supportFee": DEFAULT_ADMIN_FEE if fee is None else fee,
-            "noSupportCostCenters": no_support}
+            "noSupportCostCenters": no_support, "docLang": d.get("docLang") if d.get("docLang") in DOC_LANGS else "both"}
 
 
 def save_settings(s, d):
@@ -96,8 +104,9 @@ def save_settings(s, d):
     fee = num(d.get("supportFee"))
     names = {cc.name for cc in s.scalars(select(M.CostCenter))}
     no_support = [x for x in (d.get("noSupportCostCenters") or []) if x in names]
+    lang = d.get("docLang") if d.get("docLang") in DOC_LANGS else cur["docLang"]
     db.set_meta(s, SETTINGS_KEY, json.dumps({"issuerCompanyId": issuer, "supportFee": cur["supportFee"] if fee is None else fee,
-                                             "noSupportCostCenters": no_support}, ensure_ascii=False))
+                                             "noSupportCostCenters": no_support, "docLang": lang}, ensure_ascii=False))
     return settings(s)
 
 
@@ -187,7 +196,103 @@ def build_lines(s, tx, persons, ctx):
 
 
 def next_no(s):
+    """الرقم الداخلي (فريد لكل العهد). الرقم اللي بيظهر = custody_no."""
     return (s.scalar(select(func.max(M.Custody.no))) or 0) + 1
+
+
+# ---------------------------------------------------------------------------
+# صاحب العهدة ورقمها «AA-0001»
+# ---------------------------------------------------------------------------
+def custody_no(c):
+    """رمز صاحب العهدة وقت الطلب + مسلسل الرمز."""
+    return f"{c.prefix}-{c.seq:04d}" if c.prefix and c.seq else f"CUS-{c.no:04d}"
+
+
+def default_code(s, u):
+    """الحروف الأولى لأجزاء اسم الدخول (a.ahmed ← AA) أو أول 3 حروف (admin ← ADM) — ومن غير تكرار."""
+    taken = {x for x in s.scalars(select(M.User.custodyCode).where(M.User.id != u.id)) if x}
+    parts = [p for p in re.split(r"[^A-Za-z]+", u.username or "") if p]
+    base = ("".join(p[0] for p in parts) if len(parts) > 1 else (parts[0][:3] if parts else "")).upper()
+    if len(base) < 2:
+        base = f"U{u.id}"
+    code, n = base, 2
+    while code in taken:
+        code, n = f"{base}{n}", n + 1
+    return code
+
+
+def check_code(s, uid, code):
+    """رمز جديد لمستخدم ← (الرمز، رسالة خطأ)."""
+    code = (code or "").strip().upper()
+    if not CODE_RE.match(code):
+        return None, "رمز العهد: من 2 لـ 6 حروف وأرقام إنجليزي، ويبدأ بحرف (مثلًا AA أو AHM)"
+    if s.scalar(select(func.count()).select_from(M.User).where(M.User.custodyCode == code, M.User.id != uid)):
+        return None, f"الرمز {code} مستخدم لحد تاني"
+    return code, None
+
+
+def user_code(s, uid):
+    """رمز المستخدم في أرقام العهد (بيتحدد لوحده أول مرة لو مالوش)."""
+    u = s.get(M.User, uid) if uid else None
+    if u is None:
+        return "CUS"
+    if not u.custodyCode:
+        u.custodyCode = default_code(s, u)
+    return u.custodyCode
+
+
+def assign_owner(s, c, uid):
+    """العهدة بقت ملك المستخدم ده ← رقم جديد برمزه ومسلسله."""
+    c.ownerId, c.prefix = uid, user_code(s, uid)
+    c.seq = (s.scalar(select(func.max(M.Custody.seq)).where(M.Custody.prefix == c.prefix, M.Custody.id != c.id)) or 0) + 1
+
+
+def can_see(ctx, c):
+    """صاحب العهدة، أو صاحب «عرض عهد كل المستخدمين» (مدير النظام)."""
+    return ctx is None or ctx.can("custody.all") or c.ownerId == ctx.id
+
+
+def user_names(s):
+    return {u.id: u.displayName or u.username for u in s.scalars(select(M.User))}
+
+
+# ---------------------------------------------------------------------------
+# منع التكرار (على عهد كل المستخدمين)
+# ---------------------------------------------------------------------------
+def duplicates(s, tx, person_ids, exclude=None):
+    """الأشخاص دول في عهد تانية من نفس النوع ← (مفتوحة، اتقفلت خلال DUP_DAYS يوم) — {رقم الشخص: (الاسم، رقم العهدة، صاحبها أو تاريخ التقفيل)}."""
+    ids = [x for x in dict.fromkeys(str(p or "").strip() for p in person_ids) if x]
+    if not ids:
+        return {}, {}
+    q = select(M.CustodyLine, M.Custody).join(M.Custody, M.Custody.id == M.CustodyLine.custodyId).where(
+        M.Custody.txType == tx, M.Custody.status != "cancelled", M.CustodyLine.personKind == TX_TYPES[tx]["kind"],
+        M.CustodyLine.personId.in_(ids))
+    if exclude:
+        q = q.where(M.Custody.id != exclude)
+    since, names = date.today() - timedelta(days=DUP_DAYS), user_names(s)
+    open_, recent = {}, {}
+    for ln, c in s.execute(q):
+        if c.status in OPEN and ln.closedDate is None:
+            open_.setdefault(ln.personId, (ln.personName, custody_no(c), names.get(c.ownerId, "")))
+        elif ln.closedDate and ln.closedDate >= since:
+            recent.setdefault(ln.personId, (ln.personName, custody_no(c), ln.closedDate))
+    return open_, recent
+
+
+def busy(s):
+    """للواجهة (قايمة الاختيار في الطلب): الأشخاص في عهد مفتوحة أو اتقفلوا خلال DUP_DAYS يوم — من كل المستخدمين،
+    بالرقم وصاحب العهدة بس."""
+    since, names, out = date.today() - timedelta(days=DUP_DAYS), user_names(s), []
+    q = select(M.CustodyLine.personKind, M.CustodyLine.personId, M.CustodyLine.closedDate, M.Custody) \
+        .join(M.Custody, M.Custody.id == M.CustodyLine.custodyId).where(M.Custody.status != "cancelled")
+    seen = set()
+    for kind, pid, closed, c in s.execute(q):
+        state = "open" if c.status in OPEN and closed is None else "recent" if closed and closed >= since else None
+        if state and (c.id, pid, state) not in seen:
+            seen.add((c.id, pid, state))
+            out.append({"kind": kind, "personId": pid, "txType": c.txType, "custodyId": c.id, "number": custody_no(c),
+                        "owner": names.get(c.ownerId, ""), "state": state, "closedDate": db.ser(closed)})
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +343,19 @@ def close_people(s, c, person_ids, fee, when, user):
         return None, None, "مفيش أشخاص جاهزين للتقفيل (كل بنود الشخص لازم تكون «تم»)"
     if s.scalar(select(func.count()).select_from(M.Invoice).where(M.Invoice.custodyId == c.id, M.Invoice.closingDate == when)):
         return None, None, "فيه تقفيل بنفس التاريخ للعهدة دي — اختار تاريخ تاني أو ألغي التقفيل القديم"
+    # فحص أمان: نفس الشخص ونفس النوع اتقفل (اتفوتر) في عهدة تانية في آخر 90 يوم ← مايتفوترش مرتين
+    # (إلا لو اتطلب تاني بتأكيد — dup_ok)
+    check = [pid for pid in chosen if not any(ln.dupOk for ln in ready[pid])]
+    since, dup = when - timedelta(days=DUP_DAYS), {}
+    if check:
+        q = select(M.CustodyLine, M.Custody).join(M.Custody, M.Custody.id == M.CustodyLine.custodyId).where(
+            M.Custody.id != c.id, M.Custody.txType == c.txType, M.CustodyLine.personKind == TX_TYPES[c.txType]["kind"],
+            M.CustodyLine.personId.in_(check), M.CustodyLine.closedDate >= since)
+        for ln, other in s.execute(q):
+            dup.setdefault(ln.personId, f"{ln.personName} ({custody_no(other)} — {ln.closedDate.strftime('%d/%m/%Y')})")
+    if dup:
+        return None, None, (f"اتقفل لهم نفس النوع في عهدة تانية خلال آخر {DUP_DAYS} يوم (علشان مايتفوتروش مرتين): "
+                            + "، ".join(dup.values()))
     lines = [ln for pid in chosen for ln in ready[pid]]
     for ln in lines:
         ln.closedDate = when
@@ -267,7 +385,9 @@ def reopen(s, c, when):
 
 
 def dump(s, ctx):
-    """للواجهة: جدول الرسوم والإعدادات والعهد ببنودها وفواتيرها. المستخدم المحدود بشركات بيشوف العهدة لو فيها حد من نطاقه."""
+    """للواجهة: جدول الرسوم والإعدادات والعهد ببنودها وفواتيرها. المستخدم بيشوف عهده بس (وصاحب custody.all الكل)،
+    والمحدود بشركات بيشوف العهدة لو فيها حد من نطاقه. custodyBusy = مين في عهد مفتوحة أو اتقفل قريب (من كل المستخدمين)."""
+    names = user_names(s)
     lines = {}
     for ln in s.scalars(select(M.CustodyLine).order_by(M.CustodyLine.custodyId, M.CustodyLine.personName,
                                                        M.CustodyLine.personId, M.CustodyLine.position)):
@@ -275,11 +395,13 @@ def dump(s, ctx):
     out, visible = [], set()
     for c in s.scalars(select(M.Custody).order_by(M.Custody.no.desc())):
         ls = lines.get(c.id, [])
+        if not can_see(ctx, c):
+            continue
         if ctx and not ctx.allCompanies and not any(ctx.company_ok(x["companyId"]) for x in ls if x["companyId"]) \
                 and not (c.companyId and ctx.company_ok(c.companyId)):
             continue
         d = db.to_dict(c)
-        d["lines"] = ls
+        d["lines"], d["number"], d["ownerName"] = ls, custody_no(c), names.get(c.ownerId, "")
         out.append(d)
         visible.add(c.id)
     invoices = []
@@ -288,9 +410,13 @@ def dump(s, ctx):
             d = db.to_dict(inv)
             d["number"] = invoice_no(inv)
             invoices.append(d)
+    see_all = ctx is None or ctx.can("custody.all")
     return {
         "custodies": out,
         "invoices": invoices,
         "custodySettings": settings(s),
+        "custodyBusy": busy(s),
+        "custodyUsers": [{"id": u.id, "name": u.displayName or u.username, "code": u.custodyCode}
+                         for u in s.scalars(select(M.User).order_by(M.User.id))] if see_all else [],
         "feeItems": [db.to_dict(f) for f in s.scalars(select(M.FeeItem).order_by(M.FeeItem.txType, M.FeeItem.position))],
     }

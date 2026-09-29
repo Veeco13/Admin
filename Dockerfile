@@ -21,7 +21,7 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends tzdata; \
     if [ "$WITH_PDF" = "1" ]; then \
       apt-get install -y --no-install-recommends \
-        libreoffice-writer-nogui fonts-noto-core fonts-noto-ui-core fonts-liberation2 fonts-dejavu-core fonts-kacst; \
+        libreoffice-writer-nogui libreoffice-calc-nogui fonts-noto-core fonts-noto-ui-core fonts-liberation2 fonts-dejavu-core fonts-kacst; \
     fi; \
     rm -rf /var/lib/apt/lists/*
 

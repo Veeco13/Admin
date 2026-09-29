@@ -325,6 +325,67 @@ def to_pdf(data):
     return to_pdfs([data])[0]
 
 
+# ---------------------------------------------------------------------------
+# ملفات Excel (كشوف العهد) ← PDF للمعاينة والطباعة: LibreOffice Calc أو Microsoft Excel
+# ---------------------------------------------------------------------------
+def _excel_installed():
+    if os.name != "nt":
+        return False
+    try:
+        import importlib.util
+        import winreg
+        if not importlib.util.find_spec("win32com"):
+            return False
+        winreg.CloseKey(winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                       r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\excel.exe"))
+        return True
+    except Exception:
+        return False
+
+
+def _convert_excel(src, pdf):
+    import pythoncom
+    import win32com.client
+    pythoncom.CoInitialize()
+    xl = None
+    try:
+        xl = win32com.client.DispatchEx("Excel.Application")
+        xl.Visible = False
+        xl.DisplayAlerts = False
+        wb = xl.Workbooks.Open(os.path.abspath(src), ReadOnly=True)
+        try:
+            wb.ExportAsFixedFormat(0, os.path.abspath(pdf))         # 0 = xlTypePDF (كل الشيتات بإعدادات الطباعة)
+        finally:
+            wb.Close(False)
+    finally:
+        if xl is not None:
+            try:
+                xl.Quit()
+            except Exception:
+                pass
+        pythoncom.CoUninitialize()
+
+
+def xlsx_to_pdf(data):
+    """ملف Excel bytes ← PDF bytes (زي الطباعة من Excel بالظبط). بيرمي RuntimeError لو مفيش محرك."""
+    soffice, excel = _soffice(), _excel_installed()
+    if not soffice and not excel:
+        raise RuntimeError("معاينة كشوف العهد محتاجة Microsoft Excel أو LibreOffice على السيرفر")
+    with _lock, tempfile.TemporaryDirectory() as d:
+        src = os.path.join(d, "sheet.xlsx")
+        with open(src, "wb") as f:
+            f.write(data)
+        try:
+            if soffice:
+                _convert_libreoffice([src], d)
+            else:
+                _convert_excel(src, src[:-5] + ".pdf")
+            with open(src[:-5] + ".pdf", "rb") as f:
+                return f.read()
+        except Exception as e:
+            raise RuntimeError(f"فشل تحويل الكشف لـ PDF ({'LibreOffice' if soffice else 'Excel'}): {e}") from e
+
+
 def merge_pdfs(pdfs):
     from pypdf import PdfReader, PdfWriter
     w = PdfWriter()

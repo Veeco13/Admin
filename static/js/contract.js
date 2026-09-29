@@ -71,16 +71,15 @@ function renderContractView() {
         </div>
         <div id="c-warn"></div>
         <div class="row" style="margin-top:12px;flex-wrap:wrap">
-          <a class="btn primary ${e ? '' : 'disabled'}" ${e ? `href="/api/contract/docx?${contractQuery()}"` : ''}>⬇️ Word</a>
-          ${STATE.pdfAvailable ? `<a class="btn ${e ? '' : 'disabled'}" ${e ? `href="/api/contract/pdf?${contractQuery({ dl: 1 })}"` : ''}>⬇️ PDF</a>` : ''}
-          <button class="btn" id="c-print" ${e ? '' : 'disabled'}>🖨️ ${t('طباعة')}</button>
+          <button class="btn primary" id="c-print" ${e ? '' : 'disabled'}>🖨️ ${t('طباعة')}</button>
+          <span class="small muted">${t('معاينة وطباعة بس — التنزيل مقفول')}</span>
         </div>
         ${!STATE.pdfAvailable ? `<div class="small muted" style="margin-top:6px">${t('تحويل PDF محتاج LibreOffice أو Microsoft Word على السيرفر.')}</div>` : ''}
         <hr class="sep">
         <h3>📑 ${t('قوالب العقود')}</h3>
         ${STATE.templates.map(x => `<div class="row small" style="padding:4px 0;border-bottom:1px dashed var(--border)">
           <span style="flex:1">${x.isDefault ? '★ ' : ''}${esc(x.name)}</span>
-          <a class="btn sm" href="/api/templates/${x.id}/file" title="تنزيل القالب">⬇️</a>
+          ${can('admin') ? `<a class="btn sm" href="/api/templates/${x.id}/file" title="${esc(t('تنزيل القالب (لمدير النظام — علشان يتعدّل في Word ويترفع تاني)'))}">⬇️</a>` : ''}
           ${!x.isDefault ? `<button class="btn sm write-only" data-p="contract.edit" data-tdef="${x.id}" title="جعله الافتراضي">★</button><button class="btn sm danger write-only" data-p="contract.edit" data-tdel="${x.id}">✕</button>` : ''}</div>`).join('')}
         <button class="btn write-only" data-p="contract.edit" id="t-upload" style="margin-top:8px">➕ ${t('رفع قالب جديد')}</button>
         <details style="margin-top:10px"><summary class="small">${t('الحقول المتاحة في القوالب')}</summary>
@@ -91,7 +90,7 @@ function renderContractView() {
           <button data-pv="pdf" class="${pdfMode ? 'active' : ''}">📄 ${t('معاينة PDF')}</button>
           <button data-pv="quick" class="${pdfMode ? '' : 'active'}">⚡ ${t('معاينة سريعة')}</button></div>` : ''}
         ${pdfMode && e
-          ? `<iframe id="c-pdf-frame" class="pdf-frame" src="/api/contract/pdf?${contractQuery()}" title="PDF"></iframe>`
+          ? `<iframe id="c-pdf-frame" class="pdf-frame" src="/api/contract/pdf?${contractQuery()}#toolbar=0&navpanes=0" title="PDF"></iframe>`
           : `<div class="contract-paper" id="c-preview" dir="rtl">${e ? `<div class="empty">${t('جاري تجهيز المعاينة…')}</div>` : `<div class="empty">${t('اختر موظف لعرض معاينة العقد')}</div>`}</div>`}
       </div>
     </div>`;
@@ -112,8 +111,9 @@ function renderContractView() {
   $$('[data-pv]').forEach(b => b.onclick = () => { CONTRACT_PREVIEW = b.dataset.pv; render(); });
   $('#c-batch').onclick = () => openBatchContractModal(CONTRACT.emp ? [CONTRACT.emp] : []);
   $('#c-print').onclick = () => {
+    printLog(`${t('عقد عمل')}: ${e ? e.name : ''}`, 'employee');
     const fr = $('#c-pdf-frame');
-    if (fr) { try { fr.contentWindow.focus(); fr.contentWindow.print(); return; } catch (_) { window.open(fr.src, '_blank'); return; } }
+    if (fr) { try { fr.contentWindow.focus(); fr.contentWindow.print(); return; } catch (_) { /* المعاينة السريعة */ } }
     printHtml(t('عقد عمل'), CONTRACT_PRINT_CSS + $('#c-preview').innerHTML);
   };
   $('#t-upload').onclick = openTemplateUploadModal;
@@ -176,10 +176,7 @@ function openBatchContractModal(preselected = []) {
       </div>
       <div class="table-wrap" style="max-height:42vh;overflow:auto"><table class="data"><tbody id="bc-list"></tbody></table></div>
       <div id="bc-msg" style="margin-top:8px"></div>`,
-    foot: `<button class="btn primary" data-go="preview">👁️ ${t('معاينة PDF')}</button>
-      <button class="btn" data-go="pdf">⬇️ ${t('تنزيل PDF')}</button>
-      <button class="btn" data-go="files" title="${esc(t('ملف PDF منفصل باسم كل موظف'))}">⬇️ ${t('PDF لكل موظف')}</button>
-      <button class="btn" data-go="zip">⬇️ ${t('Word (ZIP)')}</button>
+    foot: `<button class="btn primary" data-go="preview">🖨️ ${t('معاينة وطباعة')}</button>
       <span class="spacer"></span><button class="btn" data-close>إغلاق</button>`,
   });
   const el = m.el;
@@ -247,7 +244,7 @@ function openBatchContractModal(preselected = []) {
     const go = b.dataset.go, p = payload();
     if (!p.emps.length) return toast('اختار موظف واحد على الأقل', 'err');
     if (p.emps.length > max) return openBlockAlert(`${t('الحد الأقصى')} ${max} ${t('عقد في المرة')}`);
-    if (go !== 'zip' && !STATE.pdfAvailable) return openBlockAlert(t('تحويل PDF محتاج LibreOffice أو Microsoft Word على السيرفر.'));
+    if (!STATE.pdfAvailable) return openBlockAlert(t('تحويل PDF محتاج LibreOffice أو Microsoft Word على السيرفر.'));
     if (!p.date && !p.useHireDate) return toast('اختار تاريخ العقد', 'err');
     const btns = $$('[data-go]', el);
     btns.forEach(x => x.disabled = true);
@@ -269,21 +266,9 @@ function openBatchContractModal(preselected = []) {
       }
       const secs = Math.max(5, Math.round(p.emps.length * (chk.engine === 'word' ? 1.1 : 0.7)));
       msg(`<div class="notice">⏳ ${t('جاري تجهيز')} ${p.emps.length} ${t('عقد')}… ${t('حوالي')} ${secs} ${t('ثانية')}</div>`);
-      if (go === 'files') {
-        // ملف منفصل باسم كل موظف. أول مرة المتصفح ممكن يسأل «السماح بتنزيل ملفات متعددة»
-        const r = await api('POST', '/api/contract/batch', { ...p, format: 'files' });
-        for (const [i, f] of r.files.entries()) {
-          msg(`<div class="notice">⬇️ ${i + 1} / ${r.files.length}: ${esc(f.name)}</div>`);
-          downloadBlob(new Blob([Uint8Array.from(atob(f.data), c => c.charCodeAt(0))], { type: 'application/pdf' }), f.name);
-          await new Promise(ok => setTimeout(ok, 350));      // المتصفح بيتجاهل التنزيلات المتلاحقة بسرعة
-        }
-        msg(`<div class="notice">✓ ${t('تم تنزيل')} ${r.files.length} ${t('ملف')}. ${t('لو المتصفح سأل عن تنزيل ملفات متعددة، اختار «السماح».')}</div>`);
-        return;
-      }
-      const res = await postForBlob('/api/contract/batch', { ...p, format: go === 'zip' ? 'zip' : 'pdf', dl: go !== 'preview' });
+      const res = await postForBlob('/api/contract/batch', { ...p, format: 'pdf' });
       msg('');
-      if (go === 'preview') openPdfPreviewModal(res.blob, res.name, p.emps.length);
-      else { downloadBlob(res.blob, res.name); toast('تم التنزيل', 'ok'); }
+      openPdfPreviewModal(res.blob, res.name, p.emps.length);
     } catch (e) { msg(`<div class="notice err">${esc(e.message)}</div>`); }
     finally { btns.forEach(x => x.disabled = false); }
   });
@@ -307,21 +292,21 @@ function batchSigOptions(companyId) {
     + (others.length ? `<optgroup label="${esc(t('مفوّضين في شركات تانية'))}">${others.map(s => opt(s.id, label(s), false)).join('')}</optgroup>` : '');
 }
 
-function openPdfPreviewModal(blob, name, n) {
+/** معاينة PDF وطباعة بس (من غير تنزيل ولا شريط أدوات المتصفح). kind = نوعه في سجل التدقيق لما يتطبع */
+function openPdfPreviewModal(blob, name, n, kind = 'employee') {
   const url = URL.createObjectURL(blob);
   const m = openModal({
     title: `📄 ${esc(name)}`, size: 'wide',
-    body: `<iframe class="pdf-frame" src="${url}" title="PDF"></iframe>`,
-    foot: `<button class="btn primary" data-print>🖨️ ${t('طباعة')} (${n})</button>
-      <button class="btn" data-dl>⬇️ ${t('تنزيل PDF')}</button>
-      <a class="btn" href="${url}" target="_blank" rel="noopener">↗️ ${t('فتح في تبويب')}</a>
+    body: `<iframe class="pdf-frame" src="${url}#toolbar=0&navpanes=0" title="PDF"></iframe>`,
+    foot: `<button class="btn primary" data-print>🖨️ ${t('طباعة')}${n > 1 ? ` (${n})` : ''}</button>
+      <span class="small muted">${t('معاينة وطباعة بس — التنزيل مقفول')}</span>
       <span class="spacer"></span><button class="btn" data-close>إغلاق</button>`,
     onClose: () => setTimeout(() => URL.revokeObjectURL(url), 60000),
   });
-  $('[data-dl]', m.el).onclick = () => downloadBlob(blob, name);
   $('[data-print]', m.el).onclick = () => {
+    printLog(name.replace(/\.pdf$/i, ''), kind);
     const fr = $('iframe', m.el);
-    try { fr.contentWindow.focus(); fr.contentWindow.print(); } catch (_) { window.open(url, '_blank'); }
+    try { fr.contentWindow.focus(); fr.contentWindow.print(); } catch (_) { toast(t('تعذّرت الطباعة من هنا'), 'err'); }
   };
 }
 
@@ -352,7 +337,6 @@ function openCandidateContractModal(cid) {
     foot: `${STATE.pdfAvailable
         ? `<button class="btn primary" data-go="pdf" disabled>🖨️ ${t('معاينة وطباعة PDF')}</button>`
         : `<button class="btn primary" data-go="print" disabled>🖨️ ${t('طباعة')}</button>`}
-      <button class="btn" data-go="docx" disabled>⬇️ Word</button>
       <button class="btn write-only" data-p="recruitment.edit" data-edit>✏️ ${t('تعديل بيانات المترشّح')}</button>
       <span class="spacer"></span><button class="btn" data-close>إغلاق</button>`,
   });
@@ -393,8 +377,7 @@ function openCandidateContractModal(cid) {
     b.disabled = true;
     try {
       const res = await fetchBlob(base + go + '?' + query());
-      if (go === 'pdf') openPdfPreviewModal(res.blob, res.name, 1);
-      else { downloadBlob(res.blob, res.name); toast('تم التنزيل', 'ok'); }
+      openPdfPreviewModal(res.blob, res.name, 1, 'candidate');
     } catch (e) { toast(e.message, 'err'); }
     b.disabled = !!missing.length;
   });
@@ -444,11 +427,11 @@ function renderCompanyLog() {
   } else {
     const list = STATE.auditLog.filter(a => (!L.category || a.category === L.category) && (!q || norm(a.label + ' ' + (a.user || '')).includes(q)));
     body = `<div class="filters"><select id="l-cat">${opt('', t('— كل الأنواع —'), !L.category)}${Object.entries(AUDIT_CATEGORIES).map(([k, v]) => opt(k, t(v), k === L.category)).join('')}</select>
-      <input type="search" id="l-q" placeholder="بحث…" value="${esc(L.q)}"><button class="btn sm" id="l-export">📤 CSV</button></div>
+      <input type="search" id="l-q" placeholder="بحث…" value="${esc(L.q)}">${can('admin') ? '<button class="btn sm" id="l-export">📤 CSV</button>' : ''}</div>
       <div class="table-wrap"><table class="data"><thead><tr><th>${t('التاريخ')}</th><th>${t('النوع')}</th><th>${t('التفاصيل')}</th><th>${t('المستخدم')}</th></tr></thead><tbody>
       ${list.map(a => `<tr><td class="num small">${fmtDateTime(a.date)}</td><td><span class="chip">${esc(a.type)}</span></td><td>${esc(a.label)}</td><td class="small muted">${esc(a.user || '')}</td></tr>`).join('') || `<tr><td colspan="4" class="empty">—</td></tr>`}
       </tbody></table></div>`;
-    setTimeout(() => { const b = $('#l-export'); if (b) b.onclick = () => downloadBlob(toCsv([['date', 'type', 'label', 'user'], ...list.map(a => [a.date, a.type, a.label, a.user])]), `audit-${todayISO()}.csv`, 'text/csv'); });
+    setTimeout(() => { const b = $('#l-export'); if (b) b.onclick = () => exportGuard(t('سجل التدقيق'), () => downloadBlob(toCsv([['date', 'type', 'label', 'user'], ...list.map(a => [a.date, a.type, a.label, a.user])]), `audit-${todayISO()}.csv`, 'text/csv')); });
   }
   viewRoot().innerHTML = `<div class="page-head"><h1>السجل التاريخي والتدقيق</h1></div>
     <div class="tabs"><button data-t="history" class="${L.tab === 'history' ? 'active' : ''}">سجل الشركات التاريخي (${STATE.companyHistory.length})</button>

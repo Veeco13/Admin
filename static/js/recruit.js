@@ -129,12 +129,13 @@ function renderCandidatesReportModal() {
       ${rows.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.c.name)}</td><td>${esc(natLabel(r.c.nationality) || '')}</td><td>${esc(profLabel(r.c.profession) || '')}</td><td>${recruitSourceLabel(r.c.source, true)}</td><td>${esc(r.st)}</td><td>${esc(companyName(r.c.targetCompanyId))}</td><td class="num" data-p="sensitive.salary">${r.c.salary ? fmtMoney(r.c.salary) : '—'}</td><td>${r.c.housingAllowance ? '✓' : ''}</td><td>${datePill(r.deadline)}</td></tr>`).join('')}
       </tbody></table></div>`,
     foot: `<label class="row small" style="gap:6px">${t('لغة التقرير')}<select id="cr-lang">${opt('ar', 'العربية', LANG !== 'en')}${opt('en', 'English', LANG === 'en')}</select></label>
-      <button class="btn primary" data-print>🖨️ طباعة</button><button class="btn" data-csv>📤 CSV</button><button class="btn" data-close>إغلاق</button>`,
+      <button class="btn primary" data-print>🖨️ طباعة</button>${can('admin') ? '<button class="btn" data-csv>📤 CSV</button>' : ''}<button class="btn" data-close>إغلاق</button>`,
   });
   // التقرير بلغة التقرير حتى لو البرنامج شغال بلغة تانية (المراحل والجنسيات والمهن بتتترجم وقت الطباعة)
   $('[data-print]', m.el).onclick = () => withLang($('#cr-lang', m.el).value, () => printCandidatesReport(candidatesReportRows(list)));
-  $('[data-csv]', m.el).onclick = () => downloadBlob(toCsv([[t('الاسم'), 'Name', t('الجنسية'), t('المهنة'), t('المصدر'), t('المرحلة'), t('الشركة المستهدفة'), t('الراتب'), t('بدل السكن'), t('رقم الجواز'), t('تاريخ التقديم'), t('المهلة')],
-    ...rows.map(r => [r.c.name, r.c.nameEn, r.c.nationality, r.c.profession, r.c.source, r.st, companyName(r.c.targetCompanyId), r.c.salary, r.c.housingAllowance ? 'yes' : '', r.c.passportNo, r.c.appliedDate, r.deadline])]), `candidates-${todayISO()}.csv`, 'text/csv');
+  const csvBtn = $('[data-csv]', m.el);
+  if (csvBtn) csvBtn.onclick = () => exportGuard(`${t('تقرير المترشّحين')} (${rows.length})`, () => downloadBlob(toCsv([[t('الاسم'), 'Name', t('الجنسية'), t('المهنة'), t('المصدر'), t('المرحلة'), t('الشركة المستهدفة'), t('الراتب'), t('بدل السكن'), t('رقم الجواز'), t('تاريخ التقديم'), t('المهلة')],
+    ...rows.map(r => [r.c.name, r.c.nameEn, r.c.nationality, r.c.profession, r.c.source, r.st, companyName(r.c.targetCompanyId), r.c.salary, r.c.housingAllowance ? 'yes' : '', r.c.passportNo, r.c.appliedDate, r.deadline])]), `candidates-${todayISO()}.csv`, 'text/csv'));
 }
 function printCandidatesReport(rows) {
   // نفس شكل تقارير الموظفين (openReportWindow): شعار الشركة لو كل المترشّحين على شركة واحدة

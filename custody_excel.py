@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-كشوف العهد Excel بهوية التقارير (openpyxl) — ثنائية اللغة لأنها بتروح للشركات (مراكز التكلفة).
-كلها باسم وشعار الشركة المُصدِرة (أبراج انرجي — custody.settings) لأن الفلوس منها وهي اللي بتفوتر مراكز التكلفة:
+كشوف العهد (openpyxl) بهوية التقارير — بتتعرض PDF للمعاينة والطباعة بس (contracts.xlsx_to_pdf)، مابتتنزّلش.
+كلها باسم وشعار الشركة المُصدِرة (أبراج انرجي — custody.settings) لأن الفلوس منها وهي اللي بتفوتر مراكز التكلفة.
+
+اللغة (lang): «ar» عربي بس (الشيت من اليمين للشمال، والمبلغ كتابةً بالعربي)، «en» إنجليزي بس، «both» ثنائي.
+كل شيت شايل لغته (ws._lunx_lang)، والنصوص بتتكتب بـ _L(ws, إنجليزي، عربي) والأسماء بـ _V.
 
 - تقفيل العهدة: شيت «الملخص» (الفواتير اللي طلعت + تسوية العهدة مع المستلم)، وشيت فاتورة لكل مركز تكلفة
   (INVOICE: موظف في كل صف وبند في كل عمود + الدعم الإداري، وملخص الفاتورة وتوقيعات الاعتماد)، وملحق اختياري
@@ -9,13 +12,12 @@
 - فاتورة لوحدها (invoice_workbook).
 - طلب صرف عهدة (Advance Payment Request): كل الأشخاص وبنودهم + ملخص المطلوب لكل مركز تكلفة.
 
-الأرقام معادلات (SUM) فلو اتعدّل رقم في الشيت الإجمالي بيتحسب تاني. الطباعة جاهزة: A4، عرض الصفحة، رأس الجدول
-بيتكرر، و«صفحة X من Y».
+الأرقام معادلات (SUM). الطباعة: A4، عرض الصفحة، رأس الجدول بيتكرر، «صفحة X من Y»، وختم «صادر من Lunx — المستخدم — الوقت».
 """
 import io
 import math
 import re
-from datetime import date, datetime
+from datetime import date
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -25,6 +27,7 @@ from sqlalchemy import select
 import custody
 import db
 import models as M
+import value_i18n
 
 try:                                          # الشعار محتاج Pillow — من غيره الكشف بيطلع من غير شعار
     from openpyxl.drawing.image import Image as XLImage
@@ -36,11 +39,50 @@ PRIMARY, PRIMARY_SOFT, ACCENT, INK, MUTED, LINE, ZEBRA, RED = (
     "1F5C4A", "E3EFEA", "C8963E", "17231F", "5F6F69", "D5DDDA", "F6F8F7", "C0392B")
 FONT = "Arial"
 KWD = '#,##0.000;-#,##0.000;"–"'
-FORM_NO = "Form No. T-104"
+FORM_NO = ("Form No. T-104", "نموذج رقم T-104")
 NOTE = ("Above charges are based on the actual announced charges of PAM, the Ministry of Interior, the Ministry of Health, "
         "the Ministry of Foreign Affairs and other authorities, and are subject to change if these authorities introduce or "
-        "remove charges.\nالمبالغ أعلاه حسب الرسوم الفعلية المعلنة من الهيئة العامة للقوى العاملة ووزارة الداخلية ووزارة الصحة "
-        "ووزارة الخارجية والجهات الأخرى، وقابلة للتغيير لو الجهات دي غيّرت رسومها.")
+        "remove charges.",
+        "المبالغ أعلاه حسب الرسوم الفعلية المعلنة من الهيئة العامة للقوى العاملة ووزارة الداخلية ووزارة الصحة "
+        "ووزارة الخارجية والجهات الأخرى، وهي قابلة للتغيير في حال تعديل هذه الجهات لرسومها.")
+# الجهة (من جدول الرسوم) بالإنجليزي
+AUTHORITY_EN = {
+    "الهيئة العامة للقوى العاملة": "Public Authority for Manpower (PAM)",
+    "وزارة الداخلية": "Ministry of Interior",
+    "وزارة الصحة": "Ministry of Health",
+    "وزارة الخارجية": "Ministry of Foreign Affairs",
+    "الهيئة العامة للمعلومات المدنية": "Public Authority for Civil Information (PACI)",
+}
+
+
+# ---------------------------------------------------------------------------
+# اللغة
+# ---------------------------------------------------------------------------
+def _lang(ws):
+    return getattr(ws, "_lunx_lang", "both")
+
+
+def _set_lang(ws, lang):
+    ws._lunx_lang = lang if lang in custody.DOC_LANGS else "both"
+    ws.sheet_view.rightToLeft = ws._lunx_lang == "ar"
+
+
+def _L(ws, en, ar, sep=" / "):
+    """نص ثابت بلغة الشيت: إنجليزي، عربي، أو الاتنين (بـ sep)."""
+    lang = _lang(ws)
+    return ar if lang == "ar" else en if lang == "en" else f"{en}{sep}{ar}"
+
+
+def _V(ws, en, ar, sep="  —  "):
+    """قيمة (اسم) بلغة الشيت — اللي ناقص بياخد التاني، والثنائي بيكتب الاتنين لو مختلفين."""
+    en, ar = en or ar or "", ar or en or ""
+    lang = _lang(ws)
+    return ar if lang == "ar" else en if lang == "en" else (en if en == ar else f"{en}{sep}{ar}")
+
+
+def _count(ws, n, en, ar):
+    """«3 Employees · موظف»"""
+    return _L(ws, f"{n} {en}", f"{n} {ar}", " · ").replace(f" · {n} ", " · ")
 
 
 # ---------------------------------------------------------------------------
@@ -59,10 +101,13 @@ GRID = Border(left=_side(), right=_side(), top=_side(), bottom=_side())
 
 def _put(ws, row, col, value=None, *, to_col=None, to_row=None, bold=False, size=10, color=INK, fill=None, h="center",
          v="center", wrap=True, fmt=None, border=None, italic=False):
-    """قيمة في خانة (ومدمجة لحد to_col / to_row) بتنسيقها كله في سطر واحد."""
+    """قيمة في خانة (ومدمجة لحد to_col / to_row) بتنسيقها كله في سطر واحد. الشيت العربي (من اليمين للشمال)
+    بيعكس المحاذاة: «بداية السطر» يمين."""
+    if _lang(ws) == "ar" and h in ("left", "right"):
+        h = "right" if h == "left" else "left"
     c = ws.cell(row=row, column=col, value=value)
     c.font = Font(name=FONT, size=size, bold=bold, italic=italic, color=color)
-    c.alignment = Alignment(horizontal=h, vertical=v, wrap_text=wrap)
+    c.alignment = Alignment(horizontal=h, vertical=v, wrap_text=wrap, readingOrder=2 if _lang(ws) == "ar" else 0)
     if fill:
         c.fill = _fill(fill)
     if fmt:
@@ -108,40 +153,53 @@ def _logo(ws, company, anchor="A1", height=58):
     ws.add_image(img, anchor)
 
 
-def _header(ws, ncols, company, title_en, title_ar, sub=FORM_NO):
-    """الشعار · اسم الشركة عربي وإنجليزي · عنوان الكشف ورقم النموذج، وتحتهم شريط ذهبي."""
+def _header(ws, ncols, company, title, sub=FORM_NO):
+    """الشعار · اسم الشركة · عنوان الكشف ورقمه، وتحتهم شريط ذهبي. title / sub = (إنجليزي، عربي) أو نص."""
     for r, hgt in ((1, 24), (2, 22), (3, 18), (4, 4), (5, 8)):
         ws.row_dimensions[r].height = hgt
     _logo(ws, company)
     title_from = ncols - 2 if ncols >= 7 else ncols - 1
     mid_from, mid_to = 3, max(3, title_from - 1)
-    name_en = company.nameEn if company is not None else ""
-    name_ar = company.nameAr if company is not None else ""
+    name_en = (company.nameEn or company.nameAr) if company is not None else ""
+    name_ar = (company.nameAr or company.nameEn) if company is not None else ""
     room = sum(ws.column_dimensions[get_column_letter(c)].width or 10 for c in range(mid_from, mid_to + 1))
     fit = lambda text, size, per_char: max(9, min(size, int(size * room / max(len(text or "") * per_char, 1))))   # اسم طويل ← خط أصغر
-    _put(ws, 1, mid_from, name_en, to_col=mid_to, bold=True, size=fit(name_en, 13, 1.2), color=PRIMARY, wrap=False)
-    _put(ws, 2, mid_from, name_ar, to_col=mid_to, bold=True, size=fit(name_ar, 12, 0.95), wrap=False)
-    _put(ws, 3, mid_from, "Admin Unit · إدارة الشؤون الإدارية", to_col=mid_to, size=9, color=MUTED)
-    _put(ws, 1, title_from, title_en, to_col=ncols, bold=True, size=12, color=PRIMARY, h="right", wrap=False)
-    _put(ws, 2, title_from, title_ar, to_col=ncols, bold=True, size=12, h="right", wrap=False)
-    _put(ws, 3, title_from, sub, to_col=ncols, size=9, color=MUTED, h="right")
+    unit = ("Admin Unit", "إدارة الشؤون الإدارية")
+    t_en, t_ar = title if isinstance(title, tuple) else (title, title)
+    sub = _L(ws, *sub) if isinstance(sub, tuple) else sub
+    if _lang(ws) == "both":
+        _put(ws, 1, mid_from, name_en, to_col=mid_to, bold=True, size=fit(name_en, 13, 1.2), color=PRIMARY, wrap=False)
+        _put(ws, 2, mid_from, name_ar, to_col=mid_to, bold=True, size=fit(name_ar, 12, 0.95), wrap=False)
+        _put(ws, 3, mid_from, f"{unit[0]} · {unit[1]}", to_col=mid_to, size=9, color=MUTED)
+        _put(ws, 1, title_from, t_en, to_col=ncols, bold=True, size=12, color=PRIMARY, h="right", wrap=False)
+        _put(ws, 2, title_from, t_ar, to_col=ncols, bold=True, size=12, h="right", wrap=False)
+        _put(ws, 3, title_from, sub, to_col=ncols, size=9, color=MUTED, h="right")
+    else:
+        ar = _lang(ws) == "ar"
+        name = name_ar if ar else name_en
+        _put(ws, 1, mid_from, name, to_col=mid_to, to_row=2, bold=True, size=fit(name, 14, 0.95 if ar else 1.2), color=PRIMARY,
+             wrap=False)
+        _put(ws, 3, mid_from, unit[1] if ar else unit[0], to_col=mid_to, size=9, color=MUTED)
+        _put(ws, 1, title_from, t_ar if ar else t_en, to_col=ncols, to_row=2, bold=True, size=15, color=PRIMARY, h="right",
+             wrap=False)
+        _put(ws, 3, title_from, sub, to_col=ncols, size=9, color=MUTED, h="right")
     for c in range(1, ncols + 1):
         ws.cell(row=4, column=c).fill = _fill(ACCENT)
     return 6
 
 
 def _info(ws, row, ncols, pairs, box_title, box_note):
-    """بيانات الكشف على الشمال (عنوان | قيمة)، وصندوق الإجمالي على اليمين (آخر عمودين).
+    """بيانات الكشف على الشمال (عنوان | قيمة)، وصندوق الإجمالي على اليمين (آخر عمودين). العناوين (إنجليزي، عربي).
     بيرجّع (أول سطر بعدها، خانة رقم الصندوق) — الرقم بيتكتب بعد الجدول (معادلة لخانة الإجمالي)."""
     width = max(sum(ws.column_dimensions[get_column_letter(c)].width or 10 for c in range(3, ncols - 1)) - 1.5, 4)
     for i, (label, value) in enumerate(pairs):
         r = row + i
         ws.row_dimensions[r].height = max(20, 13.5 * math.ceil(len(str(value or "")) * 1.08 / width) + 5)
-        _put(ws, r, 1, label, to_col=2, bold=True, size=9, color=PRIMARY, fill=PRIMARY_SOFT, h="left", border=GRID)
+        _put(ws, r, 1, _L(ws, *label), to_col=2, bold=True, size=9, color=PRIMARY, fill=PRIMARY_SOFT, h="left", border=GRID)
         _put(ws, r, 3, value, to_col=ncols - 2, size=10, h="left", border=GRID)
     last = row + len(pairs) - 1
     ws.row_dimensions[row].height = max(30, ws.row_dimensions[row].height)
-    _put(ws, row, ncols - 1, box_title.replace(" / ", "\n"), to_col=ncols, bold=True, size=9, color="FFFFFF", fill=PRIMARY,
+    _put(ws, row, ncols - 1, _L(ws, *box_title, sep="\n"), to_col=ncols, bold=True, size=9, color="FFFFFF", fill=PRIMARY,
          border=GRID)
     _put(ws, row + 1, ncols - 1, None, to_col=ncols, to_row=max(row + 1, last - 1), bold=True, size=18, color=PRIMARY,
          fmt=KWD, border=GRID)
@@ -150,10 +208,11 @@ def _info(ws, row, ncols, pairs, box_title, box_note):
 
 
 def _table_head(ws, row, headers):
-    ws.row_dimensions[row].height = 46
+    """headers = نصوص أو (إنجليزي، عربي)."""
+    ws.row_dimensions[row].height = 46 if _lang(ws) == "both" else 32
     for i, text in enumerate(headers, 1):
-        _put(ws, row, i, text, bold=True, size=9, color="FFFFFF", fill=PRIMARY,
-             border=Border(left=_side("FFFFFF"), right=_side("FFFFFF"), top=_side(PRIMARY), bottom=_side(PRIMARY)))
+        _put(ws, row, i, _L(ws, *text, sep="\n") if isinstance(text, tuple) else text, bold=True, size=9, color="FFFFFF",
+             fill=PRIMARY, border=Border(left=_side("FFFFFF"), right=_side("FFFFFF"), top=_side(PRIMARY), bottom=_side(PRIMARY)))
 
 
 def _lines(ws, col, text):
@@ -182,6 +241,9 @@ def _total_row(ws, row, ncols, label, first_row, last_row, money_from, label_to)
     return f"{get_column_letter(ncols)}{row}"
 
 
+# ---------------------------------------------------------------------------
+# المبلغ كتابةً
+# ---------------------------------------------------------------------------
 def _words(n):
     ones = ("zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen "
             "seventeen eighteen nineteen").split()
@@ -206,16 +268,58 @@ def amount_words(amount):
     return text + (f" and {fils} Fils" if fils else "") + " only"
 
 
+AR_ONES = ["", "واحد", "اثنان", "ثلاثة", "أربعة", "خمسة", "ستة", "سبعة", "ثمانية", "تسعة", "عشرة", "أحد عشر", "اثنا عشر",
+           "ثلاثة عشر", "أربعة عشر", "خمسة عشر", "ستة عشر", "سبعة عشر", "ثمانية عشر", "تسعة عشر"]
+AR_TENS = ["", "", "عشرون", "ثلاثون", "أربعون", "خمسون", "ستون", "سبعون", "ثمانون", "تسعون"]
+AR_HUNDREDS = ["", "مائة", "مائتان", "ثلاثمائة", "أربعمائة", "خمسمائة", "ستمائة", "سبعمائة", "ثمانمائة", "تسعمائة"]
+
+
+def _ar_below_1000(n):
+    h, r = divmod(n, 100)
+    parts = [AR_HUNDREDS[h]] if h else []
+    if r:
+        parts.append(AR_ONES[r] if r < 20 else (AR_ONES[r % 10] + " و" if r % 10 else "") + AR_TENS[r // 10])
+    return " و".join(parts)
+
+
+def _ar_words(n):
+    """275 ← «مائتان وخمسة وسبعون»، 3500 ← «ثلاثة آلاف وخمسمائة»"""
+    if n == 0:
+        return "صفر"
+    out = []
+    for div, one, two, plural in ((10 ** 6, "مليون", "مليونان", "ملايين"), (1000, "ألف", "ألفان", "آلاف")):
+        q, n = divmod(n, div)
+        if q == 1:
+            out.append(one)
+        elif q == 2:
+            out.append(two)
+        elif 3 <= q <= 10:
+            out.append(f"{_ar_below_1000(q)} {plural}")
+        elif q > 10:
+            out.append(f"{_ar_below_1000(q)} {one}")
+    if n:
+        out.append(_ar_below_1000(n))
+    return " و".join(out)
+
+
+def amount_words_ar(amount):
+    """170.25 ← «فقط مائة وسبعون دينار كويتي ومائتان وخمسون فلس لا غير»"""
+    kd, fils = divmod(round(float(amount or 0) * 1000), 1000)
+    return f"فقط {_ar_words(kd)} دينار كويتي" + (f" و{_ar_words(fils)} فلس" if fils else "") + " لا غير"
+
+
 def _words_row(ws, row, ncols, amount):
-    ws.row_dimensions[row].height = 20
-    _put(ws, row, 1, f"Amount in words:  {amount_words(amount)}", to_col=ncols, size=9, italic=True,
+    lang = _lang(ws)
+    en, ar = f"Amount in words:  {amount_words(amount)}", f"المبلغ كتابةً:  {amount_words_ar(amount)}"
+    ws.row_dimensions[row].height = 32 if lang == "both" else 20
+    _put(ws, row, 1, ar if lang == "ar" else en if lang == "en" else f"{en}\n{ar}", to_col=ncols, size=9, italic=True,
          color=INK, h="left", border=Border(bottom=_side()))
     return row + 1
 
 
-def _note(ws, row, ncols):
-    ws.row_dimensions[row].height = 36
-    _put(ws, row, 1, NOTE, to_col=ncols, size=8, italic=True, color=MUTED, h="left", v="top")
+def _note(ws, row, ncols, text=NOTE):
+    ws.row_dimensions[row].height = 36 if _lang(ws) == "both" else 26
+    _put(ws, row, 1, _L(ws, *text, sep="\n"), to_col=ncols, size=8, italic=True, color=MUTED, h="left", v="top")
     return row + 2
 
 
@@ -234,19 +338,20 @@ def _spans(ws, ncols, n):
 
 
 def _signatures(ws, row, ncols, labels, prepared_by=None):
-    """جدول توقيعات: العنوان، مساحة التوقيع، الاسم، التاريخ — كل خانة بإطار."""
+    """جدول توقيعات: العنوان، مساحة التوقيع، الاسم، التاريخ — كل خانة بإطار. labels = [(إنجليزي، عربي)]."""
     for r, hgt in ((row, 22), (row + 1, 42), (row + 2, 18), (row + 3, 18)):
         ws.row_dimensions[r].height = hgt
     for i, ((a, b), label) in enumerate(zip(_spans(ws, ncols, len(labels)), labels)):
-        _put(ws, row, a, label, to_col=b, bold=True, size=9, color=PRIMARY, fill=PRIMARY_SOFT, border=GRID)
+        _put(ws, row, a, _L(ws, *label), to_col=b, bold=True, size=9, color=PRIMARY, fill=PRIMARY_SOFT, border=GRID)
         _put(ws, row + 1, a, None, to_col=b, border=GRID)
         name = prepared_by if (i == 0 and prepared_by) else "………………………"
-        _put(ws, row + 2, a, f"Name / الاسم:  {name}", to_col=b, size=8, color=MUTED, h="left", border=GRID)
-        _put(ws, row + 3, a, "Date / التاريخ:  ……/……/……", to_col=b, size=8, color=MUTED, h="left", border=GRID)
+        _put(ws, row + 2, a, f"{_L(ws, 'Name', 'الاسم')}:  {name}", to_col=b, size=8, color=MUTED, h="left", border=GRID)
+        _put(ws, row + 3, a, f"{_L(ws, 'Date', 'التاريخ')}:  ……/……/……", to_col=b, size=8, color=MUTED, h="left", border=GRID)
     return row + 4
 
 
-def _print_setup(ws, landscape, title_row, footer_left):
+def _print_setup(ws, landscape, title_row, footer_left, user=None):
+    """A4 على عرض الصفحة، رأس الجدول بيتكرر، والتذييل: رقم الكشف، «صفحة X من Y»، وختم «صادر من Lunx — المستخدم — الوقت»."""
     ws.page_setup.paperSize = ws.PAPERSIZE_A4
     ws.page_setup.orientation = "landscape" if landscape else "portrait"
     ws.page_setup.fitToWidth, ws.page_setup.fitToHeight = 1, 0
@@ -256,9 +361,11 @@ def _print_setup(ws, landscape, title_row, footer_left):
     ws.page_margins.top, ws.page_margins.bottom = 0.45, 0.55
     if title_row:
         ws.print_title_rows = f"{title_row}:{title_row}"
-    ws.oddFooter.left.text, ws.oddFooter.left.size = footer_left, 8
-    ws.oddFooter.center.text, ws.oddFooter.center.size = "Page &P of &N · صفحة &P من &N", 8
-    ws.oddFooter.right.text, ws.oddFooter.right.size = "Printed &D &T", 8
+    who = (user or "").replace("&", "&&")
+    ws.oddFooter.left.text, ws.oddFooter.left.size = footer_left.replace("&", "&&"), 8
+    ws.oddFooter.center.text, ws.oddFooter.center.size = _L(ws, "Page &P of &N", "صفحة &P من &N", " · "), 8
+    ws.oddFooter.right.text, ws.oddFooter.right.size = _L(ws, f"Issued by Lunx · {who} · &D &T", f"صادر من Lunx · {who} · &D &T",
+                                                          " / ") if _lang(ws) != "both" else f"Lunx · {who} · &D &T", 8
     ws.sheet_view.showGridLines = False
     ws.sheet_properties.tabColor = PRIMARY
 
@@ -296,20 +403,32 @@ def _fmt(d):
     return d.strftime("%d/%m/%Y") if d else ""
 
 
-def _person(s, kind, pid, snap_name):
-    """الاسم بالإنجليزي والمهنة والإقامة من السجل الحالي (والاسم وقت الطلب لو اتمسح)."""
+def _person(s, kind, pid, snap_name, tr):
+    """الاسم بالإنجليزي والعربي والمهنة (عربي وإنجليزي) والإقامة من السجل الحالي (والاسم وقت الطلب لو اتمسح)."""
     rec = s.get(M.Employee, pid) if kind == "employee" else s.get(M.Candidate, pid)
+    prof = rec.profession if rec is not None else ""
+    prof_en = (getattr(rec, "professionEn", None) if rec is not None else None) or value_i18n.lookup(tr, "profession", prof)
     return {"name": (rec.nameEn if rec is not None and rec.nameEn else None) or snap_name or pid,
-            "nameAr": rec.name if rec is not None else snap_name, "profession": rec.profession if rec is not None else "",
+            "nameAr": (rec.name if rec is not None else None) or snap_name or pid, "profession": prof or "",
+            "professionEn": prof_en or prof or "",
             "residencyExp": getattr(rec, "residencyExp", None) if rec is not None else None}
 
 
+def _pname(ws, p):
+    """اسم الشخص في الجداول: العربي في الكشف العربي، والإنجليزي في الإنجليزي والثنائي."""
+    return p["nameAr"] if _lang(ws) == "ar" else p["name"]
+
+
+def _pprof(ws, p):
+    return p["professionEn"] if _lang(ws) == "en" else p["profession"]
+
+
 def _cost_center(s, name, fallback_company):
-    """مركز التكلفة ← (اسمه بالإنجليزي والعربي، شركته) — الشركة للشعار والاسم في رأس الكشف."""
+    """مركز التكلفة ← (اسمه بالإنجليزي، بالعربي، شركته) — الشركة للشعار والاسم في رأس الكشف."""
     cc = s.scalar(select(M.CostCenter).where(M.CostCenter.name == name)) if name else None
     co_id = (cc.companyId if cc is not None else None) or fallback_company
-    label = " — ".join(x for x in ((cc.nameEn if cc is not None else None), name) if x) or "بدون مركز تكلفة / No cost center"
-    return label, (s.get(M.Company, co_id) if co_id else None)
+    en, ar = ((cc.nameEn if cc is not None else None) or name, name) if name else ("No cost center", "بدون مركز تكلفة")
+    return en, ar, (s.get(M.Company, co_id) if co_id else None)
 
 
 def _items(lines):
@@ -323,11 +442,11 @@ def _items(lines):
 
 def _group_people(s, lines):
     """البنود ← [(مركز التكلفة، [أشخاص])] — الشخص: بياناته وبنوده."""
-    people = {}
+    tr, people = value_i18n.merged(s), {}
     for ln in lines:
         k = (ln.personKind, ln.personId)
         if k not in people:
-            people[k] = {**_person(s, ln.personKind, ln.personId, ln.personName), "civilId": ln.civilId or "",
+            people[k] = {**_person(s, ln.personKind, ln.personId, ln.personName, tr), "civilId": ln.civilId or "",
                          "costCenter": ln.costCenter, "companyId": ln.companyId, "lines": []}
         people[k]["lines"].append(ln)
     groups = {}
@@ -340,6 +459,15 @@ def _amount(ln, actual=True):
     return float((ln.actual if actual and ln.actual is not None else ln.planned) or 0)
 
 
+def _tx(ws, c):
+    tx = custody.TX_TYPES.get(c.txType, {})
+    return _V(ws, tx.get("en", c.txType), tx.get("label", c.txType))
+
+
+def _company(ws, co):
+    return _V(ws, co.nameEn, co.nameAr) if co is not None else "—"
+
+
 # ---------------------------------------------------------------------------
 # الفاتورة (لمركز تكلفة في تقفيل)
 # ---------------------------------------------------------------------------
@@ -349,10 +477,10 @@ def _issuer(s):
     return s.get(M.Company, co) if co else None
 
 
-def _status(inv):
+def _status(ws, inv):
     if inv.status == "approved":
-        return f"Approved by Accounts · اعتمدتها الحسابات — {_fmt(inv.approvedDate)}"
-    return "Pending Accounts Approval · بانتظار اعتماد الحسابات"
+        return f"{_L(ws, 'Approved by Accounts', 'اعتمدتها الحسابات', ' · ')} — {_fmt(inv.approvedDate)}"
+    return _L(ws, "Pending Accounts Approval", "بانتظار اعتماد الحسابات", " · ")
 
 
 def _invoice_note(support):
@@ -360,7 +488,7 @@ def _invoice_note(support):
     ar = "رسوم حكومية مدفوعة نيابةً عن مركز التكلفة أعلاه حسب الإيصالات الأصلية المرفقة"
     if support:
         en, ar = en + ", plus administrative support per employee", ar + "، بالإضافة إلى الدعم الإداري لكل موظف"
-    return f"{en}.\n{ar}."
+    return f"{en}.", f"{ar}."
 
 
 def _invoice_lines(inv, lines):
@@ -373,25 +501,25 @@ def _invoice_sheet(ws, s, c, inv, lines, issuer, user):
     people = [p for _, ps in _group_people(s, lines) for p in ps]
     items = _items(lines)
     support = float(inv.supportFee or 0)
-    headers = ["#", "Employee Name\nاسم الموظف", "Profession\nالمهنة", "Civil ID\nالرقم المدني"] \
-        + [f"{it['en']}\n{it['ar']}" for it in items] + (["Admin Support\nالدعم الإداري"] if support else []) \
-        + ["Total (KWD)\nالإجمالي (د.ك)"]
+    headers = ["#", ("Employee Name", "اسم الموظف"), ("Profession", "المهنة"), ("Civil ID", "الرقم المدني")] \
+        + [(it["en"], it["ar"]) for it in items] + ([("Admin Support", "الدعم الإداري")] if support else []) \
+        + [("Total (KWD)", "الإجمالي (د.ك)")]
     n = len(headers)
     last_item = 4 + len(items)
     _widths(ws, [5, 34, 22, 15] + [15] * len(items) + ([14] if support else []) + [15])
     number = custody.invoice_no(inv)
-    row = _header(ws, n, issuer, "INVOICE", "فاتورة", number)
-    cc_label, bill_co = _cost_center(s, inv.costCenter, inv.billCompanyId)
-    tx = custody.TX_TYPES.get(c.txType, {})
+    row = _header(ws, n, issuer, ("INVOICE", "فاتورة"), number)
+    cc_en, cc_ar, bill_co = _cost_center(s, inv.costCenter, inv.billCompanyId)
+    cc_label = _V(ws, cc_en, cc_ar)
     row, box = _info(ws, row, n, [
-        ("Invoice No. / رقم الفاتورة", number),
-        ("Invoice Date / تاريخ الفاتورة", _fmt(inv.closingDate)),
-        ("Bill To / فاتورة إلى", cc_label),
-        ("Company / الشركة", " — ".join(x for x in (bill_co.nameEn, bill_co.nameAr) if x) if bill_co is not None else "—"),
-        ("Request For / نوع المعاملة", f"{tx.get('en', c.txType)} — {tx.get('label', '')}"),
-        ("Custody No. / رقم العهدة", f"CUS-{c.no:04d}"),
-        ("Status / الحالة", _status(inv)),
-    ], "TOTAL DUE (KWD) / إجمالي المستحق", f"{len(people)} Employees · موظف")
+        (("Invoice No.", "رقم الفاتورة"), number),
+        (("Invoice Date", "تاريخ الفاتورة"), _fmt(inv.closingDate)),
+        (("Bill To", "فاتورة إلى"), cc_label),
+        (("Company", "الشركة"), _company(ws, bill_co)),
+        (("Request For", "نوع المعاملة"), _tx(ws, c)),
+        (("Custody No.", "رقم العهدة"), custody.custody_no(c)),
+        (("Status", "الحالة"), _status(ws, inv)),
+    ], ("TOTAL DUE (KWD)", "إجمالي المستحق"), _count(ws, len(people), "Employees", "موظف"))
     ws.cell(row=row - 2, column=3).font = Font(name=FONT, size=10, bold=True,
                                               color=PRIMARY if inv.status == "approved" else ACCENT)
     head = row
@@ -401,17 +529,17 @@ def _invoice_sheet(ws, s, c, inv, lines, issuer, user):
         by = {ln.feeItemId or ln.itemName: ln for ln in p["lines"]}
         r = first + i
         amounts = [(_amount(by[it["key"]]) if it["key"] in by else "—") for it in items]
-        _table_row(ws, r, [i + 1, p["name"], p["profession"], p["civilId"], *amounts, *([support] if support else []),
+        _table_row(ws, r, [i + 1, _pname(ws, p), _pprof(ws, p), p["civilId"], *amounts, *([support] if support else []),
                            f"=SUM({get_column_letter(5)}{r}:{get_column_letter(n - 1)}{r})"], money_from=5, zebra=i % 2 == 1)
     last = first + len(people) - 1
     tot = last + 1
-    _total_row(ws, tot, n, f"TOTAL / الإجمالي  ({len(people)})", first, last, 5, 4)
-    # ملخص الفاتورة على اليمين
+    _total_row(ws, tot, n, f"{_L(ws, 'TOTAL', 'الإجمالي')}  ({len(people)})", first, last, 5, 4)
+    # ملخص الفاتورة على الجنب
     L = get_column_letter
     label_from = max(2, n - 3)
-    parts = [("Government Charges / الرسوم الحكومية", f"=SUM(E{tot}:{L(last_item)}{tot})")]
+    parts = [(_L(ws, "Government Charges", "الرسوم الحكومية"), f"=SUM(E{tot}:{L(last_item)}{tot})")]
     if support:
-        parts.append((f"Admin Support / الدعم الإداري  ({len(people)} × {support:,.3f})", f"={L(n - 1)}{tot}"))
+        parts.append((f"{_L(ws, 'Admin Support', 'الدعم الإداري')}  ({len(people)} × {support:,.3f})", f"={L(n - 1)}{tot}"))
     r = tot + 2
     for i, (label, value) in enumerate(parts):
         ws.row_dimensions[r + i].height = 20
@@ -419,35 +547,36 @@ def _invoice_sheet(ws, s, c, inv, lines, issuer, user):
         _put(ws, r + i, n, value, size=10, fmt=KWD, border=GRID)
     due = r + len(parts)
     ws.row_dimensions[due].height = 26
-    _put(ws, due, label_from, "TOTAL DUE / إجمالي المستحق", to_col=n - 1, bold=True, size=11, color="FFFFFF", fill=PRIMARY,
-         h="left", border=GRID)
+    _put(ws, due, label_from, _L(ws, "TOTAL DUE", "إجمالي المستحق"), to_col=n - 1, bold=True, size=11, color="FFFFFF",
+         fill=PRIMARY, h="left", border=GRID)
     _put(ws, due, n, f"=SUM({L(n)}{r}:{L(n)}{due - 1})", bold=True, size=11, color="FFFFFF", fill=PRIMARY, fmt=KWD, border=GRID)
     box.value = f"={L(n)}{due}"
     total = sum(_amount(ln) for ln in lines) + support * len(people)
     row = _words_row(ws, due + 2, n, total)
-    ws.row_dimensions[row + 1].height = 30
-    _put(ws, row + 1, 1, _invoice_note(support), to_col=n, size=8, italic=True, color=MUTED, h="left", v="top")
-    _signatures(ws, row + 3, n, ["Prepared By / أعده", "Manager Approval / اعتماد المدير", "Accounts Approval / اعتماد الحسابات"],
-                inv.createdBy or user)
+    row = _note(ws, row + 1, n, _invoice_note(support))
+    _signatures(ws, row + 1, n, [("Prepared By", "أعده"), ("Manager Approval", "اعتماد المدير"),
+                                 ("Accounts Approval", "اعتماد الحسابات")], inv.createdBy or user)
     ws.freeze_panes = ws.cell(row=first, column=3)
-    _print_setup(ws, n > 7, head, f"{number} · {cc_label}")
+    _print_setup(ws, n > 7, head, f"{number} · {cc_label}", user)
     _fit(ws, n > 7, head, tot + 2, one_page=1.4)                   # الفاتورة في صفحة واحدة لو ينفع
     return people
 
 
-def _details_sheet(wb, s, c, inv, lines, issuer, user):
+def _details_sheet(wb, s, c, inv, lines, issuer, user, lang):
     """ملحق الفاتورة: كشف فردي لكل موظف (الإجراء، الجهة، المبلغ، رقم الإيصال) — كل كشف في صفحة لوحده."""
     from openpyxl.worksheet.pagebreak import Break
     number = custody.invoice_no(inv)
-    cc_label, _ = _cost_center(s, inv.costCenter, inv.billCompanyId)
-    ws = wb.create_sheet(_sheet_name(wb, f"{number[4:]} Details"))
+    ws = wb.create_sheet(_sheet_name(wb, f"{number[4:]} {'تفاصيل' if lang == 'ar' else 'Details'}"))
+    _set_lang(ws, lang)
+    cc_en, cc_ar, _ = _cost_center(s, inv.costCenter, inv.billCompanyId)
+    cc_label = _V(ws, cc_en, cc_ar)
     r = 1
     for i, p in enumerate(p for _, ps in _group_people(s, lines) for p in ps):
         if i:
             ws.row_breaks.append(Break(id=r - 1))
         r, _, _ = _closing_individual(ws, r, c, cc_label, issuer, p, float(inv.supportFee or 0), inv.closingDate,
                                       inv.createdBy or user, i == 0, number)
-    _print_setup(ws, False, None, f"{number} · {cc_label}")
+    _print_setup(ws, False, None, f"{number} · {cc_label}", user)
     ws.sheet_properties.tabColor = ACCENT
 
 
@@ -456,54 +585,57 @@ def _closing_individual(ws, row, c, cc_label, company, p, admin_fee, when, user,
     n = 6
     if first_page:
         _widths(ws, [5, 46, 28, 16, 16, 20])
-    row = _header(ws, n, company, "EMPLOYEE STATEMENT", "كشف موظف") if first_page else _header_at(ws, row, n, company)
-    tx = custody.TX_TYPES.get(c.txType, {})
+    title = ("EMPLOYEE STATEMENT", "كشف موظف")
+    row = _header(ws, n, company, title) if first_page else _header_at(ws, row, n, company, title)
     lines = sorted(p["lines"], key=lambda x: x.position)
     row, box = _info(ws, row, n, [
-        ("Employee Name / اسم الموظف", f"{p['name']}" + (f"  —  {p['nameAr']}" if p["nameAr"] and p["nameAr"] != p["name"] else "")),
-        ("Profession / المهنة", p["profession"]),
-        ("Civil ID / الرقم المدني", p["civilId"]),
-        ("Cost Center / مركز التكلفة", cc_label),
-        ("Request For / نوع المعاملة", f"{tx.get('en', c.txType)} — {tx.get('label', '')}"),
-        ("Invoice No. / رقم الفاتورة", f"{number}   ·   CUS-{c.no:04d}"),
-        ("Invoice Date / تاريخ الفاتورة", _fmt(when)),
-    ], "TOTAL (KWD) / الإجمالي", "Kuwaiti Dinar · دينار كويتي")
+        (("Employee Name", "اسم الموظف"), _V(ws, p["name"], p["nameAr"])),
+        (("Profession", "المهنة"), _V(ws, p["professionEn"], p["profession"])),
+        (("Civil ID", "الرقم المدني"), p["civilId"]),
+        (("Cost Center", "مركز التكلفة"), cc_label),
+        (("Request For", "نوع المعاملة"), _tx(ws, c)),
+        (("Invoice No.", "رقم الفاتورة"), f"{number}   ·   {custody.custody_no(c)}"),
+        (("Invoice Date", "تاريخ الفاتورة"), _fmt(when)),
+    ], ("TOTAL (KWD)", "الإجمالي"), _L(ws, "Kuwaiti Dinar", "دينار كويتي", " · "))
     head = row
-    _table_head(ws, head, ["#", "Process\nالإجراء", "Authority\nالجهة", "Charges (KWD)\nالمبلغ (د.ك)", "Receipt No.\nرقم الإيصال",
-                           "Notes\nملاحظات"])
+    _table_head(ws, head, ["#", ("Process", "الإجراء"), ("Authority", "الجهة"), ("Charges (KWD)", "المبلغ (د.ك)"),
+                           ("Receipt No.", "رقم الإيصال"), ("Notes", "ملاحظات")])
     for i, ln in enumerate(lines):
-        _table_row(ws, head + 1 + i, [i + 1, f"{ln.itemNameEn or ln.itemName}  —  {ln.itemName}", ln.authority or "", _amount(ln),
-                                      ln.receiptNo or "", ""], money_from=4, zebra=i % 2 == 1, left_cols=(2, 3))
+        authority = AUTHORITY_EN.get(ln.authority or "", ln.authority or "") if _lang(ws) == "en" else ln.authority or ""
+        _table_row(ws, head + 1 + i, [i + 1, _V(ws, ln.itemNameEn, ln.itemName), authority, _amount(ln), ln.receiptNo or "", ""],
+                   money_from=4, zebra=i % 2 == 1, left_cols=(2, 3))
     r = head + len(lines)
     if admin_fee:
         r += 1
-        _table_row(ws, r, [len(lines) + 1, "Administrative Support  —  الدعم الإداري", "Admin Unit · الشؤون الإدارية", admin_fee,
-                           "", ""], money_from=4, zebra=len(lines) % 2 == 1, left_cols=(2, 3))
+        _table_row(ws, r, [len(lines) + 1, _V(ws, "Administrative Support", "الدعم الإداري"),
+                           _L(ws, "Admin Unit", "الشؤون الإدارية", " · "), admin_fee, "", ""],
+                   money_from=4, zebra=len(lines) % 2 == 1, left_cols=(2, 3))
         for cc in (5, 6):                                     # مابيتجمعوش
             ws.cell(row=r, column=cc).number_format = "General"
     tot = r + 1
     top = Border(left=_side(), right=_side(), top=_side(PRIMARY, "medium"), bottom=_side(PRIMARY, "double"))
     ws.row_dimensions[tot].height = 24
-    _put(ws, tot, 1, "TOTAL / الإجمالي", to_col=3, bold=True, color=PRIMARY, fill=PRIMARY_SOFT, h="left", border=top)
+    _put(ws, tot, 1, _L(ws, "TOTAL", "الإجمالي"), to_col=3, bold=True, color=PRIMARY, fill=PRIMARY_SOFT, h="left", border=top)
     _put(ws, tot, 4, f"=SUM(D{head + 1}:D{r})", bold=True, color=PRIMARY, fill=PRIMARY_SOFT, fmt=KWD, border=top)
     box.value = f"=D{tot}"
     _put(ws, tot, 5, None, to_col=6, fill=PRIMARY_SOFT, border=top)
     grand = sum(_amount(ln) for ln in lines) + admin_fee
     row = _words_row(ws, tot + 2, n, grand)
     row = _note(ws, row + 1, n)
-    row = _signatures(ws, row, n, ["Prepared By / أعده", "Manager Approval / اعتماد المدير", "Accounts Approval / اعتماد الحسابات"],
-                      user)
+    row = _signatures(ws, row, n, [("Prepared By", "أعده"), ("Manager Approval", "اعتماد المدير"),
+                                   ("Accounts Approval", "اعتماد الحسابات")], user)
     return row + 1, head, grand
 
 
-def _header_at(ws, row, n, company):
+def _header_at(ws, row, n, company, title):
     """رأس كشف فردي تاني في نفس الشيت (بعد فاصل صفحة): نفس الرأس من غير الشعار."""
     ws.row_dimensions[row].height = 24
-    name_en = company.nameEn if company is not None else ""
-    _put(ws, row, 1, name_en, to_col=3, bold=True, size=12, color=PRIMARY, h="left")
-    _put(ws, row, 4, "EMPLOYEE STATEMENT · كشف موظف", to_col=n, bold=True, size=11, color=PRIMARY, h="right")
-    _put(ws, row + 1, 1, company.nameAr if company is not None else "", to_col=3, size=10, h="left")
-    _put(ws, row + 1, 4, FORM_NO, to_col=n, size=9, color=MUTED, h="right")
+    _put(ws, row, 1, _company(ws, company) if _lang(ws) != "both" else (company.nameEn if company is not None else ""),
+         to_col=3, bold=True, size=12, color=PRIMARY, h="left")
+    _put(ws, row, 4, _L(ws, *title, sep=" · "), to_col=n, bold=True, size=11, color=PRIMARY, h="right")
+    if _lang(ws) == "both":
+        _put(ws, row + 1, 1, company.nameAr if company is not None else "", to_col=3, size=10, h="left")
+    _put(ws, row + 1, 4, _L(ws, *FORM_NO), to_col=n, size=9, color=MUTED, h="right")
     for c in range(1, n + 1):
         ws.cell(row=row + 2, column=c).fill = _fill(ACCENT)
     ws.row_dimensions[row + 2].height = 4
@@ -514,7 +646,13 @@ def _closed(s, c, when):
     return s.scalars(select(M.CustodyLine).where(M.CustodyLine.custodyId == c.id, M.CustodyLine.closedDate == when)).all()
 
 
-def closing_workbook(s, c, when, user, individual=False):
+def _save(wb):
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()
+
+
+def closing_workbook(s, c, when, user, individual=False, lang="both"):
     """تقفيل بتاريخه: «الملخص» (قايمة الفواتير + تسوية العهدة مع المستلم) وشيت فاتورة لكل مركز تكلفة
     (+ ملحق كشف فردي لكل موظف لو individual)."""
     invoices = s.scalars(select(M.Invoice).where(M.Invoice.custodyId == c.id, M.Invoice.closingDate == when)
@@ -523,22 +661,22 @@ def closing_workbook(s, c, when, user, individual=False):
     issuer = _issuer(s)
     wb = Workbook()
     summary = wb.active
+    _set_lang(summary, lang)
     rows = []
     for inv in invoices:
         inv_lines = _invoice_lines(inv, lines)
-        cc_label, bill_co = _cost_center(s, inv.costCenter, inv.billCompanyId)
         ws = wb.create_sheet(_sheet_name(wb, f"{custody.invoice_no(inv)[4:]} {inv.costCenter or ''}"))
+        _set_lang(ws, lang)
+        cc_en, cc_ar, bill_co = _cost_center(s, inv.costCenter, inv.billCompanyId)
         _invoice_sheet(ws, s, c, inv, inv_lines, issuer, user)
         if individual:
-            _details_sheet(wb, s, c, inv, inv_lines, issuer, user)
-        rows.append((inv, cc_label, bill_co, ws.title))
+            _details_sheet(wb, s, c, inv, inv_lines, issuer, user, lang)
+        rows.append((inv, _V(ws, cc_en, cc_ar), bill_co, ws.title))
     _closing_summary(summary, s, c, rows, issuer, when, user)
-    out = io.BytesIO()
-    wb.save(out)
-    return out.getvalue()
+    return _save(wb)
 
 
-def invoice_workbook(s, inv, user, individual=False):
+def invoice_workbook(s, inv, user, individual=False, lang="both"):
     """فاتورة واحدة (+ الملحق الفردي)."""
     c = s.get(M.Custody, inv.custodyId)
     lines = _invoice_lines(inv, _closed(s, c, inv.closingDate))
@@ -546,36 +684,38 @@ def invoice_workbook(s, inv, user, individual=False):
     wb = Workbook()
     ws = wb.active
     ws.title = _sheet_name(wb, custody.invoice_no(inv))
+    _set_lang(ws, lang)
     _invoice_sheet(ws, s, c, inv, lines, issuer, user)
     if individual:
-        _details_sheet(wb, s, c, inv, lines, issuer, user)
-    out = io.BytesIO()
-    wb.save(out)
-    return out.getvalue()
+        _details_sheet(wb, s, c, inv, lines, issuer, user, lang)
+    return _save(wb)
 
 
 def _closing_summary(ws, s, c, rows, issuer, when, user):
     """الملخص الداخلي بين المستلم والشركة المُصدِرة: الفواتير اللي طلعت من التقفيل، وتسوية العهدة كلها."""
-    ws.title = "الملخص Summary"
-    headers = ["#", "Invoice No.\nرقم الفاتورة", "Bill To (Cost Center)\nفاتورة إلى", "Company\nالشركة", "Status\nالحالة",
-               "Employees\nالموظفين", "Government\nالرسوم الحكومية", "Admin Support\nالدعم الإداري", "Total (KWD)\nالإجمالي (د.ك)"]
+    ws.title = _L(ws, "Summary", "الملخص", " ")
+    headers = ["#", ("Invoice No.", "رقم الفاتورة"), ("Bill To (Cost Center)", "فاتورة إلى"), ("Company", "الشركة"),
+               ("Status", "الحالة"), ("Employees", "الموظفين"), ("Government", "الرسوم الحكومية"),
+               ("Admin Support", "الدعم الإداري"), ("Total (KWD)", "الإجمالي (د.ك)")]
     n = len(headers)
     _widths(ws, [5, 15, 26, 30, 14, 11, 15, 13, 15])
-    row = _header(ws, n, issuer, "CUSTODY CLOSING SUMMARY", "ملخص تقفيل العهدة")
-    tx = custody.TX_TYPES.get(c.txType, {})
+    number = custody.custody_no(c)
+    row = _header(ws, n, issuer, ("CUSTODY CLOSING SUMMARY", "ملخص تقفيل العهدة"))
     row, box = _info(ws, row, n, [
-        ("Custody No. / رقم العهدة", f"CUS-{c.no:04d}"),
-        ("Request For / نوع المعاملة", f"{tx.get('en', c.txType)} — {tx.get('label', '')}"),
-        ("Custodian / المستلم", c.custodian),
-        ("Disbursed / تاريخ الصرف", f"{_fmt(c.disbursedDate)}   ·   {c.disbursedAmount or 0:,.3f} KWD"),
-        ("Closing Date / تاريخ التقفيل", _fmt(when)),
-    ], "TOTAL INVOICED (KWD) / إجمالي الفواتير", f"{len(rows)} Invoices · فاتورة")
+        (("Custody No.", "رقم العهدة"), number),
+        (("Request For", "نوع المعاملة"), _tx(ws, c)),
+        (("Custodian", "المستلم"), c.custodian),
+        (("Disbursed", "تاريخ الصرف"), f"{_fmt(c.disbursedDate)}   ·   {c.disbursedAmount or 0:,.3f} {_L(ws, 'KWD', 'د.ك', ' ')}"),
+        (("Closing Date", "تاريخ التقفيل"), _fmt(when)),
+    ], ("TOTAL INVOICED (KWD)", "إجمالي الفواتير"), _count(ws, len(rows), "Invoices", "فاتورة"))
     head = row
     _table_head(ws, head, headers)
     for i, (inv, label, company, sheet) in enumerate(rows):
         r = head + 1 + i
-        status = f"Approved · معتمدة\n{_fmt(inv.approvedDate)}" if inv.status == "approved" else "Pending · بانتظار الحسابات"
-        _table_row(ws, r, [i + 1, custody.invoice_no(inv), label, company.nameEn if company is not None else "", status,
+        status = f"{_L(ws, 'Approved', 'معتمدة', ' · ')}\n{_fmt(inv.approvedDate)}" if inv.status == "approved" \
+            else _L(ws, "Pending", "بانتظار الحسابات", " · ")
+        _table_row(ws, r, [i + 1, custody.invoice_no(inv), label, _company(ws, company) if _lang(ws) != "both"
+                           else (company.nameEn if company is not None else ""), status,
                            inv.employees, inv.govAmount, inv.supportAmount, f"=G{r}+H{r}"],
                    money_from=6, zebra=i % 2 == 1, left_cols=(3, 4))
         ws.cell(row=r, column=2).hyperlink = f"#'{sheet}'!A1"
@@ -584,32 +724,34 @@ def _closing_summary(ws, s, c, rows, issuer, when, user):
         ws.cell(row=r, column=6).number_format = "0"
     last = head + len(rows)
     tot = last + 1
-    box.value = "=" + _total_row(ws, tot, n, f"TOTAL / الإجمالي  ({len(rows)})", head + 1, last, 6, 4)
+    box.value = "=" + _total_row(ws, tot, n, f"{_L(ws, 'TOTAL', 'الإجمالي')}  ({len(rows)})", head + 1, last, 6, 4)
     ws.cell(row=tot, column=6).number_format = "0"
     # تسوية العهدة مع المستلم (العهدة كلها، مش التقفيل ده بس) — الدعم الإداري على مراكز التكلفة، مش من فلوس العهدة
     lines = s.scalars(select(M.CustodyLine).where(M.CustodyLine.custodyId == c.id)).all()
     spent = sum(_amount(ln) for ln in lines if ln.done)
     got = float(c.disbursedAmount or 0)
     r = tot + 2
-    _put(ws, r, 1, "CUSTODY SETTLEMENT · تسوية العهدة مع المستلم", to_col=n, bold=True, size=10, color="FFFFFF", fill=PRIMARY, h="left")
-    for i, (label, val, col) in enumerate((("Amount disbursed to custodian / المصروف للمستلم", got, INK),
-                                           ("Government charges executed (whole custody) / المنفّذ من العهدة", spent, INK),
-                                           ("Balance with custodian / الرصيد مع المستلم" if got >= spent
-                                            else "Due to custodian / مستحق للمستلم", got - spent, PRIMARY if got >= spent else RED))):
+    _put(ws, r, 1, _L(ws, "CUSTODY SETTLEMENT", "تسوية العهدة مع المستلم", " · "), to_col=n, bold=True, size=10, color="FFFFFF",
+         fill=PRIMARY, h="left")
+    for i, (label, val, col) in enumerate(((("Amount disbursed to custodian", "المصروف للمستلم"), got, INK),
+                                           (("Government charges executed (whole custody)", "المنفّذ من العهدة"), spent, INK),
+                                           (("Balance with custodian", "الرصيد مع المستلم") if got >= spent
+                                            else ("Due to custodian", "مستحق للمستلم"), got - spent,
+                                            PRIMARY if got >= spent else RED))):
         ws.row_dimensions[r + 1 + i].height = 20
-        _put(ws, r + 1 + i, 1, label, to_col=6, size=10, h="left", border=GRID, bold=i == 2)
+        _put(ws, r + 1 + i, 1, _L(ws, *label), to_col=6, size=10, h="left", border=GRID, bold=i == 2)
         _put(ws, r + 1 + i, 7, abs(val) if i == 2 else val, to_col=9, size=10, bold=i == 2, color=col, fmt=KWD, border=GRID)
     row = _note(ws, r + 5, n)
-    _signatures(ws, row, n, ["Prepared By / أعده", "Reviewed By / راجعه", "Manager Approval / اعتماد المدير",
-                             "Finance / الإدارة المالية"], user)
-    _print_setup(ws, False, head, f"CUS-{c.no:04d} · {c.custodian}")
+    _signatures(ws, row, n, [("Prepared By", "أعده"), ("Reviewed By", "راجعه"), ("Manager Approval", "اعتماد المدير"),
+                             ("Finance", "الإدارة المالية")], user)
+    _print_setup(ws, False, head, f"{number} · {c.custodian}", user)
     _fit(ws, False, head, r)
 
 
 # ---------------------------------------------------------------------------
 # طلب صرف العهدة
 # ---------------------------------------------------------------------------
-def request_workbook(s, c, user):
+def request_workbook(s, c, user, lang="both"):
     lines = s.scalars(select(M.CustodyLine).where(M.CustodyLine.custodyId == c.id)).all()
     items = _items(lines)
     groups = _group_people(s, lines)
@@ -617,58 +759,62 @@ def request_workbook(s, c, user):
     employees = custody.TX_TYPES.get(c.txType, {}).get("kind") == "employee"
     wb = Workbook()
     ws = wb.active
-    ws.title = "طلب الصرف Request"
-    headers = ["#", "Employee Name\nاسم الموظف", "Profession\nالمهنة", "Civil ID\nالرقم المدني", "Cost Center\nمركز التكلفة"] \
-        + (["Residency Expiry\nانتهاء الإقامة", "Days Left\nالمتبقي"] if employees else []) \
-        + [f"{it['en']}\n{it['ar']}" for it in items] + ["Total (KWD)\nالإجمالي (د.ك)"]
+    _set_lang(ws, lang)
+    ws.title = _L(ws, "Request", "طلب الصرف", " ")
+    headers = ["#", ("Employee Name", "اسم الموظف"), ("Profession", "المهنة"), ("Civil ID", "الرقم المدني"),
+               ("Cost Center", "مركز التكلفة")] \
+        + ([("Residency Expiry", "انتهاء الإقامة"), ("Days Left", "المتبقي")] if employees else []) \
+        + [(it["en"], it["ar"]) for it in items] + [("Total (KWD)", "الإجمالي (د.ك)")]
     n = len(headers)
     money_from = 8 if employees else 6
     _widths(ws, [5, 32, 22, 15, 22] + ([14, 10] if employees else []) + [14] * len(items) + [15])
-    row = _header(ws, n, _issuer(s), "ADVANCE PAYMENT REQUEST", "طلب صرف عهدة")
-    tx = custody.TX_TYPES.get(c.txType, {})
+    number = custody.custody_no(c)
+    row = _header(ws, n, _issuer(s), ("ADVANCE PAYMENT REQUEST", "طلب صرف عهدة"))
     row, box = _info(ws, row, n, [
-        ("Custody No. / رقم العهدة", f"CUS-{c.no:04d}"),
-        ("Request For / نوع المعاملة", f"{tx.get('en', c.txType)} — {tx.get('label', '')}"),
-        ("Custodian / المستلم", c.custodian),
-        ("Request Date / تاريخ الطلب", _fmt(c.requestDate)),
-        ("Notes / ملاحظات", c.notes or ""),
-    ], "AMOUNT REQUIRED (KWD) / المبلغ المطلوب", f"{len(people)} Employees · موظف")
+        (("Custody No.", "رقم العهدة"), number),
+        (("Request For", "نوع المعاملة"), _tx(ws, c)),
+        (("Custodian", "المستلم"), c.custodian),
+        (("Request Date", "تاريخ الطلب"), _fmt(c.requestDate)),
+        (("Notes", "ملاحظات"), c.notes or ""),
+    ], ("AMOUNT REQUIRED (KWD)", "المبلغ المطلوب"), _count(ws, len(people), "Employees", "موظف"))
     head = row
     _table_head(ws, head, headers)
     today = date.today()
+    cc_names = {}
     for i, (cc, p) in enumerate(people):
         r = head + 1 + i
         by = {ln.feeItemId or ln.itemName: ln for ln in p["lines"]}
         exp = p["residencyExp"]
         extra = [_fmt(exp), (exp - today).days if exp else ""] if employees else []
         amounts = [(_amount(by[it["key"]], actual=False) if it["key"] in by else "—") for it in items]
-        cc_en = s.scalar(select(M.CostCenter.nameEn).where(M.CostCenter.name == cc)) if cc else None
-        _table_row(ws, r, [i + 1, p["name"], p["profession"], p["civilId"], cc_en or cc or "—", *extra, *amounts,
+        if cc not in cc_names:
+            en, ar, _ = _cost_center(s, cc, None)
+            cc_names[cc] = (ar if _lang(ws) == "ar" else en) if cc else "—"
+        _table_row(ws, r, [i + 1, _pname(ws, p), _pprof(ws, p), p["civilId"], cc_names[cc], *extra, *amounts,
                            f"=SUM({get_column_letter(money_from)}{r}:{get_column_letter(n - 1)}{r})"],
                    money_from=money_from, zebra=i % 2 == 1, left_cols=(2,))
         if employees and exp and (exp - today).days < 0:
             ws.cell(row=r, column=7).font = Font(name=FONT, size=10, bold=True, color=RED)
     last = head + len(people)
     tot = last + 1
-    box.value = "=" + _total_row(ws, tot, n, f"GRAND TOTAL / الإجمالي العام  ({len(people)})", head + 1, last, money_from,
-                                  money_from - 1)
+    box.value = "=" + _total_row(ws, tot, n, f"{_L(ws, 'GRAND TOTAL', 'الإجمالي العام')}  ({len(people)})", head + 1, last,
+                                  money_from, money_from - 1)
     # ملخص المطلوب لكل مركز تكلفة
     r = tot + 2
-    _put(ws, r, 1, "SUMMARY PER COST CENTER · ملخص المطلوب لكل مركز تكلفة", to_col=n, bold=True, size=10, color="FFFFFF",
-         fill=PRIMARY, h="left")
+    _put(ws, r, 1, _L(ws, "SUMMARY PER COST CENTER", "ملخص المطلوب لكل مركز تكلفة", " · "), to_col=n, bold=True, size=10,
+         color="FFFFFF", fill=PRIMARY, h="left")
     for i, (cc, ps) in enumerate(groups):
-        label, co = _cost_center(s, cc, ps[0]["companyId"])
+        en, ar, _ = _cost_center(s, cc, ps[0]["companyId"])
         amt = sum(_amount(ln, actual=False) for p in ps for ln in p["lines"])
         _put(ws, r + 1 + i, 1, i + 1, size=10, color=MUTED, border=GRID, fill=ZEBRA if i % 2 else None)
-        _put(ws, r + 1 + i, 2, label, to_col=4, size=10, h="left", border=GRID, fill=ZEBRA if i % 2 else None)
-        _put(ws, r + 1 + i, 5, f"{len(ps)} Employees · موظف", to_col=max(5, n - 1), size=10, border=GRID, fill=ZEBRA if i % 2 else None)
+        _put(ws, r + 1 + i, 2, _V(ws, en, ar), to_col=4, size=10, h="left", border=GRID, fill=ZEBRA if i % 2 else None)
+        _put(ws, r + 1 + i, 5, _count(ws, len(ps), "Employees", "موظف"), to_col=max(5, n - 1), size=10, border=GRID,
+             fill=ZEBRA if i % 2 else None)
         _put(ws, r + 1 + i, n, amt, size=10, fmt=KWD, border=GRID, fill=ZEBRA if i % 2 else None)
     row = _words_row(ws, r + 2 + len(groups), n, sum(_amount(ln, actual=False) for ln in lines))
     row = _note(ws, row + 1, n)
-    _signatures(ws, row, n, ["Custodian / المستلم", "Manager / المسؤول", "Finance / الإدارة المالية"], None)
+    _signatures(ws, row, n, [("Custodian", "المستلم"), ("Manager", "المسؤول"), ("Finance", "الإدارة المالية")], None)
     ws.freeze_panes = ws.cell(row=head + 1, column=3)
-    _print_setup(ws, n > 8, head, f"CUS-{c.no:04d} · {c.custodian}")
+    _print_setup(ws, n > 8, head, f"{number} · {c.custodian}", user)
     _fit(ws, n > 8, head, r)
-    out = io.BytesIO()
-    wb.save(out)
-    return out.getvalue()
+    return _save(wb)

@@ -43,6 +43,7 @@ SYSTEM = [
     ("system.backup", "تنزيل نسخة احتياطية كاملة"),
     ("contract.sign", "توقيعات المفوّضين والموظفين"),
     ("custody.fees", "تعديل جدول رسوم المعاملات"),
+    ("custody.all", "عرض عهد كل المستخدمين"),                  # من غيرها المستخدم بيشوف العهد اللي طلبها بس
 ]
 
 ALL_KEYS = ([f"{m}.{a}" for m, _, acts in MODULES for a in acts]

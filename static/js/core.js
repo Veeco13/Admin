@@ -459,6 +459,64 @@ function downloadBlob(content, filename, type) {
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
+/* ---------- مفيش تنزيل ملفات: معاينة وطباعة بس ----------
+   تصدير CSV لمدير النظام بس، وبكلمة سر التصدير (بيحددها من قايمة المستخدم) — السيرفر بيتأكد منها وبيسجّل. */
+async function exportGuard(what, fn) {
+  if (!can('admin')) return toast(t('التصدير لمدير النظام بس'), 'err');
+  if (!STATE.exportPasswordSet) return openBlockAlert(t('حدد كلمة سر التصدير الأول: قايمة المستخدم ← «🔑 كلمة سر التصدير».'));
+  const m = openModal({
+    title: '📤 ' + t('تصدير') + ': ' + esc(what), size: 'narrow',
+    body: `<div class="form"><label class="full">${t('كلمة سر التصدير')}<input type="password" name="password" autocomplete="off"></label></div>
+      <div class="small muted" style="margin-top:6px">${t('التصدير بيتسجّل في سجل التدقيق.')}</div>`,
+    foot: `<button class="btn primary" data-go>📤 ${t('تصدير')}</button><button class="btn" data-close>${t('إلغاء')}</button>`,
+  });
+  const inp = $('[name=password]', m.el), go = $('[data-go]', m.el);
+  inp.focus();
+  inp.addEventListener('keydown', ev => { if (ev.key === 'Enter') go.click(); });
+  go.onclick = async () => {
+    go.disabled = true;
+    try { await api('POST', '/api/export/verify', { password: inp.value, what }); m.close(); fn(); }
+    catch (e) { toast(e.message, 'err'); go.disabled = false; inp.select(); }
+  };
+}
+function openExportPasswordModal() {
+  const set = !!STATE.exportPasswordSet;
+  const m = openModal({
+    title: '🔑 ' + t('كلمة سر التصدير'), size: 'narrow',
+    body: `<div class="notice small" style="margin-bottom:8px">${t('تصدير الملفات (CSV) لمدير النظام بس، وكل مرة بيطلب كلمة السر دي. غير كلمة سر الدخول.')}</div>
+      <form class="form" id="xp-form" autocomplete="off">
+        ${set ? `<label class="full"><span class="req">${t('كلمة السر الحالية')}</span><input type="password" name="old" autocomplete="off"></label>` : ''}
+        <label class="full"><span class="req">${t('كلمة السر الجديدة')}</span><input type="password" name="password" minlength="6" autocomplete="new-password"></label>
+        <label class="full"><span class="req">${t('تأكيد كلمة السر')}</span><input type="password" name="confirm" autocomplete="new-password"></label></form>`,
+    foot: `<button class="btn primary" data-save>💾 ${t('حفظ')}</button><button class="btn" data-close>${t('إلغاء')}</button>`,
+  });
+  $('[data-save]', m.el).onclick = async () => {
+    const d = formValues($('#xp-form', m.el));
+    if (!d.password || d.password.length < 6) return openBlockAlert(t('كلمة السر لازم 6 حروف على الأقل'));
+    if (d.password !== d.confirm) return openBlockAlert(t('كلمة السر وتأكيدها مش زي بعض'));
+    try { await persist('PUT', '/api/export-password', { old: d.old || '', password: d.password }, 'تم الحفظ'); m.close(); } catch (e) { /* ظاهر */ }
+  };
+}
+/** الطباعة من المعاينة بتتسجّل (kind = custody | employee | candidate ← نوعها في سجل التدقيق) */
+function printLog(what, kind) { api('POST', '/api/audit/print', { what, kind }).catch(() => {}); }
+/** عرض مرفق جوّه البرنامج (صورة أو PDF) من غير تنزيل */
+function openFileViewer(url, name) {
+  const ext = String(name || '').split('.').pop().toLowerCase();
+  const img = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'].includes(ext), pdf = ext === 'pdf';
+  const m = openModal({
+    title: '👁️ ' + esc(name), size: 'wide',
+    body: img ? `<div style="text-align:center"><img src="${esc(url)}" alt="" style="max-width:100%;max-height:75vh"></div>`
+      : pdf ? `<iframe class="pdf-frame" src="${esc(url)}#toolbar=0&navpanes=0" title="PDF"></iframe>`
+      : `<div class="notice">${t('الملف ده مايتعرضش جوّه البرنامج (صور و PDF بس). التنزيل مقفول.')}</div>`,
+    foot: `${img || pdf ? `<button class="btn primary" data-print>🖨️ ${t('طباعة')}</button>` : ''}<span class="spacer"></span><button class="btn" data-close>${t('إغلاق')}</button>`,
+  });
+  const p = $('[data-print]', m.el);
+  if (p) p.onclick = () => {
+    printLog(name, 'employee');
+    if (pdf) { const fr = $('iframe', m.el); try { fr.contentWindow.focus(); fr.contentWindow.print(); } catch (_) { /* */ } return; }
+    printHtml(name, `<div style="text-align:center"><img src="${esc(location.origin + url)}" style="max-width:100%"></div>`);
+  };
+}
 function toCsv(rows) {
   return '﻿' + rows.map(r => r.map(v => { const s = String(v ?? ''); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }).join(',')).join('\r\n');
 }
@@ -950,14 +1008,15 @@ function renderUserMenu() {
   const me = STATE.me;
   const sub = me.isAdmin ? t('مدير النظام') : (me.jobTitle || '');
   m.innerHTML = `<div class="info">${esc(me.displayName || me.username)}${sub ? `<br><span class="small muted">${esc(sub)}</span>` : ''}</div>
-    ${canAll(BACKUP_PERMS) ? `<button data-a="backup">💾 ${t('تنزيل نسخة احتياطية')}</button>` : ''}
-    ${me.isAdmin ? `<button data-a="restore">♻️ ${t('استعادة نسخة احتياطية')}</button><button data-a="users">🔑 ${t('المستخدمين والصلاحيات')}</button>` : ''}
+    ${me.isAdmin && canAll(BACKUP_PERMS) ? `<button data-a="backup">💾 ${t('تنزيل نسخة احتياطية')}</button>` : ''}
+    ${me.isAdmin ? `<button data-a="restore">♻️ ${t('استعادة نسخة احتياطية')}</button><button data-a="users">🔑 ${t('المستخدمين والصلاحيات')}</button>
+      <button data-a="exportpw">🔐 ${t('كلمة سر التصدير')}${STATE.exportPasswordSet ? '' : ' ⚠️'}</button>` : ''}
     <button data-a="viewperms">👁️ ${t('إعدادات العرض')}</button>
     <button data-a="password">🔒 ${t('تغيير كلمة المرور')}</button>
     <button data-a="logout">🚪 ${t('تسجيل الخروج')}</button>`;
   $$('button', m).forEach(b => b.onclick = () => {
     m.hidden = true;
-    ({ backup: takeBackup, restore: restoreBackup, users: () => openUsersModal(), viewperms: renderViewSettingsModal,
+    ({ backup: takeBackup, restore: restoreBackup, users: () => openUsersModal(), viewperms: renderViewSettingsModal, exportpw: openExportPasswordModal,
        password: openPasswordModal, logout: () => location.href = '/logout' })[b.dataset.a]();
   });
 }
@@ -1030,7 +1089,7 @@ async function openUsersModal(tab) {
     <div class="table-wrap"><table class="data"><thead><tr><th>${t('المستخدم')}</th><th>${t('الوظيفة')}</th><th>${t('الدور')}</th><th>${t('نطاق الشركات')}</th><th>${t('الحالة')}</th><th>${t('آخر دخول')}</th><th></th></tr></thead><tbody>
     ${users.map(u => `<tr class="clickable" data-uid="${u.id}" style="${u.active ? '' : 'opacity:.55'}">
       <td><b>${esc(u.displayName || u.username)}</b><div class="small muted" dir="ltr">${esc(u.username)}</div></td>
-      <td>${esc(u.jobTitle || '')}</td>
+      <td>${esc(u.jobTitle || '')}${u.custodyCode ? ` <span class="chip num" title="${esc(t('رمز العهد'))}">${esc(u.custodyCode)}</span>` : ''}</td>
       <td>${roleOf(u.roleId) ? `<span class="chip ${roleOf(u.roleId).isAdmin ? 'on' : ''}">${esc(roleOf(u.roleId).name)}</span>` : '—'}</td>
       <td>${scopeText(u)}</td>
       <td>${u.active ? `<span class="chip on">${t('نشط')}</span>` : `<span class="chip" style="background:var(--red-soft);color:var(--red)">${t('موقوف')}</span>`}</td>
@@ -1077,6 +1136,7 @@ function openUserEditModal(u, roles, done) {
       <label><span class="req">${t('اسم المستخدم (للدخول)')}</span><input name="username" value="${v('username')}" dir="ltr" ${isNew ? '' : 'disabled'}></label>
       <label>${t('الاسم الظاهر')}<input name="displayName" value="${v('displayName')}"></label>
       <label>${t('الوظيفة')}<input name="jobTitle" value="${v('jobTitle')}" placeholder="${t('مثلًا: مندوب حكومي')}"></label>
+      <label>${t('رمز العهد')} <span class="small muted">(${t('حروف إنجليزي — أرقام عهده: AA-0001')})</span><input name="custodyCode" value="${v('custodyCode')}" dir="ltr" maxlength="6" style="text-transform:uppercase" placeholder="${t('تلقائي')}"></label>
       <label>${t('البريد')}<input name="email" value="${v('email')}" dir="ltr"></label>
       <label>${t('الهاتف')}<input name="phone" value="${v('phone')}" dir="ltr"></label>
       <label>${isNew ? `<span class="req">${t('كلمة المرور')}</span>` : t('كلمة مرور جديدة (سيبها فاضية لو مش هتغيّرها)')}<input name="password" type="password" autocomplete="new-password" minlength="6"></label>

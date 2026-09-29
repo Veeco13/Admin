@@ -298,7 +298,7 @@ function renderVehicles() {
   const list = STATE.vehicles.filter(v => companyInScope(v.companyId) || !v.companyId)
     .filter(v => !q || [v.plate, v.model, companyName(v.companyId), empName(IDX.employee[v.driverId])].some(x => norm(x).includes(q)));
   viewRoot().innerHTML = `<div class="page-head"><div><h1>مركز إدارة السيارات</h1><div class="sub">${STATE.vehicles.length} ${t('سيارة')}</div></div>
-    <div class="actions"><button class="btn primary write-only" data-p="vehicles.edit" id="v-add">➕ إضافة سيارة</button><button class="btn" id="v-export">📤 تصدير CSV</button></div></div>
+    <div class="actions"><button class="btn primary write-only" data-p="vehicles.edit" id="v-add">➕ إضافة سيارة</button>${can('admin') ? '<button class="btn" id="v-export">📤 تصدير CSV</button>' : ''}</div></div>
     <div class="filters"><input type="search" id="v-q" placeholder="بحث باللوحة أو السائق…" value="${esc(UI.vehicles.q)}"></div>
     <div class="table-wrap"><table class="data"><thead><tr><th>${t('رقم اللوحة')}</th><th>${t('النوع / الموديل')}</th><th>${t('الشركة')}</th><th>${t('السائق')}</th><th>${t('انتهاء التأمين')}</th><th>${t('انتهاء الدفتر')}</th></tr></thead>
     <tbody>${list.map(v => {
@@ -309,8 +309,8 @@ function renderVehicles() {
   $('#v-add').onclick = () => openVehicleModal(null);
   $('#v-q').addEventListener('input', debounce(e => { UI.vehicles.q = e.target.value; saveUiStateToLocalStorage(); render(); const i = $('#v-q'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 250));
   $$('tr[data-id]', viewRoot()).forEach(tr => tr.onclick = () => openVehicleModal(tr.dataset.id));
-  $('#v-export').onclick = () => downloadBlob(toCsv([[t('رقم اللوحة'), t('النوع / الموديل'), t('الشركة'), t('السائق'), t('انتهاء التأمين'), t('انتهاء الدفتر')],
-    ...list.map(v => [v.plate, v.model, companyName(v.companyId), empName(IDX.employee[v.driverId]), v.insuranceExpiry, v.govLicenseExpiry])]), `vehicles-${todayISO()}.csv`, 'text/csv');
+  const vx = $('#v-export'); if (vx) vx.onclick = () => exportGuard(t('السيارات'), () => downloadBlob(toCsv([[t('رقم اللوحة'), t('النوع / الموديل'), t('الشركة'), t('السائق'), t('انتهاء التأمين'), t('انتهاء الدفتر')],
+    ...list.map(v => [v.plate, v.model, companyName(v.companyId), empName(IDX.employee[v.driverId]), v.insuranceExpiry, v.govLicenseExpiry])]), `vehicles-${todayISO()}.csv`, 'text/csv'));
 }
 function openVehicleModal(id) {
   const v = id ? IDX.vehicle[id] : {};
