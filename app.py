@@ -1133,6 +1133,7 @@ def delete_company(cid):
             s.query(M.EmployeeAffiliation).filter(M.EmployeeAffiliation.projectId.in_(pids)) \
                 .update({"projectId": None}, synchronize_session=False)
             s.query(M.Vehicle).filter(M.Vehicle.projectId.in_(pids)).update({"projectId": None}, synchronize_session=False)
+            s.query(M.Vehicle).filter(M.Vehicle.affairsProjectId.in_(pids)).update({"affairsProjectId": None}, synchronize_session=False)
             s.query(M.Permit).filter(M.Permit.projectId.in_(pids)).update({"projectId": None}, synchronize_session=False)
             s.query(M.Candidate).filter(M.Candidate.targetProjectId.in_(pids)) \
                 .update({"targetProjectId": None}, synchronize_session=False)
@@ -1450,6 +1451,7 @@ def delete_project(pid):
             return forbidden(OUT_OF_SCOPE)
         s.query(M.EmployeeAffiliation).filter(M.EmployeeAffiliation.projectId == pid).update({"projectId": None})
         s.query(M.Vehicle).filter(M.Vehicle.projectId == pid).update({"projectId": None})
+        s.query(M.Vehicle).filter(M.Vehicle.affairsProjectId == pid).update({"affairsProjectId": None})
         s.query(M.Permit).filter(M.Permit.projectId == pid).update({"projectId": None})
         s.query(M.Candidate).filter(M.Candidate.targetProjectId == pid).update({"targetProjectId": None})
         s.flush()
@@ -1499,6 +1501,22 @@ def save_vehicle(vid=None):
             d["ownerCompanyId"] = None if owner == (reg or None) else owner
         if "projectId" in d:
             d["projectId"] = d["projectId"] or None
+        if "affairsProjectId" in d:                # ملف الشؤون: ملف من ملفات الشركة المسجّلة باسمها
+            d["affairsProjectId"] = d["affairsProjectId"] or None
+            if d["affairsProjectId"]:
+                p = s.get(M.Project, d["affairsProjectId"])
+                cid = d["companyId"] if "companyId" in d else (old.companyId if old else None)
+                if p is None:
+                    return err("ملف الشؤون غير موجود")
+                if (cid or None) != p.companyId:
+                    return err("ملف الشؤون ده تبع شركة تانية — اختار الشركة اللي العربية مسجّلة باسمها الأول")
+        # مع مين: موظف (أي موظف) أو اسم حر — الموظف بيكسب
+        if "driverId" in d:
+            d["driverId"] = d["driverId"] or None
+            if d["driverId"] and s.get(M.Employee, d["driverId"]) is None:
+                return err("الموظف غير موجود")
+        if "userName" in d or d.get("driverId"):
+            d["userName"] = None if d.get("driverId") else ((d.get("userName") or "").strip() or None)
         if vid:
             v = s.get(M.Vehicle, vid)
             if not v:
@@ -1663,7 +1681,7 @@ def permit_holders(s, u):
     for v in s.scalars(select(M.Vehicle).order_by(M.Vehicle.plate)):
         if not (u.company_ok(v.companyId) if v.companyId else u.allCompanies):
             continue
-        dn = names.get(v.driverId, (None, None))
+        dn = names.get(v.driverId, (v.userName, v.userName))                  # مع مين: الموظف أو الاسم الحر
         vehs.append({"id": v.id, "plate": v.plate, "model": v.model, "vehicleType": v.vehicleType, "companyId": v.companyId,
                      "ownerCompanyId": v.ownerCompanyId, "costCenter": v.costCenter, "driverName": dn[0], "driverNameEn": dn[1],
                      "projectId": v.projectId, "contractEnd": db.ser(proj_end.get(v.projectId)),

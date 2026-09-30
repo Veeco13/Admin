@@ -107,7 +107,7 @@ function holderCardHtml(kind, h) {
       + f('مركز التكلفة', esc(ccLabel(h.costCenter))) + f('رقم الملف', esc(h.fileNo || '')) + f('الحالة الوظيفية', statusPill(h.employmentStatus))
     : f('رقم اللوحة', `<b class="num">${esc(h.plate)}</b>`) + f('نوع المركبة', esc(t(VEHICLE_TYPES[h.vehicleType] || ''))) + f('الموديل', esc(h.model || ''))
       + f('الشركة', esc(companyName(h.companyId)) + (h.ownerCompanyId && h.ownerCompanyId !== h.companyId ? `<div class="small muted">🔑 ${t('المالك الفعلي')}: ${esc(companyName(h.ownerCompanyId))}</div>` : ''))
-      + f('مركز التكلفة', esc(ccLabel(h.costCenter))) + f('السائق', esc(holderDriver(h)));
+      + f('مركز التكلفة', esc(ccLabel(h.costCenter))) + f('مع مين', esc(holderDriver(h)));
   return `<div class="kv">${body}</div>
     <div class="small muted" style="margin-top:4px">ℹ️ ${t(kind === 'employee' ? 'البيانات من مركز الإقامات والموظفين — للعرض بس' : 'البيانات من مركز السيارات — للعرض بس')}</div>`;
 }
@@ -467,7 +467,7 @@ function renderPermits() {
   const cos = uniq(((STATE.permitHolders || {})[kind === 'employee' ? 'employees' : 'vehicles'] || []).map(h => h.companyId)).filter(c => IDX.company[c]).sort((a, b) => companyName(a).localeCompare(companyName(b), 'ar'));
   const cnt = st => all.filter(p => PERMIT_STATUS[st].test(daysUntil(p.expiryDate))).length;
   const chip = (st, label, n, color) => `<span class="chip clickable ${F.status === st ? 'on' : ''}" data-status="${st}"${color ? ` style="color:${color}"` : ''}>${esc(t(label))} <b class="num">${n}</b></span>`;
-  const heads = kind === 'employee' ? ['الموظف', 'الجنسية / المهنة', 'الشركة / مكان الشغل'] : ['اللوحة', 'الشركة / مكان الشغل', 'السائق'];
+  const heads = kind === 'employee' ? ['الموظف', 'الجنسية / المهنة', 'الشركة / مكان الشغل'] : ['اللوحة', 'الشركة / مكان الشغل', 'مع مين'];
   const listFilters = `<select id="pm-type">${opt('', t('— كل الأنواع —'), !F.type)}${types.map(tp => opt(tp.id, permitTypeName(tp), tp.id === F.type)).join('')}</select>
       ${showPlaces ? `<select id="pm-place">${opt('', t('— كل الأماكن —'), !F.place)}${opt('__none', t('بدون مكان'), F.place === '__none')}${places.map(pl => opt(pl.id, permitPlaceName(pl), pl.id === F.place)).join('')}</select>` : ''}
       <select id="pm-tier">${opt('', t('— كل المستويات —'), !F.tier)}${TIER_FILTERS.map(k => opt(k, t(TIERS[k].label), k === F.tier)).join('')}</select>
@@ -530,7 +530,7 @@ function permitsCsvRows(kind, list) {
   const tailOf = p => [permitLabel(p) + (permitSuperseded(p) ? ` (${t('مُجدَّد')})` : ''), p.permitNo, p.issuer, ...(permitHasPlaces() ? [permitPlacesText(p)] : []), projectName(p.projectId), p.issueDate, p.expiryDate, p.notes];
   if (kind === 'employee') return [[t('الموظف'), t('الاسم (إنجليزي)'), t('الرقم المدني'), t('الجنسية'), t('المهنة'), t('الشركة'), t('مركز التكلفة'), ...tail],
     ...list.map(p => { const h = permitHolder(p); return [h.name, h.nameEn, h.id, personNat(h), personProf(h), companyName(h.companyId), h.costCenter, ...tailOf(p)]; })];
-  return [[t('رقم اللوحة'), t('نوع المركبة'), t('الموديل'), t('الشركة'), t('مركز التكلفة'), t('السائق'), ...tail],
+  return [[t('رقم اللوحة'), t('نوع المركبة'), t('الموديل'), t('الشركة'), t('مركز التكلفة'), t('مع مين'), ...tail],
     ...list.map(p => { const h = permitHolder(p); return [h.plate, t(VEHICLE_TYPES[h.vehicleType] || ''), h.model, companyName(h.companyId), h.costCenter, holderDriver(h), ...tailOf(p)]; })];
 }
 
@@ -580,7 +580,7 @@ function printPermitsReport(kind, list, F, groupBy) {
     ? [[t('الموظف'), p => esc(holderName(kind, H(p))), 'txt'], [t('الرقم المدني'), p => esc(H(p).id), 'num'], [t('الجنسية'), p => esc(personNat(H(p))), 'txt'],
        ...(groupBy === 'company' ? [] : [[t('الشركة'), p => esc(companyName(H(p).companyId)), 'txt']])]
     : [[t('رقم اللوحة'), p => esc(H(p).plate), 'num'], [t('نوع المركبة'), p => esc(t(VEHICLE_TYPES[H(p).vehicleType] || '')), 'txt'],
-       ...(groupBy === 'company' ? [] : [[t('الشركة'), p => esc(companyName(H(p).companyId)), 'txt']]), [t('السائق'), p => esc(holderDriver(H(p))), 'txt']];
+       ...(groupBy === 'company' ? [] : [[t('الشركة'), p => esc(companyName(H(p).companyId)), 'txt']]), [t('مع مين'), p => esc(holderDriver(H(p))), 'txt']];
   const cols = [...holderCols,
     ...(groupBy === 'type' ? [] : [[t('نوع التصريح'), p => esc(permitLabel(p)) + (permitSuperseded(p) ? ` <small>(${t('مُجدَّد')})</small>` : ''), 'txt']]), [t('رقم التصريح'), p => esc(p.permitNo || ''), 'num'],
     ...(groupBy === 'issuer' ? [] : [[t('الجهة المانحة'), p => esc(p.issuer || ''), 'txt']]), ...(permitHasPlaces() ? [[t('الأماكن'), p => esc(permitPlacesText(p)), 'txt']] : []),

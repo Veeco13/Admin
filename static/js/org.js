@@ -407,48 +407,97 @@ function vehicleOwnerId(v) { return v.ownerCompanyId || v.companyId || null; }
 function vehicleOwnerLine(v) {
   return v.ownerCompanyId && v.ownerCompanyId !== v.companyId ? `<div class="small muted">🔑 ${t('المالك الفعلي')}: ${esc(companyName(v.ownerCompanyId))}</div>` : '';
 }
+/** مع مين / المستخدم: الموظف المربوط (أي موظف) أو الاسم الحر */
+function vehicleUserName(v) { return v.driverId ? empName(IDX.employee[v.driverId]) : v.userName || ''; }
+function vehicleUserHtml(v) {
+  const d = IDX.employee[v.driverId];
+  if (d) return esc(empName(d)) + (d.drivingLicenseExp ? ' ' + datePill(d.drivingLicenseExp) : '');
+  return v.userName ? `<span title="${esc(t('اسم حر — مش موظف متسجّل'))}">✍️ ${esc(v.userName)}</span>` : '<span class="muted">—</span>';
+}
+/** ملف الشؤون: اسم الملف ورقمه */
+function affairsLabel(pid) { const p = IDX.project[pid]; return p ? `${projectName(p.id)}${p.fileNumber ? ' · ' + t('ملف') + ' ' + p.fileNumber : ''}` : ''; }
 function renderVehicles() {
-  const V = UI.vehicles = Object.assign({ q: '', project: '', agency: '', type: '', cc: '', owner: '' }, UI.vehicles || {});
+  const V = UI.vehicles = Object.assign({ q: '', project: '', agency: '', type: '', cc: '', owner: '', affairs: '', view: 'list' }, UI.vehicles || {});
   const q = norm(V.q);
+  const byAffairs = V.view === 'affairs';
   const list = STATE.vehicles.filter(v => companyInScope(v.companyId) || !v.companyId)
     .filter(v => (!V.project || (V.project === '__none' ? !v.projectId : v.projectId === V.project))
+      && (!V.affairs || (V.affairs === '__none' ? !v.affairsProjectId : v.affairsProjectId === V.affairs))
       && (!V.agency || (projectAgency(v.projectId) || {}).id === V.agency) && (!V.type || v.vehicleType === V.type)
       && (!V.cc || (V.cc === '__out' ? outsideAgency(v.projectId, v.costCenter) : v.costCenter === V.cc))
       && (!V.owner || (V.owner === '__diff' ? !!(v.ownerCompanyId && v.ownerCompanyId !== v.companyId) : vehicleOwnerId(v) === V.owner)))
-    .filter(v => !q || [v.plate, v.model, companyName(v.companyId), companyName(v.ownerCompanyId), empName(IDX.employee[v.driverId]), projectName(v.projectId), v.costCenter].some(x => norm(x).includes(q)));
+    .filter(v => !q || [v.plate, v.model, companyName(v.companyId), companyName(v.ownerCompanyId), vehicleUserName(v), projectName(v.projectId), affairsLabel(v.affairsProjectId), v.costCenter].some(x => norm(x).includes(q)));
+  const projSorted = scopedProjects().slice().sort((a, b) => projectSortKey(a).localeCompare(projectSortKey(b), 'ar'));
+  const affairsGroups = () => {
+    const g = new Map();
+    list.forEach(v => { const k = v.affairsProjectId || ''; if (!g.has(k)) g.set(k, []); g.get(k).push(v); });
+    return [...g.entries()].sort(([a], [b]) => (!a) - (!b) || projectSortKey(IDX.project[a] || {}).localeCompare(projectSortKey(IDX.project[b] || {}), 'ar'));
+  };
+  const vrow = v => `<tr class="clickable" data-id="${v.id}"><td><b class="num">${esc(v.plate)}</b></td><td>${v.vehicleType ? `<span class="chip">${esc(t(VEHICLE_TYPES[v.vehicleType]))}</span> ` : ''}${esc(v.model || '')}</td><td>${esc(companyName(v.companyId))}${vehicleOwnerLine(v)}</td>`;
   viewRoot().innerHTML = `<div class="page-head"><div><h1>مركز إدارة السيارات</h1><div class="sub">${STATE.vehicles.length} ${t('سيارة')}</div></div>
-    <div class="actions"><button class="btn primary write-only" data-p="vehicles.edit" id="v-add">➕ إضافة سيارة</button>${can('admin') ? '<button class="btn" id="v-export">📤 تصدير CSV</button>' : ''}</div></div>
-    <div class="filters"><input type="search" id="v-q" placeholder="${esc(t('بحث باللوحة أو السائق أو العقد…'))}" value="${esc(V.q)}">
-      <select id="v-proj">${opt('', t('— كل العقود والمشاريع —'), !V.project)}${opt('__none', t('بدون عقد / مشروع'), V.project === '__none')}${scopedProjects().slice().sort((a, b) => projectSortKey(a).localeCompare(projectSortKey(b), 'ar')).map(p => opt(p.id, projectName(p.id), p.id === V.project)).join('')}</select>
+    <div class="actions"><button class="btn primary write-only" data-p="vehicles.edit" id="v-add">➕ إضافة سيارة</button>${byAffairs ? `<button class="btn" id="v-print">🖨️ ${t('طباعة')}</button>` : ''}${can('admin') ? '<button class="btn" id="v-export">📤 تصدير CSV</button>' : ''}</div></div>
+    <div class="row no-print" style="gap:6px;margin:0 0 8px"><span class="chip clickable ${!byAffairs ? 'on' : ''}" data-vview="list">☰ ${t('كل السيارات')}</span><span class="chip clickable ${byAffairs ? 'on' : ''}" data-vview="affairs">🗂️ ${t('السيارات المسجّلة على ملفات الشؤون')}</span></div>
+    <div class="filters"><input type="search" id="v-q" placeholder="${esc(t('بحث باللوحة أو مع مين أو العقد…'))}" value="${esc(V.q)}">
+      <select id="v-affairs">${opt('', t('— كل ملفات الشؤون —'), !V.affairs)}${opt('__none', t('بدون ملف شؤون'), V.affairs === '__none')}${projSorted.map(p => opt(p.id, affairsLabel(p.id), p.id === V.affairs)).join('')}</select>
+      <select id="v-proj">${opt('', t('— كل العقود والمشاريع —'), !V.project)}${opt('__none', t('بدون عقد / مشروع'), V.project === '__none')}${projSorted.map(p => opt(p.id, projectName(p.id), p.id === V.project)).join('')}</select>
       <select id="v-ag">${opt('', t('— كل الوكالات —'), !V.agency)}${(STATE.agencies || []).map(a => opt(a.id, agencyName(a), a.id === V.agency)).join('')}</select>
       <select id="v-type">${opt('', t('— كل الأنواع —'), !V.type)}${Object.entries(VEHICLE_TYPES).map(([k, l]) => opt(k, t(l), k === V.type)).join('')}</select>
       <select id="v-owner">${opt('', t('— كل الملاك —'), !V.owner)}${opt('__diff', '🔑 ' + t('مملوكة لشركة غير المسجّلة باسمها'), V.owner === '__diff')}${scopedCompanies().map(c => opt(c.id, `${t('المالك الفعلي')}: ${companyName(c.id)}`, c.id === V.owner)).join('')}</select>
       <select id="v-cc">${opt('', t('— كل مراكز التكلفة —'), !V.cc)}${opt('__out', '⚠️ ' + t('برّه وكالة عقدها'), V.cc === '__out')}${STATE.costCenters.map(c => opt(c.name, `${c.code || ''} ${ccLabel(c.name)}`, c.name === V.cc)).join('')}</select>
       <button class="btn sm ghost" id="v-clear">✕ ${t('مسح الفلاتر')}</button></div>
-    <div class="table-wrap"><table class="data"><thead><tr><th>${t('رقم اللوحة')}</th><th>${t('النوع / الموديل')}</th><th>${t('الشركة')}</th><th>${t('العقد / المشروع')}</th><th>${t('مركز التكلفة')}</th><th>${t('السائق')}</th><th>${t('انتهاء التأمين')}</th><th>${t('انتهاء الدفتر')}</th></tr></thead>
+    ${byAffairs
+      ? `<div class="table-wrap"><table class="data"><thead><tr><th>${t('رقم اللوحة')}</th><th>${t('النوع / الموديل')}</th><th>${t('الشركة')}</th><th>${t('مركز التكلفة')}</th><th>${t('مع مين')}</th><th>${t('العقد / المشروع')}</th></tr></thead>
+        <tbody>${affairsGroups().map(([k, vs]) => `<tr><td colspan="6" style="background:var(--surface-2)"><b>🗂️ ${k ? esc(affairsLabel(k)) : esc(t('بدون ملف شؤون'))}</b>
+            ${k && IDX.project[k] && IDX.project[k].contractNo ? ` <span class="small muted">${t('رقم العقد')} ${esc(IDX.project[k].contractNo)}</span>` : ''} <span class="chip">${vs.length} ${t('سيارة')}</span></td></tr>`
+          + vs.map(v => `${vrow(v)}<td>${esc(v.costCenter || '—')}</td><td>${vehicleUserHtml(v)}</td><td>${esc(projectName(v.projectId)) || '<span class="muted">—</span>'}</td></tr>`).join('')).join('')
+          || `<tr><td colspan="6" class="empty">${t('لا توجد سيارات')}</td></tr>`}</tbody></table></div>
+        <div class="small muted" style="margin-top:6px">${t('ملف الشؤون = الملف المسجّلة عليه العربية علشان العمالة — غير العقد اللي بيأثر على التصاريح.')}</div>`
+      : `<div class="table-wrap"><table class="data"><thead><tr><th>${t('رقم اللوحة')}</th><th>${t('النوع / الموديل')}</th><th>${t('الشركة')}</th><th>${t('ملف الشؤون')}</th><th>${t('العقد / المشروع')}</th><th>${t('مركز التكلفة')}</th><th>${t('مع مين')}</th><th>${t('انتهاء التأمين')}</th><th>${t('انتهاء الدفتر')}</th></tr></thead>
     <tbody>${list.map(v => {
-      const d = IDX.employee[v.driverId], p = IDX.project[v.projectId], out = outsideAgency(v.projectId, v.costCenter);
-      return `<tr class="clickable" data-id="${v.id}"><td><b class="num">${esc(v.plate)}</b></td><td>${v.vehicleType ? `<span class="chip">${esc(t(VEHICLE_TYPES[v.vehicleType]))}</span> ` : ''}${esc(v.model || '')}</td><td>${esc(companyName(v.companyId))}${vehicleOwnerLine(v)}</td>
+      const p = IDX.project[v.projectId], out = outsideAgency(v.projectId, v.costCenter), af = IDX.project[v.affairsProjectId];
+      return `${vrow(v)}<td>${af ? `${esc(projectName(af.id))}${af.fileNumber ? `<div class="small muted num">${esc(af.fileNumber)}</div>` : ''}` : '<span class="muted">—</span>'}</td>
       <td>${p ? `${esc(projectName(p.id))}<div class="small muted">${esc(projectSummary(p))}</div>` : '<span class="muted">—</span>'}</td>
       <td>${esc(v.costCenter || '—')}${out ? `<div class="small" style="color:var(--orange)">⚠️ ${t('برّه وكالة عقدها')}</div>` : ''}</td>
-      <td>${d ? esc(empName(d)) + (d.drivingLicenseExp ? ' ' + datePill(d.drivingLicenseExp) : '') : '<span class="muted">—</span>'}</td><td>${datePill(v.insuranceExpiry)}</td><td>${datePill(v.govLicenseExpiry)}</td></tr>`;
-    }).join('') || `<tr><td colspan="8" class="empty">${t('لا توجد سيارات')}</td></tr>`}</tbody></table></div>`;
+      <td>${vehicleUserHtml(v)}</td><td>${datePill(v.insuranceExpiry)}</td><td>${datePill(v.govLicenseExpiry)}</td></tr>`;
+    }).join('') || `<tr><td colspan="9" class="empty">${t('لا توجد سيارات')}</td></tr>`}</tbody></table></div>`}`;
   $('#v-add').onclick = () => openVehicleModal(null);
   $('#v-q').addEventListener('input', debounce(e => { UI.vehicles.q = e.target.value; saveUiStateToLocalStorage(); render(); const i = $('#v-q'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 250));
   const vupd = p => { Object.assign(UI.vehicles, p); saveUiStateToLocalStorage(); render(); };
+  $$('[data-vview]', viewRoot()).forEach(c => c.onclick = () => vupd({ view: c.dataset.vview }));
+  $('#v-affairs').onchange = e => vupd({ affairs: e.target.value });
+  const vp = $('#v-print'); if (vp) vp.onclick = () => printAffairsVehicles(affairsGroups(), list.length);
   $('#v-proj').onchange = e => vupd({ project: e.target.value });
   $('#v-ag').onchange = e => vupd({ agency: e.target.value });
   $('#v-type').onchange = e => vupd({ type: e.target.value });
   $('#v-cc').onchange = e => vupd({ cc: e.target.value });
   $('#v-owner').onchange = e => vupd({ owner: e.target.value });
-  $('#v-clear').onclick = () => vupd({ q: '', project: '', agency: '', type: '', cc: '', owner: '' });
+  $('#v-clear').onclick = () => vupd({ q: '', project: '', agency: '', type: '', cc: '', owner: '', affairs: '' });
   $$('tr[data-id]', viewRoot()).forEach(tr => tr.onclick = () => openVehicleModal(tr.dataset.id));
-  const vx = $('#v-export'); if (vx) vx.onclick = () => exportGuard(t('السيارات'), () => downloadBlob(toCsv([[t('رقم اللوحة'), t('النوع'), t('الموديل'), t('الشركة'), t('المالك الفعلي'), t('العقد / المشروع'), t('رقم العقد'), t('الوكالة'), t('مركز التكلفة'), t('السائق'), t('انتهاء التأمين'), t('انتهاء الدفتر')],
-    ...list.map(v => [v.plate, t(VEHICLE_TYPES[v.vehicleType] || ''), v.model, companyName(v.companyId), companyName(vehicleOwnerId(v)), projectName(v.projectId), (IDX.project[v.projectId] || {}).contractNo, agencyName(projectAgency(v.projectId)), v.costCenter, empName(IDX.employee[v.driverId]), v.insuranceExpiry, v.govLicenseExpiry])]), `vehicles-${todayISO()}.csv`, 'text/csv'));
+  const vx = $('#v-export'); if (vx) vx.onclick = () => exportGuard(t('السيارات'), () => downloadBlob(toCsv([[t('رقم اللوحة'), t('النوع'), t('الموديل'), t('الشركة'), t('المالك الفعلي'), t('ملف الشؤون'), t('العقد / المشروع'), t('رقم العقد'), t('الوكالة'), t('مركز التكلفة'), t('مع مين'), t('انتهاء التأمين'), t('انتهاء الدفتر')],
+    ...list.map(v => [v.plate, t(VEHICLE_TYPES[v.vehicleType] || ''), v.model, companyName(v.companyId), companyName(vehicleOwnerId(v)), affairsLabel(v.affairsProjectId), projectName(v.projectId), (IDX.project[v.projectId] || {}).contractNo, agencyName(projectAgency(v.projectId)), v.costCenter, vehicleUserName(v), v.insuranceExpiry, v.govLicenseExpiry])]), `vehicles-${todayISO()}.csv`, 'text/csv'));
+}
+/** تقرير «السيارات المسجّلة على ملفات الشؤون» (مجمّع بالملف) — معاينة وطباعة */
+function printAffairsVehicles(groups, total) {
+  let body = '';
+  groups.forEach(([k, vs]) => {
+    let z = 0;
+    body += `<tr class="grp"><td colspan="7">${esc(k ? affairsLabel(k) : t('بدون ملف شؤون'))}<small>${vs.length} ${t('سيارة')}</small></td></tr>`
+      + vs.map((v, i) => `<tr class="${z++ % 2 ? 'z' : ''}"><td class="idx">${i + 1}</td><td class="num">${esc(v.plate)}</td><td class="txt">${esc(t(VEHICLE_TYPES[v.vehicleType] || ''))}</td>
+        <td class="txt">${esc(v.model || '')}</td><td class="txt">${esc(companyName(v.companyId))}</td><td class="txt">${esc(v.costCenter || '')}</td><td class="txt">${esc(vehicleUserName(v))}</td></tr>`).join('');
+  });
+  openReportWindow({
+    title: t('السيارات المسجّلة على ملفات الشؤون'), landscape: false,
+    summary: [[String(total), t('سيارة')], [String(groups.filter(([k]) => k).length), t('ملف شؤون')]],
+    body: `<table class="rpt"><thead><tr><th>#</th><th>${t('رقم اللوحة')}</th><th class="txt">${t('النوع')}</th><th class="txt">${t('الموديل')}</th><th class="txt">${t('الشركة')}</th><th class="txt">${t('مركز التكلفة')}</th><th class="txt">${t('مع مين')}</th></tr></thead><tbody>${body}</tbody></table>`,
+  });
+  printLog(t('السيارات المسجّلة على ملفات الشؤون'), 'vehicle');
 }
 function openVehicleModal(id) {
   const v = id ? IDX.vehicle[id] : {};
-  const drivers = STATE.employees.filter(e => e.isDriver || e.id === v.driverId).sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+  // مع مين: أي موظف (مش السواقين بس) أو اسم حر
+  const people = scopedEmployees().filter(e => !empEnded(e) || e.id === v.driverId).sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+  const personLabel = e => `${e.id} — ${e.name}`;
+  const withWhom = IDX.employee[v.driverId] ? personLabel(IDX.employee[v.driverId]) : v.userName || '';
   const m = openModal({
     title: id ? t('تعديل سيارة') + ' ' + esc(v.plate) : t('إضافة سيارة'),
     body: `${v.projectId || v.ownerCompanyId ? `<div class="emp-license" style="margin-bottom:10px">
@@ -461,28 +510,34 @@ function openVehicleModal(id) {
       <label>${t('الموديل')}<input name="model" value="${esc(v.model || '')}"></label>
       <label>${t('الشركة (مسجّلة باسم)')}<select name="companyId">${companyOptions(v.companyId)}</select></label>
       <label title="${esc(t('الشركة اللي مالكة العربية فعليًا لو غير المسجّلة باسمها'))}">🔑 ${t('المالك الفعلي')}<select name="ownerCompanyId">${companyOptions(v.ownerCompanyId, '— نفس الشركة المسجّلة باسمها —')}</select></label>
-      <label>${t('العقد / المشروع')}<select name="projectId"></select></label>
+      <label title="${esc(t('العقد الحكومي اللي العربية شغالة عليه — بيأثر على حد تاريخ التصاريح'))}">${t('العقد / المشروع')}<select name="projectId"></select></label>
+      <label title="${esc(t('الملف المسجّلة عليه العربية علشان العمالة — غير العقد'))}">🗂️ ${t('ملف الشؤون المسجّلة عليه')}<select name="affairsProjectId"></select></label>
       <label>${t('مركز التكلفة (مكان الشغل الفعلي)')}<select name="costCenter">${costCenterOptions(v.costCenter)}</select></label>
-      <label>${t('السائق')}<select name="driverId">${opt('', '—', !v.driverId)}${drivers.map(e => opt(e.id, e.name + ' — ' + e.id, e.id === v.driverId)).join('')}</select></label>
+      <label>${t('مع مين / المستخدم')}<input name="withWhom" list="dl-veh-user" value="${esc(withWhom)}" placeholder="${esc(t('اختار موظف أو اكتب اسم'))}" autocomplete="off">
+        <datalist id="dl-veh-user">${people.map(e => `<option value="${esc(personLabel(e))}">`).join('')}</datalist></label>
       <label>${t('انتهاء التأمين')}<input type="date" name="insuranceExpiry" value="${esc(v.insuranceExpiry || '')}"></label>
       <label>${t('انتهاء الدفتر')}<input type="date" name="govLicenseExpiry" value="${esc(v.govLicenseExpiry || '')}"></label>
       <label class="full">${t('ملاحظات')}<input name="notes" value="${esc(v.notes || '')}"></label></div>
-      <div class="small muted">${t('قائمة السائقين بتعرض الموظفين المعلَّم عليهم «سائق» فقط.')}</div>`,
+      <div class="small muted" id="v-user-hint">${t('مع مين: اختار أي موظف من القايمة، أو اكتب اسم حر لو اللي معاه العربية مش موظف متسجّل. الربط مابيعلّمش على الموظف «سائق».')}</div>`,
     foot: `${id ? '<button class="btn danger write-only" data-p="vehicles.delete" data-del>🗑️ حذف</button><span class="spacer"></span>' : ''}<button class="btn primary write-only" data-p="vehicles.edit" data-save>حفظ</button><button class="btn" data-close>إلغاء</button>`,
   });
   // العقود / المشاريع بتاعة الشركة اللي العربية مسجّلة باسمها بس
-  const coSel = $('[name=companyId]', m.el), prSel = $('[name=projectId]', m.el);
+  const coSel = $('[name=companyId]', m.el), prSel = $('[name=projectId]', m.el), afSel = $('[name=affairsProjectId]', m.el);
   const fillProjects = () => {
-    const keep = prSel.value || v.projectId;
-    prSel.innerHTML = opt('', '—', !keep) + scopedProjects().filter(p => p.companyId === coSel.value)
-      .sort((a, b) => projectSortKey(a).localeCompare(projectSortKey(b), 'ar'))
-      .map(p => opt(p.id, projectName(p.id) + (p.contractNo ? ' · ' + p.contractNo : ''), p.id === keep)).join('');
+    const keep = prSel.value || v.projectId, keepAf = afSel.value || v.affairsProjectId;
+    const ps = scopedProjects().filter(p => p.companyId === coSel.value).sort((a, b) => projectSortKey(a).localeCompare(projectSortKey(b), 'ar'));
+    prSel.innerHTML = opt('', '—', !keep) + ps.map(p => opt(p.id, projectName(p.id) + (p.contractNo ? ' · ' + p.contractNo : ''), p.id === keep)).join('');
+    afSel.innerHTML = opt('', '—', !keepAf) + ps.map(p => opt(p.id, affairsLabel(p.id), p.id === keepAf)).join('');
   };
   fillProjects();
   coSel.onchange = fillProjects;
   $('[data-save]', m.el).onclick = async () => {
     const d = formValues(m.el);
     if (!d.plate) return openBlockAlert(t('رقم اللوحة مطلوب'));
+    // مع مين: «الرقم المدني — الاسم» من القايمة ← موظف، وأي حاجة تانية ← اسم حر
+    const w = (d.withWhom || '').trim(), hit = /^(\d+)\s+—\s/.exec(w);
+    delete d.withWhom;
+    if (hit && IDX.employee[hit[1]]) { d.driverId = hit[1]; d.userName = ''; } else { d.driverId = ''; d.userName = w; }
     const dup = STATE.vehicles.find(x => x.plate === d.plate && x.id !== id);
     if (dup) return openBlockAlert(t('رقم اللوحة مسجّل بالفعل'));
     try { await persist(id ? 'PUT' : 'POST', id ? '/api/vehicles/' + id : '/api/vehicles', d, 'تم الحفظ'); m.close(); } catch (e) { if (e.data && e.data.block) openBlockAlert(e.message); }

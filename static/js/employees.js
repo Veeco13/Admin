@@ -241,12 +241,16 @@ const EMP_REPORT_COLS = [
   { k: 'profession', g: 'basic', l: 'المهنة', v: e => personProf(e) },
   { k: 'maritalStatus', g: 'basic', l: 'الحالة الاجتماعية', v: e => maritalLabel(e) },
   { k: 'qualification', g: 'basic', l: 'المؤهل الدراسي', v: e => e.qualification },
+  { k: 'specialization', g: 'basic', l: 'التخصص', v: e => e.specialization },
+  { k: 'university', g: 'basic', l: 'الجامعة / جهة التخرج', v: e => e.university },
   { k: 'childrenCount', g: 'basic', l: 'عدد الأبناء', v: e => (e.children || []).length || '', num: true },
   { k: 'company', g: 'work', l: 'الشركة', v: e => companyName(empCompanyId(e)) },
   { k: 'project', g: 'work', l: 'المشروع', v: e => projectName(primaryAff(e).projectId) },
   { k: 'costCenter', g: 'work', l: 'مركز التكلفة', v: e => ccLabel(e.costCenter) },
   { k: 'status', g: 'work', l: 'الحالة الوظيفية', v: e => { const s = EMP_STATUS_LABELS[e.employmentStatus || 'active'] || {}; return LANG === 'en' ? s.en : s.ar; } },
+  { k: 'dpId', g: 'work', l: 'الرقم الوظيفي', v: e => e.dpId, num: true },
   { k: 'dateOfHire', g: 'work', l: 'تاريخ التعيين', date: true, plain: true },
+  { k: 'kuwaitEntryDate', g: 'work', l: 'تاريخ دخول الكويت', date: true, plain: true },
   { k: 'serviceEndDate', g: 'work', l: 'تاريخ انتهاء الخدمة', date: true, plain: true },
   { k: 'serviceEndReason', g: 'work', l: 'سبب انتهاء الخدمة', v: e => t(e.serviceEndReason) },
   { k: 'contractType', g: 'work', l: 'نوع العقد', v: e => t(e.contractType) },
@@ -709,13 +713,14 @@ async function openProfileCard(id, tab = 'info') {
       <div data-pane="info" ${tab !== 'info' ? 'hidden' : ''}><div class="kv">
         ${field('الرقم المدني', `<b class="num">${esc(e.id)}</b>`)}${field('الجنسية', esc(e.nationality))}${field('المهنة', esc(e.profession) + (e.professionEn ? `<div class="small muted">${esc(e.professionEn)}</div>` : ''))}
         ${field('تاريخ الميلاد', fmtDate(e.dateOfBirth))}${field('الجنس', esc(t(GENDER_LABELS[e.gender] || '')))}${field('مكان الميلاد', esc(e.placeOfBirth))}
-        ${field('تاريخ إصدار الجواز', fmtDate(e.passportIssueDate))}${field('تاريخ التعيين', fmtDate(e.dateOfHire))}${field('تاريخ انتهاء الخدمة', fmtDate(e.serviceEndDate))}${e.serviceEndReason ? field('سبب انتهاء الخدمة', esc(t(e.serviceEndReason))) : ''}
+        ${field('تاريخ إصدار الجواز', fmtDate(e.passportIssueDate))}${field('تاريخ التعيين', fmtDate(e.dateOfHire))}${field('تاريخ دخول الكويت', fmtDate(e.kuwaitEntryDate))}${field('تاريخ انتهاء الخدمة', fmtDate(e.serviceEndDate))}${e.serviceEndReason ? field('سبب انتهاء الخدمة', esc(t(e.serviceEndReason))) : ''}
         ${field('الرقم الموحد', e.unifiedNumber ? `<span class="num">${esc(e.unifiedNumber)}</span>` : '')}${field('فصيلة الدم', esc(e.bloodType))}
         ${field('عنوان السكن', esc(addressText(e)))}${field('هاتف المنزل', esc(e.homePhone))}${can('sensitive.salary') ? field('الراتب', fmtMoney(e.salary)) : ''}
         ${field('بدل السكن', e.housingIncluded ? (e.housingAmount ? fmtMoney(e.housingAmount) : t('مشمول')) : t('غير مشمول'))}
         ${field('نوع العقد', esc(e.contractType))}${field('رقم الملف', esc(e.fileNo))}${field('مركز التكلفة', esc(e.costCenter))}
         ${field('مكان العمل الفعلي', esc(e.actualWorkplace))}${field('الهاتف', esc(e.phone))}${field('البريد الإلكتروني', esc(e.email))}${can('sensitive.bank') ? field('البنك', esc(e.bank) + (e.iban ? `<div class="small muted">${esc(e.iban)}</div>` : '')) : ''}
-        ${field('مرجع إضافي', esc(e.dpId))}
+        ${field('الرقم الوظيفي', e.dpId ? `<span class="num">${esc(e.dpId)}</span>` : '')}
+        ${field('المؤهل الدراسي', esc(e.qualification))}${field('التخصص', esc(e.specialization))}${field('الجامعة / جهة التخرج', esc(e.university))}
       </div>
       ${isKuwaitiStaff(e) ? kuwaitiInfoHtml(e, field) : ''}
       <h4>${t('الكفالة والعقد ومكان الشغل')}</h4>
@@ -1032,7 +1037,7 @@ function kuwaitiInfoHtml(e, field) {
   const kids = e.children || [];
   const study = e.studyInstitution ? esc(e.studyInstitution) + ` <span class="small muted">(${t(e.studyAbroad ? 'خارج الكويت' : 'داخل الكويت')}${e.studyStartDate ? ' · ' + fmtDate(e.studyStartDate) : ''})</span>` : '';
   return `<h4>🇰🇼 ${t('بيانات العمالة الوطنية')}</h4><div class="kv">
-      ${field('الحالة الاجتماعية', esc(maritalLabel(e)))}${field('المؤهل الدراسي', esc(e.qualification))}${field('التخصص', esc(e.specialization))}
+      ${field('الحالة الاجتماعية', esc(maritalLabel(e)))}
       ${field('رقم الجنسية', esc(e.nationalityNo))}${field('المادة (الجنسية)', esc(e.citizenshipArticle))}${field('تاريخ التجنس', fmtDate(e.naturalizationDate))}
       ${field('الدراسة الحالية', study)}</div>
     <h4>${t('الأبناء')} (${kids.length})</h4>
@@ -1041,14 +1046,15 @@ function kuwaitiInfoHtml(e, field) {
         <td>${c.disabled ? t('معاق') + (c.disabilityDegree ? ` (${esc(c.disabilityDegree)})` : '') : t('سليم')}</td><td>${c.working ? t('نعم') : t('لا')}</td><td>${c.married ? t('نعم') : t('لا')}</td></tr>`).join('')}
       </tbody></table>` : '<div class="muted">—</div>'}`;
 }
-/** نافذة الموظف: قسم العمالة الوطنية (بيظهر للكويتي ومعاملة كويتية بس) */
-function kuwaitiInputs(e) {
+/** نافذة الموظف / المترشّح: قسم العمالة الوطنية (بيظهر للكويتي ومعاملة كويتية بس).
+    withStudy = المؤهل والتخصص جوّه القسم (المترشّح) — الموظف ليه قسم «المؤهل الدراسي» للكل */
+function kuwaitiInputs(e, withStudy = true) {
   const v = k => esc(e[k] ?? '');
   const inp = (k, l, type = 'text', extra = '') => `<label>${t(l)}<input name="${k}" type="${type}" value="${v(k)}" ${extra}></label>`;
   return `<div class="form" id="kw-box" style="grid-column:1/-1;${isKuwaitiStaff(e) ? '' : 'display:none'}">
     <h4>🇰🇼 ${t('بيانات العمالة الوطنية')} <span class="small muted">(${t('لاستمارة 103 واستمارة العلاوة الاجتماعية')})</span></h4>
     <label>${t('الحالة الاجتماعية')}<select name="maritalStatus">${opt('', '—', !e.maritalStatus)}${Object.entries(MARITAL_LABELS).map(([k, l]) => opt(k, t(l), k === e.maritalStatus)).join('')}</select></label>
-    ${inp('qualification', 'المؤهل الدراسي', 'text', 'list="dl-qual"')}${inp('specialization', 'التخصص')}
+    ${withStudy ? inp('qualification', 'المؤهل الدراسي', 'text', 'list="dl-qual"') + inp('specialization', 'التخصص') : ''}
     ${inp('nationalityNo', 'رقم الجنسية')}${inp('citizenshipArticle', 'المادة (الجنسية)', 'text', 'list="dl-article"')}${inp('naturalizationDate', 'تاريخ التجنس', 'date')}
     ${inp('studyInstitution', 'جهة الدراسة الحالية')}
     <label>${t('مكان الدراسة')}<select name="studyAbroad">${opt('', '—', e.studyAbroad == null)}${opt('0', t('داخل الكويت'), e.studyAbroad === false)}${opt('1', t('خارج الكويت'), e.studyAbroad === true)}</select></label>
@@ -1186,10 +1192,12 @@ function openEmployeeModal(id) {
       ${inp('professionEn', 'المهنة (إنجليزي)', 'text', 'dir="ltr"')}
       ${dt('dateOfBirth', 'تاريخ الميلاد')}
       <label>${t('الجنس')}<select name="gender">${opt('', '—', !e.gender)}${Object.entries(GENDER_LABELS).map(([k, l]) => opt(k, t(l), k === e.gender)).join('')}</select></label>
-      ${inp('placeOfBirth', 'مكان الميلاد')}${dt('dateOfHire', 'تاريخ التعيين')}${dt('serviceEndDate', 'تاريخ انتهاء الخدمة')}
+      ${inp('placeOfBirth', 'مكان الميلاد')}${dt('dateOfHire', 'تاريخ التعيين')}${dt('kuwaitEntryDate', 'تاريخ دخول الكويت')}${dt('serviceEndDate', 'تاريخ انتهاء الخدمة')}
       ${inp('phone', 'الهاتف')}${inp('email', 'البريد الإلكتروني', 'email', 'dir="ltr"')}
       ${personExtraInputs(e)}
-      ${kuwaitiInputs(e)}
+      <h4>${t('المؤهل الدراسي')}</h4>
+      ${inp('qualification', 'المؤهل الدراسي', 'text', 'list="dl-qual"')}${inp('specialization', 'التخصص')}${inp('university', 'الجامعة / جهة التخرج')}
+      ${kuwaitiInputs(e, false)}
       <h4>العمل والراتب</h4>
       <label>${t('الحالة الوظيفية')}<select name="employmentStatus">${Object.entries(EMP_STATUS_LABELS).map(([k, s]) => opt(k, LANG === 'en' ? s.en : s.ar, k === (e.employmentStatus || 'active'))).join('')}</select></label>
       ${inp('salary', 'الراتب (د.ك)', 'number', 'step="0.001" min="0"')}
@@ -1198,7 +1206,7 @@ function openEmployeeModal(id) {
       <label>${t('نوع العقد')}<select name="contractType">${opt('', '—', !e.contractType)}${['عقد حكومي', 'عقد اهلي'].map(x => opt(x, t(x), x === e.contractType)).join('')}</select></label>
       <label>${t('مركز التكلفة')}<select name="costCenter">${costCenterOptions(e.costCenter)}</select></label>
       ${inp('actualWorkplace', 'مكان العمل الفعلي')}${inp('fileNo', 'رقم الملف')}
-      ${inp('bank', 'البنك')}${inp('iban', 'IBAN', 'text', 'dir="ltr"')}${inp('dpId', 'مرجع إضافي')}
+      ${inp('bank', 'البنك')}${inp('iban', 'IBAN', 'text', 'dir="ltr"')}${inp('dpId', 'الرقم الوظيفي')}
       <h4>الشركة والمشروع <button type="button" class="btn sm" id="aff-add">➕ ${t('انتماء إضافي')}</button></h4>
       <div class="full" id="aff-box" style="grid-column:1/-1">${renderAffRows(e.affiliations || [])}</div>
       <h4>المستندات</h4>

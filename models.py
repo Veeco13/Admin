@@ -106,6 +106,10 @@ class Vehicle(Base):
     vehicleType: Mapped[Optional[str]] = col("vehicle_type", String(20))            # نوع المركبة (تصنيف الهيئة)
     # المالك الفعلي لو غير الشركة المسجّلة باسمها (فاضي = نفسها)
     ownerCompanyId: Mapped[Optional[str]] = col("owner_company_id", ID, fk("companies.id"))
+    # ملف الشؤون المسجّلة عليه (علشان العمالة) — غير العقد اللي فوق (اللي بيأثر على التصاريح)
+    affairsProjectId: Mapped[Optional[str]] = col("affairs_project_id", ID, fk("projects.id"))
+    # مع مين / المستخدم: الموظف في driverId (أي موظف)، أو اسم حر هنا لو اللي معاه العربية مش موظف متسجّل
+    userName: Mapped[Optional[str]] = col("user_name", NAME)
 
 
 class Employee(Base):
@@ -143,6 +147,8 @@ class Employee(Base):
     # الأبناء: JSON [{name, dateOfBirth, disabled, disabilityDegree, working, married}] ← db.children_json
     children: Mapped[Optional[str]] = col("children", TEXT)
     dateOfHire: Mapped[Optional[date]] = col("date_of_hire", Date)
+    kuwaitEntryDate: Mapped[Optional[date]] = col("kuwait_entry_date", Date)     # تاريخ دخول الكويت
+    university: Mapped[Optional[str]] = col("university", NAME)                  # الجامعة / جهة التخرج (للمؤهل)
     serviceEndDate: Mapped[Optional[date]] = col("service_end_date", Date)      # آخر يوم عمل (إقرار المخالصة)
     serviceEndType: Mapped[Optional[str]] = col("service_end_type", String(20))   # resigned | terminated (بعد فترة الإنذار)
     serviceEndReason: Mapped[Optional[str]] = col("service_end_reason", NAME)     # سبب انتهاء الخدمة
@@ -574,6 +580,33 @@ class HrLetter(Base):
     decidedAt: Mapped[Optional[datetime]] = col("decided_at", DateTime)
 
 
-# النسخ الاحتياطي: العهد والفواتير والوكالات والتصاريح والخطابات كمان
+# ---------------------------------------------------------------------------
+# الاستيراد التكميلي (import_extra.py): كل دفعة وكل قيمة اتغيّرت فيها ← التراجع
+# ---------------------------------------------------------------------------
+class ImportBatch(Base):
+    __tablename__ = "import_batches"
+    id: Mapped[str] = col("id", ID, primary_key=True)
+    target: Mapped[str] = col("target", String(20), nullable=False)             # employees | vehicles
+    fileName: Mapped[Optional[str]] = col("file_name", NAME)
+    sheet: Mapped[Optional[str]] = col("sheet", SHORT)
+    summary: Mapped[Optional[str]] = col("summary", TEXT)                       # JSON: الأعداد (اتملى، اتضاف، مختلف، …)
+    createdBy: Mapped[Optional[str]] = col("created_by", NAME)
+    createdAt: Mapped[Optional[datetime]] = col("created_at", DateTime)
+    undoneBy: Mapped[Optional[str]] = col("undone_by", NAME)
+    undoneAt: Mapped[Optional[datetime]] = col("undone_at", DateTime)
+
+
+class ImportChange(Base):
+    __tablename__ = "import_changes"
+    id: Mapped[int] = col("id", Integer, primary_key=True, autoincrement=True)
+    batchId: Mapped[str] = col("batch_id", ID, fk("import_batches.id"), nullable=False, index=True)
+    entity: Mapped[str] = col("entity", String(20), nullable=False)             # employee | vehicle
+    recordId: Mapped[str] = col("record_id", ID, nullable=False)
+    field: Mapped[str] = col("field", String(60), nullable=False)               # «__created» = السجل نفسه اتضاف
+    oldValue: Mapped[Optional[str]] = col("old_value", TEXT)
+    newValue: Mapped[Optional[str]] = col("new_value", TEXT)
+
+
+# النسخ الاحتياطي: العهد والفواتير والوكالات والتصاريح والخطابات ودفعات الاستيراد كمان
 ALL_MODELS.extend([FeeItem, Custody, CustodyLine, Invoice, Agency, AgencyCostCenter, PermitType, PermitPlace, Permit, PermitPlaceLink,
-                   HrLetter])
+                   HrLetter, ImportBatch, ImportChange])
