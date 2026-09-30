@@ -5,8 +5,10 @@
 - شهادة راتب «إلى من يهمه الأمر» و«استمرارية راتب»: من قالب الشركة نفسه (forms/salary_certificate.xlsx — بيتطبع على
   الورق الرسمي، والشكل مابيتغيّرش): البيانات الوظيفية للموظف بس اللي بتتملى، وبعدين PDF للمعاينة والطباعة.
   البدلات مابتتذكرش في أي مكان (استمرارية الراتب: سطر «الراتب» بس).
+  التواريخ بتتكتب نص ثابت باسم الشهر («11-Oct-2023» / «11 أكتوبر 2023») عشان مايبقاش فيه لبس بين اليوم والشهر.
 - نموذج الإجازة: بيتطبع من المتصفح (تصميم جديد)، والطلب بيتحفظ بحالته (مقدَّم / معتمد / مرفوض) لمرحلة الإجازات بعدين.
-- كل خطاب ليه رقم (HR-SCR-2026-0001 للشهادات، LV-2026-0001 للإجازة) ونسخة من بياناته وقت إصداره (data)،
+- نموذج العودة من الإجازة: مربوط بطلب الإجازة (أو بتواريخ إجازة مش متسجّلة)، وبيحسب التأخير عن تاريخ العودة المقرر.
+- كل خطاب ليه رقم (HR-SCR-2026-0001 للشهادات، LV-2026-0001 للإجازة، RT-2026-0001 للعودة) ونسخة من بياناته وقت إصداره (data)،
   فإعادة الطباعة بتطلع نفس الخطاب بنفس الرقم حتى لو بيانات الموظف اتغيّرت بعدها.
 """
 import io
@@ -15,7 +17,7 @@ import math
 import os
 import re
 from copy import copy
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 import openpyxl
 from sqlalchemy import func, select
@@ -26,9 +28,13 @@ import models as M
 import value_i18n
 
 TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "forms", "salary_certificate.xlsx")
-KINDS = {"salary": ("SCR", "شهادة راتب"), "continuity": ("SCR", "شهادة استمرارية راتب"), "leave": ("LV", "طلب إجازة")}
+KINDS = {"salary": ("SCR", "شهادة راتب"), "continuity": ("SCR", "شهادة استمرارية راتب"), "leave": ("LV", "طلب إجازة"),
+         "return": ("RT", "عودة من إجازة")}
 SHEETS = {"salary": "شهادة راتب", "continuity": "استمرارية راتب"}
-PREFIX = {"SCR": "HR-SCR", "LV": "LV"}
+FORMS = ("leave", "return")          # نماذج بتتطبع من المتصفح (صلاحية «تعديل الموظفين» ومن غير «المرتب»)
+PREFIX = {"SCR": "HR-SCR", "LV": "LV", "RT": "RT"}
+MONTHS_EN = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+MONTHS_AR = ("يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر")
 LEAVE_TYPES = {"paid": "مدفوعة", "unpaid": "بدون راتب", "advance": "مدفوعة مقدمًا", "with_salary": "مع الراتب",
                "rotation": "إجازة تناوب (Rotation)", "compassionate": "إجازة ظرف خاص (Compassionate)"}
 LEAVE_STATUS = ("submitted", "approved", "rejected")
@@ -112,8 +118,8 @@ def next_number(s, kind, year):
     return series, no, f"{PREFIX[series]}-{year}-{no:04d}"
 
 
-def leave_snapshot(s, e, d):
-    """طلب إجازة ← بياناته (الموظف + تفاصيل الإجازة) أو رسالة خطأ."""
+def _leave_dates(d):
+    """نوع الإجازة وتواريخها من الطلب ← (النوع، البداية، النهاية) أو رسالة خطأ."""
     typ = d.get("leaveType")
     if typ not in LEAVE_TYPES:
         return None, "اختار نوع الإجازة"
@@ -122,23 +128,90 @@ def leave_snapshot(s, e, d):
         return None, "تاريخ بداية ونهاية الإجازة مطلوبين"
     if end < start:
         return None, "نهاية الإجازة قبل بدايتها"
+    return (typ, start, end), None
+
+
+def _form_person(s, e):
+    """بيانات الموظف في نماذج الإجازة والعودة (الإدارة، الرقم الوظيفي، الإقامة، عربياته)."""
     snap = employee_basics(s, e)
     cc = s.scalar(select(M.CostCenter).where(M.CostCenter.name == e.costCenter)) if e.costCenter else None
-    plates = [v.plate for v in s.scalars(select(M.Vehicle).where(M.Vehicle.driverId == e.id))]
+    snap.update({
+        "department": e.costCenter or "", "departmentEn": (cc.nameEn if cc is not None else "") or e.costCenter or "",
+        "employeeCode": e.dpId or "", "residencyExp": db.ser(e.residencyExp),
+        "plates": [v.plate for v in s.scalars(select(M.Vehicle).where(M.Vehicle.driverId == e.id))],
+        "date": date.today().isoformat(),
+    })
+    return snap
+
+
+def leave_snapshot(s, e, d):
+    """طلب إجازة ← بياناته (الموظف + تفاصيل الإجازة) أو رسالة خطأ."""
+    got, msg = _leave_dates(d)
+    if msg:
+        return None, msg
+    typ, start, end = got
+    snap = _form_person(s, e)
     snap.update({
         "leaveType": typ, "from": start.isoformat(), "to": end.isoformat(), "days": (end - start).days + 1,
         "returnDate": (end + timedelta(days=1)).isoformat(), "phone": (d.get("phone") or e.phone or "").strip(),
         "address": (d.get("address") or "").strip(), "notes": (d.get("notes") or "").strip(),
-        "department": e.costCenter or "", "departmentEn": (cc.nameEn if cc is not None else "") or e.costCenter or "",
-        "employeeCode": e.dpId or "", "residencyExp": db.ser(e.residencyExp), "plates": plates,
-        "date": date.today().isoformat(),
     })
     return snap, None
 
 
-def _dt(v):
+def return_of(s, leave_id, employee_id):
+    """رقم نموذج العودة المسجّل لطلب الإجازة ده (لو فيه)."""
+    for x in s.scalars(select(M.HrLetter).where(M.HrLetter.kind == "return", M.HrLetter.employeeId == employee_id)):
+        if json.loads(x.data or "{}").get("leaveId") == leave_id:
+            return x.number
+    return None
+
+
+def return_snapshot(s, e, d):
+    """عودة من إجازة ← بياناتها أو رسالة خطأ. مربوطة بطلب إجازة من السيستم، أو بتواريخ إجازة مش متسجّلة (ورق قديم)."""
+    lv = s.get(M.HrLetter, d["leaveId"]) if d.get("leaveId") else None
+    if d.get("leaveId"):
+        if lv is None or lv.kind != "leave" or lv.employeeId != e.id:
+            return None, "طلب الإجازة مش موجود"
+        if lv.status == "rejected":
+            return None, "طلب الإجازة ده مرفوض"
+        taken = return_of(s, lv.id, e.id)
+        if taken:
+            return None, f"العودة من الإجازة دي متسجّلة قبل كده ({taken})"
+        typ, start, end = json.loads(lv.data or "{}").get("leaveType"), lv.dateFrom, lv.dateTo
+    else:
+        got, msg = _leave_dates(d)
+        if msg:
+            return None, msg
+        typ, start, end = got
+    actual = db.parse_date(d.get("actualDate"))
+    if not actual:
+        return None, "تاريخ العودة الفعلي مطلوب"
+    if actual <= start:
+        return None, "تاريخ العودة لازم يكون بعد بداية الإجازة"
+    if actual > date.today():
+        return None, "تاريخ العودة الفعلي لسه ماجاش"
+    due = end + timedelta(days=1)
+    snap = _form_person(s, e)
+    snap.update({
+        "leaveId": lv.id if lv is not None else None, "leaveNumber": lv.number if lv is not None else "",
+        "leaveType": typ, "from": start.isoformat(), "to": end.isoformat(), "days": (end - start).days + 1,
+        "returnDate": due.isoformat(), "actualDate": actual.isoformat(), "delay": (actual - due).days,
+        "reason": (d.get("reason") or "").strip(), "notes": (d.get("notes") or "").strip(),
+    })
+    return snap, None
+
+
+def date_en(v):
+    """2023-10-11 ← «11-Oct-2023» (نص ثابت — مابيعتمدش على إعدادات المنطقة في جهاز السيرفر)."""
     d = db.parse_date(v)
-    return datetime(d.year, d.month, d.day) if d else None
+    return f"{d.day:02d}-{MONTHS_EN[d.month - 1]}-{d.year}" if d else None
+
+
+def date_ar(v):
+    """2023-10-11 ← «11 أكتوبر 2023»."""
+    d = db.parse_date(v)
+    return f"{d.day} {MONTHS_AR[d.month - 1]} {d.year}" if d else None
 
 
 def salary_xlsx(kind, number, data):
@@ -162,7 +235,7 @@ def salary_xlsx(kind, number, data):
                 f.sz = max(7, math.floor(size * cap / len(v) * 2) / 2)
                 cell.font = f
 
-    put("C9", _dt(data.get("date")))
+    put("C9", date_en(data.get("date")))
     put("C11", data.get("toEn") or None)
     put("G11", data.get("toAr") or None)
     put("B13", data.get("companyEn"))
@@ -173,8 +246,11 @@ def salary_xlsx(kind, number, data):
     put("G17", data.get("nationalityAr"))
     put("C18", data.get("civilId"))
     put("G18", data.get("civilId"))
-    put("C19", _dt(data.get("hireDate")))
-    put("G19", _dt(data.get("hireDate")))
+    put("C19", date_en(data.get("hireDate")))
+    put("G19", date_ar(data.get("hireDate")))
+    al = copy(ws["G19"].alignment)
+    al.readingOrder = 2          # من اليمين للشمال — غير كده «11 أكتوبر 2023» بيتقلب لـ «أكتوبر 2023 11»
+    ws["G19"].alignment = al
     put("C20", data.get("jobEn"))
     put("G20", data.get("jobAr"))
     if kind == "salary":

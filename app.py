@@ -431,7 +431,7 @@ def api_state():
         see_sal = u.can("sensitive.salary")
         emp_ids = {e["id"] for e in state["employees"]} if u.can("employees.view") else set()
         state["letters"] = [letters.to_api(x, see_sal) for x in s.scalars(select(M.HrLetter).order_by(M.HrLetter.createdAt.desc()))
-                            if x.employeeId in emp_ids and (x.kind == "leave" or see_sal)]
+                            if x.employeeId in emp_ids and (x.kind not in letters.SHEETS or see_sal)]
         holders = permit_holders(s, u) if u.can("permits.view") else {"employees": [], "vehicles": []}
         state["permitHolders"] = holders
         state.update(dump_permits(s, {e["id"] for e in holders["employees"]}, {v["id"] for v in holders["vehicles"]}))
@@ -3272,13 +3272,14 @@ def letter_defaults(emp_id):
 @app.post("/api/employees/<emp_id>/letters")
 @login_required
 def create_letter(emp_id):
-    """{kind: salary|continuity|leave, ...} ← خطاب برقم جديد ونسخة من بياناته. الشهادات محتاجة «المرتب»، والإجازة «تعديل الموظفين»."""
+    """{kind: salary|continuity|leave|return, ...} ← خطاب برقم جديد ونسخة من بياناته.
+    الشهادات محتاجة «المرتب»، والإجازة والعودة «تعديل الموظفين»."""
     d = body()
     kind = d.get("kind")
     if kind not in letters.KINDS:
         return err("نوع الخطاب غير معروف")
     u = me()
-    need = ("employees.edit",) if kind == "leave" else ("employees.view", "sensitive.salary")
+    need = ("employees.edit",) if kind in letters.FORMS else ("employees.view", "sensitive.salary")
     if not all(u.can(k) for k in need):
         return forbidden()
     with db.session_scope() as s:
@@ -3287,8 +3288,8 @@ def create_letter(emp_id):
             return err("الموظف غير موجود", 404)
         if not emp_ok(s, emp_id):
             return forbidden(OUT_OF_SCOPE)
-        if kind == "leave":
-            data, msg = letters.leave_snapshot(s, e, d)
+        if kind in letters.FORMS:
+            data, msg = (letters.leave_snapshot if kind == "leave" else letters.return_snapshot)(s, e, d)
             if msg:
                 return err(msg)
         else:
@@ -3309,10 +3310,16 @@ def create_letter(emp_id):
         x = M.HrLetter(id=db.new_id("ltr"), kind=kind, series=series, year=year, no=no, number=number, employeeId=e.id,
                        companyId=data.get("companyId"), data=json.dumps(data, ensure_ascii=False),
                        status="submitted" if kind == "leave" else None, createdBy=uname(), createdAt=db.now())
-        if kind == "leave":
+        if kind in letters.FORMS:
             x.dateFrom, x.dateTo, x.days = db.parse_date(data["from"]), db.parse_date(data["to"]), data["days"]
+        if kind == "leave":
             label = (f"{letters.KINDS[kind][1]} {number}: {letters.LEAVE_TYPES[data['leaveType']]} من "
                      f"{x.dateFrom.strftime('%d/%m/%Y')} إلى {x.dateTo.strftime('%d/%m/%Y')} ({data['days']} يوم)")
+        elif kind == "return":
+            late = data["delay"]
+            label = (f"{letters.KINDS[kind][1]} {number}: رجع {db.parse_date(data['actualDate']).strftime('%d/%m/%Y')} — "
+                     + (f"متأخر {late} يوم" if late > 0 else f"قبل الموعد بـ {-late} يوم" if late < 0 else "في الموعد")
+                     + (f" (طلب {data['leaveNumber']})" if data["leaveNumber"] else ""))
         else:
             to = data.get("toAr") or data.get("toEn")
             label = f"{letters.KINDS[kind][1]} {number}" + (f" — للسادة: {to}" if to else "")
@@ -3353,6 +3360,9 @@ def letter_status(lid):
             return err("الطلب غير موجود", 404)
         if x.employeeId and not emp_ok(s, x.employeeId):
             return forbidden(OUT_OF_SCOPE)
+        back = letters.return_of(s, x.id, x.employeeId) if st == "rejected" else None
+        if back:
+            return err(f"الموظف رجع من الإجازة دي ({back}) — مينفعش تترفض")
         x.status, x.decidedBy, x.decidedAt = st, uname(), db.now()
         label = f"طلب الإجازة {x.number}: " + {"approved": "اتعتمد", "rejected": "اترفض", "submitted": "رجع «مقدَّم»"}[st]
         db.log_audit(s, "employee_letter", label, uname())

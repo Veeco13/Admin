@@ -554,8 +554,8 @@ class HrLetter(Base):
     __tablename__ = "hr_letters"
     __table_args__ = (UniqueConstraint("series", "year", "no"),)
     id: Mapped[str] = col("id", ID, primary_key=True)
-    kind: Mapped[str] = col("kind", String(20), nullable=False)                 # salary | continuity | leave
-    series: Mapped[str] = col("series", String(10), nullable=False)             # SCR (الشهادات) | LV (الإجازة)
+    kind: Mapped[str] = col("kind", String(20), nullable=False)                 # salary | continuity | leave | return
+    series: Mapped[str] = col("series", String(10), nullable=False)             # SCR (الشهادات) | LV (الإجازة) | RT (العودة)
     year: Mapped[int] = col("year", Integer, nullable=False)
     no: Mapped[int] = col("no", Integer, nullable=False)
     number: Mapped[str] = col("number", SHORT, nullable=False, unique=True)     # HR-SCR-2026-0001 / LV-2026-0001
