@@ -176,7 +176,7 @@ function projectsTable(projs, withCompany) {
     const beyond = pe.filter(e => beyondLicense(e, p.id, ['residencyExp', 'workPermitExp']).length).length;
     const a = p.agencyId && agencyById(p.agencyId), dl = daysUntil(p.expiryDate);
     return `<tr><td><b>${esc(projectName(p.id))}</b><div class="small muted">${esc(p.laborOffice || '')}</div></td>${withCompany ? `<td><a href="#" data-proj-co="${p.companyId}">${esc(companyName(p.companyId))}</a></td>` : ''}
-      <td><span class="chip ${p.kind === 'gov' ? 'on' : ''}">${esc(projectKindLabel(p))}</span></td><td>${a ? esc(agencyName(a)) : '<span class="muted">—</span>'}</td>
+      <td><span class="chip ${p.kind === 'gov' || p.kind === 'sub' ? 'on' : ''}">${esc(projectKindLabel(p))}</span></td><td>${a ? esc(agencyName(a)) : '<span class="muted">—</span>'}</td>
       <td class="num">${esc(p.fileNumber || '')}</td><td class="num">${esc(p.contractNo || '')}</td>
       <td class="num small">${fmtDate(p.startDate)}</td><td class="nowrap">${datePill(p.expiryDate)}${dl !== null ? `<div class="small muted">${esc(daysText(dl))}</div>` : ''}</td>
       <td class="num"><a href="#" data-proj-emps="${p.id}">${pe.length}</a></td><td class="num"><a href="#" data-proj-veh="${p.id}">${pv.length}</a></td>
@@ -314,8 +314,8 @@ function openProjectModal(companyId, p) {
       <label>${t('الاسم (إنجليزي)')}<input name="nameEn" value="${esc(p.nameEn || '')}" dir="ltr"></label>
       <label>${t('الشركة (صاحبة الترخيص)')}<select name="companyId">${companyOptions(companyId)}</select></label>
       <label>${t('النوع')}<select name="kind">${opt('', t('مشروع'), !p.kind)}${Object.entries(PROJECT_KINDS).map(([k, l]) => opt(k, t(l), k === p.kind)).join('')}</select></label>
-      <label data-gov>${t('الوكالة')}<select name="agencyId">${agencyOpts(companyId || p.companyId)}</select></label>
-      <label data-gov>${t('رقم العقد')}<input name="contractNo" value="${esc(p.contractNo || '')}" inputmode="numeric"></label>
+      <label data-kinds="gov">${t('الوكالة')}<select name="agencyId">${agencyOpts(companyId || p.companyId)}</select></label>
+      <label data-kinds="gov,sub">${t('رقم العقد')}<input name="contractNo" value="${esc(p.contractNo || '')}" inputmode="numeric"></label>
       <label>${t('الرقم المدني للترخيص')}<input name="fileNumber" value="${esc(p.fileNumber || '')}" inputmode="numeric"></label>
       <label>${t('إدارة العمل')}<input name="laborOffice" value="${esc(p.laborOffice || '')}"></label>
       <label>${t('تاريخ البداية')}<input type="date" name="startDate" value="${esc(p.startDate || '')}"></label>
@@ -323,13 +323,15 @@ function openProjectModal(companyId, p) {
     foot: `<button class="btn primary" data-save>حفظ</button><button class="btn" data-close>إلغاء</button>`,
   });
   const kind = $('[name=kind]', m.el), co = $('[name=companyId]', m.el);
-  const sync = () => $$('[data-gov]', m.el).forEach(x => { x.style.display = kind.value === 'gov' ? '' : 'none'; });
+  // الوكالة للعقد الحكومي بس، ورقم العقد للحكومي واللي من الباطن (العقد اللي التصاريح بتطلع عليه)
+  const sync = () => $$('[data-kinds]', m.el).forEach(x => { x.style.display = x.dataset.kinds.split(',').includes(kind.value) ? '' : 'none'; });
   kind.onchange = sync; sync();
   co.onchange = () => { $('[name=agencyId]', m.el).innerHTML = agencyOpts(co.value); };
   $('[data-save]', m.el).onclick = async () => {
     const d = formValues(m.el);
     if (!d.nameAr || !d.companyId) return openBlockAlert(t('الاسم والشركة مطلوبين'));
-    if (d.kind !== 'gov') { d.agencyId = null; d.contractNo = null; }
+    if (d.kind !== 'gov') d.agencyId = null;
+    if (d.kind !== 'gov' && d.kind !== 'sub') d.contractNo = null;
     await persist(p.id ? 'PUT' : 'POST', p.id ? '/api/projects/' + p.id : '/api/projects', d, 'تم الحفظ');
     m.close();
   };

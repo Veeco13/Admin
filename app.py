@@ -22,6 +22,7 @@ from flask import (Flask, jsonify, request, session, send_file, render_template,
                    redirect, url_for, abort, g)
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import object_session
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 
@@ -1540,15 +1541,19 @@ def get_signature(civil_id):
     return resp
 
 
-PROJECT_KINDS = ("main", "gov")
+PROJECT_KINDS = ("main", "gov", "sub")
+PERMIT_PROJECT_KINDS = ("gov", "sub")       # العقود اللي التصاريح بتطلع عليها (وبتحد تاريخها)
 
 
 def _project_fields(s, d, company_id):
-    """النوع (ترخيص رئيسي / عقد حكومي)، والوكالة ورقم العقد للعقد الحكومي بس — والوكالة لازم تبقى من نفس الشركة."""
+    """النوع (ترخيص رئيسي / عقد حكومي / عقد من الباطن)، والوكالة للعقد الحكومي بس، ورقم العقد للحكومي واللي من
+    الباطن — والوكالة لازم تبقى من نفس الشركة."""
     if "kind" in d and d["kind"] not in PROJECT_KINDS:
         d["kind"] = None
-    if d.get("kind") != "gov" and "kind" in d:
-        d["agencyId"], d["contractNo"] = None, None
+    if "kind" in d and d.get("kind") != "gov":
+        d["agencyId"] = None
+    if "kind" in d and d.get("kind") not in PERMIT_PROJECT_KINDS:
+        d["contractNo"] = None
     if d.get("agencyId"):
         a = s.get(M.Agency, d["agencyId"])
         if a is None or a.companyId != company_id:
@@ -1807,7 +1812,6 @@ def permit_holders(s, u):
     for a in s.scalars(select(M.EmployeeAffiliation).order_by(M.EmployeeAffiliation.employeeId, M.EmployeeAffiliation.position)):
         affs.setdefault(a.employeeId, []).append(a.companyId)
         first_project.setdefault(a.employeeId, a.projectId)          # العقد اللي مسجّل عليه (الانتماء الأساسي)
-    proj_end = {p.id: p.expiryDate for p in s.scalars(select(M.Project)) if p.kind == "gov"}   # العقود الحكومية بس بتحد التصريح
     emps, names = [], {}
     for e in s.scalars(select(M.Employee).order_by(M.Employee.name)):
         names[e.id] = (e.name, e.nameEn)
@@ -1818,7 +1822,7 @@ def permit_holders(s, u):
                      "profession": e.profession, "professionEn": e.professionEn, "companyId": a[0] if a else None,
                      "costCenter": e.costCenter, "fileNo": e.fileNo, "employmentStatus": e.employmentStatus or "active",
                      "serviceEndDate": db.ser(e.serviceEndDate), "residencyExp": db.ser(e.residencyExp),
-                     "projectId": first_project.get(e.id), "contractEnd": db.ser(proj_end.get(first_project.get(e.id)))})
+                     "projectId": first_project.get(e.id)})       # العقد اللي مسجّل عليه (بيتختار لوحده في التصريح)
     vehs = []
     for v in s.scalars(select(M.Vehicle).order_by(M.Vehicle.plate)):
         if not (u.company_ok(v.companyId) if v.companyId else u.allCompanies):
@@ -1826,31 +1830,66 @@ def permit_holders(s, u):
         dn = names.get(v.driverId, (v.userName, v.userName))                  # مع مين: الموظف أو الاسم الحر
         vehs.append({"id": v.id, "plate": v.plate, "model": v.model, "vehicleType": v.vehicleType, "companyId": v.companyId,
                      "ownerCompanyId": v.ownerCompanyId, "costCenter": v.costCenter, "driverName": dn[0], "driverNameEn": dn[1],
-                     "projectId": v.projectId, "contractEnd": db.ser(proj_end.get(v.projectId)),
+                     "projectId": v.projectId,
                      "insuranceExpiry": db.ser(v.insuranceExpiry), "govLicenseExpiry": db.ser(v.govLicenseExpiry)})
     return {"employees": emps, "vehicles": vehs}
 
 
-def permit_cap(s, kind, hid):
-    """أقصى تاريخ لانتهاء التصريح = أقرب تاريخ من: الموظف ← انتهاء الإقامة ونهاية العقد اللي مسجّل عليه
-    (إذن العمل مش داخل)، والعربية ← التأمين / الدفتر ونهاية عقدها. العقد بيدخل بس لو **عقد حكومي** (مش الترخيص
-    الرئيسي 650 — موظفينه ليهم وضع خاص لسه ماتقررش). بيرجّع [(الوصف، التاريخ)] الأقرب الأول."""
-    out, project = [], None
+def permit_cap(s, kind, hid, project_id=None):
+    """أقصى تاريخ لانتهاء التصريح = أقرب تاريخ من: الموظف ← انتهاء الإقامة (إذن العمل مش داخل)، والعربية ←
+    التأمين / الدفتر — ونهاية **العقد اللي التصريح طالع عليه** (حكومي أو من الباطن؛ ممكن يختلف عن العقد اللي
+    صاحبه مسجّل عليه). بيرجّع [(الوصف، التاريخ)] الأقرب الأول."""
+    out = []
     if kind == "employee":
         e = s.get(M.Employee, hid)
         if e is not None and e.residencyExp:
             out.append(("انتهاء الإقامة", e.residencyExp))
-        aff = s.scalar(select(M.EmployeeAffiliation).where(M.EmployeeAffiliation.employeeId == hid)
-                       .order_by(M.EmployeeAffiliation.position).limit(1))
-        project = s.get(M.Project, aff.projectId) if aff is not None and aff.projectId else None
     else:
         v = s.get(M.Vehicle, hid)
         if v is not None:
             out += [(lab, getattr(v, f)) for f, lab in (("insuranceExpiry", "انتهاء التأمين"), ("govLicenseExpiry", "انتهاء الدفتر")) if getattr(v, f)]
-            project = s.get(M.Project, v.projectId) if v.projectId else None
-    if project is not None and project.expiryDate and project.kind == "gov":
+    project = s.get(M.Project, project_id) if project_id else None
+    if project is not None and project.expiryDate and project.kind in PERMIT_PROJECT_KINDS:
         out.append((f"نهاية العقد «{project.nameAr}»", project.expiryDate))
     return sorted(out, key=lambda x: x[1])
+
+
+def _permit_holder_col(kind):
+    return M.Permit.employeeId if kind == "employee" else M.Permit.vehicleId
+
+
+def permit_children(s, p):
+    """التصاريح المعتمدة على التصريح ده (الرتقة ← الـ KOC) وأي تصريح معتمد عليهم."""
+    out, todo = [], [p.id]
+    while todo:
+        kids = list(s.scalars(select(M.Permit).where(M.Permit.parentId.in_(todo))))
+        kids = [k for k in kids if k.id not in {x.id for x in out} and k.id != p.id]
+        out += kids
+        todo = [k.id for k in kids]
+    return out
+
+
+def permit_parent_for(s, kind, hid, type_id):
+    """التصريح الأساسي الساري لصاحب التصريح من النوع ده (الأبعد انتهاءً) أو None."""
+    return s.scalar(select(M.Permit).where(M.Permit.holderKind == kind, _permit_holder_col(kind) == hid, M.Permit.typeId == type_id,
+                                           M.Permit.expiryDate >= datetime.now().date())
+                    .order_by(M.Permit.expiryDate.desc(), M.Permit.createdAt.desc()).limit(1))
+
+
+def link_dependents(s, tp):
+    """النوع بقى معتمد على نوع تاني ← تصاريحه اللي مالهاش أساسي تتربط بأساسي من نفس الشخص (نفس تاريخ الانتهاء،
+    وإلا الأبعد انتهاءً) — نفس اللي بيعمله migration 0028."""
+    if not tp.requiresTypeId:
+        return 0
+    n = 0
+    for k in s.scalars(select(M.Permit).where(M.Permit.typeId == tp.id, M.Permit.parentId.is_(None))):
+        hid = k.employeeId if k.holderKind == "employee" else k.vehicleId
+        rows = list(s.scalars(select(M.Permit).where(M.Permit.holderKind == k.holderKind, _permit_holder_col(k.holderKind) == hid,
+                                                     M.Permit.typeId == tp.requiresTypeId).order_by(M.Permit.expiryDate.desc())))
+        if rows:
+            k.parentId = next((r.id for r in rows if r.expiryDate == k.expiryDate), rows[0].id)
+            n += 1
+    return n
 
 
 def dump_permits(s, emp_ids, veh_ids):
@@ -1873,21 +1912,72 @@ def dump_permits(s, emp_ids, veh_ids):
     }
 
 
-def _permit_values(s, kind, hid, d, pid=None):
-    """بيانات تصريح واحد بعد التحقق (من غير كتابة) ← (القيم، None) أو (None، (الرسالة، الكود، block))."""
+def _permit_values(s, kind, hid, d, pid=None, batch_parent=None):
+    """بيانات تصريح واحد بعد التحقق (من غير كتابة) ← (القيم، None) أو (None، (الرسالة، الكود، block)).
+    - العقد مطلوب: حكومي أو من الباطن، ومايكونش خلص (إلا لو هو نفس عقد التصريح وهو بيتعدّل).
+    - النوع المعتمد على نوع تاني (الرتقة ← KOC): محتاج أساسي ساري لنفس الشخص — batch_parent (قيم الأساسي اللي
+      بيتضاف معاه في نفس الطلب)، أو d.parentId، أو الأساسي الحالي، أو الساري الأبعد انتهاءً. ولو sameExpiry بياخد
+      تاريخه وعقده (اللي جاي من الواجهة بيتجاهل)، وإلا تاريخه مايعدّيش تاريخ الأساسي."""
     tp = s.get(M.PermitType, d.get("typeId") or "")
     if tp is None:
         return None, ("اختار نوع التصريح", 400, False)
     if tp.appliesTo and tp.appliesTo != kind:
         return None, ("نوع التصريح ده مش للموظفين" if kind == "employee" else "نوع التصريح ده مش للسيارات", 400, False)
+    old = s.get(M.Permit, pid) if pid else None
+    today = datetime.now().date()
     issue, expiry = db.parse_date(d.get("issueDate")), db.parse_date(d.get("expiryDate"))
+    proj = d.get("projectId") or None
+    kids = list(s.scalars(select(M.Permit).where(M.Permit.parentId == old.id))) if old is not None else []
+    if kids and old.typeId != tp.id:
+        names = "، ".join(dict.fromkeys((s.get(M.PermitType, k.typeId) or M.PermitType(nameAr="تصريح")).nameAr for k in kids))
+        return None, (f"التصريح ده مربوط بيه «{names}» — مينفعش تغيّر نوعه", 400, True)
+    parent_id, parent_cap = None, None
+    if tp.requiresTypeId:
+        req = s.get(M.PermitType, tp.requiresTypeId)
+        req_name = req.nameAr if req is not None else "التصريح الأساسي"
+        if batch_parent is not None:
+            p_exp, p_proj = batch_parent["expiry"], batch_parent["proj"]
+        else:
+            want = d.get("parentId") or (old.parentId if old is not None and old.typeId == tp.id else None)
+            parent = s.get(M.Permit, want) if want else None
+            if parent is None or parent.typeId != tp.requiresTypeId or parent.holderKind != kind \
+                    or (parent.employeeId if kind == "employee" else parent.vehicleId) != hid:
+                parent = permit_parent_for(s, kind, hid, tp.requiresTypeId)
+            if parent is None:
+                return None, (f"«{tp.nameAr}» مابيطلعش غير لو معاه «{req_name}» ساري — ضيف الـ «{req_name}» الأول "
+                              "(أو علّم عليه في نفس الشاشة)", 400, True)
+            if not (old is not None and old.parentId == parent.id) and (not parent.expiryDate or parent.expiryDate < today):
+                return None, (f"«{req_name}»{' رقم ' + parent.permitNo if parent.permitNo else ''} منتهي — جدّده الأول", 400, True)
+            parent_id, p_exp, p_proj = parent.id, parent.expiryDate, parent.projectId
+        if tp.sameExpiry:
+            expiry, proj = p_exp, p_proj
+            if not proj:
+                return None, (f"«{req_name}» مالوش عقد — عدّله واختار عقده الأول", 400, True)
+        else:
+            parent_cap = (f"انتهاء «{req_name}»", p_exp)
     if not expiry:
         return None, ("تاريخ الانتهاء مطلوب", 400, False)
     if issue and issue > expiry:
         return None, ("تاريخ الإصدار بعد تاريخ الانتهاء", 400, False)
-    caps = permit_cap(s, kind, hid)          # التصريح مايعدّيش أقرب تاريخ (الإقامة / العقد / التأمين / الدفتر)
+    for k in kids:                           # التصاريح اللي بتنتهي معاه هتاخد التاريخ الجديد
+        ktp = s.get(M.PermitType, k.typeId)
+        if ktp is not None and ktp.sameExpiry and k.issueDate and k.issueDate > expiry:
+            return None, (f"«{ktp.nameAr}» المربوط بيه اتصدر {k.issueDate.strftime('%d/%m/%Y')} — بعد تاريخ الانتهاء الجديد", 400, True)
+    # العقد اللي التصريح طالع عليه: مطلوب، وهو اللي بيحد تاريخه
+    if not proj:
+        return None, ("اختار العقد اللي التصريح طالع عليه", 400, True)
+    project = s.get(M.Project, proj)
+    if project is None:
+        return None, ("العقد / المشروع غير موجود", 400, False)
+    if project.kind not in PERMIT_PROJECT_KINDS:
+        return None, (f"«{project.nameAr}» مش عقد حكومي ولا عقد من الباطن — التصريح بيطلع على العقد", 400, True)
+    if project.expiryDate and project.expiryDate < today and not (old is not None and old.projectId == proj):
+        return None, (f"العقد «{project.nameAr}» خلص في {project.expiryDate.strftime('%d/%m/%Y')} — اختار عقد ساري", 400, True)
+    caps = permit_cap(s, kind, hid, proj)    # التصريح مايعدّيش أقرب تاريخ (الإقامة / العقد / التأمين / الدفتر)
+    if parent_cap and parent_cap[1]:
+        caps = sorted(caps + [parent_cap], key=lambda x: x[1])
     if caps and expiry > caps[0][1]:
-        center = ("العقود والمشاريع الحكومية" if "العقد" in caps[0][0]
+        center = ("العقود والمشاريع" if "العقد" in caps[0][0] else "قسم التصاريح" if caps[0] is parent_cap
                   else "مركز الإقامات والموظفين" if kind == "employee" else "مركز السيارات")
         return None, (f"مش هينفع: التصريح بينتهي بعد {caps[0][0]} ({caps[0][1].strftime('%d/%m/%Y')}). "
                       f"لو اتجدد، حدّث تاريخه في {center} الأول.", 400, True)
@@ -1898,11 +1988,8 @@ def _permit_values(s, kind, hid, d, pid=None):
             owner = s.get(M.Employee, other.employeeId) if other.employeeId else s.get(M.Vehicle, other.vehicleId)
             name = (owner.name if other.employeeId else owner.plate) if owner is not None else ""
             return None, (f"رقم التصريح {pno} ({tp.nameAr}) مسجّل بالفعل لـ {name}", 409, True)
-    proj = d.get("projectId") or None
-    if proj and s.get(M.Project, proj) is None:
-        return None, ("العقد / المشروع غير موجود", 400, False)
     return {"tp": tp, "pno": pno, "issuer": (d.get("issuer") or "").strip() or None, "proj": proj, "issue": issue,
-            "expiry": expiry, "notes": (d.get("notes") or "").strip() or None,
+            "expiry": expiry, "notes": (d.get("notes") or "").strip() or None, "parentId": parent_id,
             "places": [x for x in dict.fromkeys(d.get("placeIds") or []) if s.get(M.PermitPlace, x) is not None]}, None
 
 
@@ -1918,6 +2005,7 @@ def _write_permit(s, p, kind, hid, who, v):
         s.add(p)
     p.typeId, p.permitNo, p.issuer = v["tp"].id, v["pno"], v["issuer"]
     p.projectId, p.issueDate, p.expiryDate, p.notes = v["proj"], v["issue"], v["expiry"], v["notes"]
+    p.parentId = v["parentId"]
     p.updatedAt, p.updatedBy = db.now(), uname()
     s.flush()
     s.query(M.PermitPlaceLink).filter(M.PermitPlaceLink.permitId == p.id).delete()
@@ -1928,7 +2016,27 @@ def _write_permit(s, p, kind, hid, who, v):
     db.log_audit(s, "permit_add" if new else "permit_edit", label, uname())
     if kind == "employee":
         db.push_timeline(s, hid, "permit", label, uname())
+    if not new:
+        _sync_children(s, p, v["tp"], who)
     return p
+
+
+def _sync_children(s, p, tp, who):
+    """الأساسي اتعدّل ← التصاريح المربوطة بيه اللي بتنتهي معاه (الرتقة) تاخد تاريخه وعقده، ويتسجّل في السجل."""
+    n = 0
+    for k in list(s.scalars(select(M.Permit).where(M.Permit.parentId == p.id))):
+        ktp = s.get(M.PermitType, k.typeId)
+        if ktp is None or not ktp.sameExpiry or (k.expiryDate == p.expiryDate and k.projectId == p.projectId):
+            continue
+        k.expiryDate, k.projectId = p.expiryDate, p.projectId
+        k.updatedAt, k.updatedBy = db.now(), uname()
+        label = (f"تعديل {ktp.nameAr}{' رقم ' + k.permitNo if k.permitNo else ''} لـ {who} مع «{tp.nameAr}» — "
+                 f"ينتهي {k.expiryDate.strftime('%d/%m/%Y')}")
+        db.log_audit(s, "permit_edit", label, uname())
+        if k.holderKind == "employee":
+            db.push_timeline(s, k.employeeId, "permit", label, uname())
+        n += 1 + _sync_children(s, k, ktp, who)
+    return n
 
 
 @app.post("/api/permits")
@@ -1969,29 +2077,46 @@ def save_permits_batch():
         who, e = _permit_holder(s, kind, hid, "edit")
         if e:
             return e
-        values, seen = [], set()
-        for r in rows:
-            v, problem = _permit_values(s, kind, hid, {**shared, **r})
+        # النوع المعتمد على نوع تاني في نفس الطلب (الرتقة مع الـ KOC) ← بيتحقق ويتكتب بعده وبيتربط بيه
+        types = [s.get(M.PermitType, r.get("typeId") or "") for r in rows]
+        at = {tp.id: i for i, tp in enumerate(types) if tp is not None}
+        dep = {i: at[tp.requiresTypeId] for i, tp in enumerate(types) if tp is not None and tp.requiresTypeId in at}
+        order = [i for i in range(len(rows)) if i not in dep] + [i for i in range(len(rows)) if i in dep]
+        values, seen = [None] * len(rows), set()
+        for i in order:
+            v, problem = _permit_values(s, kind, hid, {**shared, **rows[i]}, batch_parent=values[dep[i]] if i in dep else None)
             if problem:
-                tp = s.get(M.PermitType, r.get("typeId") or "")
+                tp = types[i]
                 return err((f"«{tp.nameAr}»: " if tp is not None else "") + problem[0], problem[1], block=problem[2])
             if v["pno"] and (v["tp"].id, v["pno"]) in seen:
                 return err(f"رقم التصريح {v['pno']} ({v['tp'].nameAr}) متكرر في نفس الطلب", 409, block=True)
             seen.add((v["tp"].id, v["pno"]))
-            values.append(v)
-        ids = [_write_permit(s, None, kind, hid, who, v).id for v in values]
+            values[i] = v
+        ids = [None] * len(rows)                 # بنفس ترتيب الطلب (الواجهة بترفع مرفق كل سطر على رقمه)
+        for i in order:
+            if i in dep:
+                values[i]["parentId"] = ids[dep[i]]
+            ids[i] = _write_permit(s, None, kind, hid, who, values[i]).id
     return jsonify({"ok": True, "ids": ids})
 
 
 @app.delete("/api/permits/<pid>")
 @login_required
 def delete_permit(pid):
+    """التصريح ← سلة المحذوفات، ومعاه التصاريح المربوطة بيه (الرتقة مع الـ KOC) — بعد تأكيد (?linked=1)."""
     with db.session_scope() as s:
         p, who, e = _permit_of(s, pid, "delete")
         if e:
             return e
         tp = s.get(M.PermitType, p.typeId)
+        kids = permit_children(s, p)
+        names = [f"{(s.get(M.PermitType, k.typeId) or M.PermitType(nameAr='تصريح')).nameAr}{' ' + k.permitNo if k.permitNo else ''}"
+                 for k in kids]
+        if kids and request.args.get("linked") != "1":
+            return err(f"مربوط بيه: {'، '.join(names)} — هيتنقلوا للسلة معاه", 409, warn=True, linked=names)
         label = f"حذف {tp.nameAr if tp else 'تصريح'}{' رقم ' + p.permitNo if p.permitNo else ''} من {who}"
+        if names:
+            label += f" (ومعاه: {'، '.join(names)})"
         db.log_audit(s, "permit_delete", label + " — اتنقل لسلة المحذوفات", uname())
         if p.holderKind == "employee":
             db.push_timeline(s, p.employeeId, "permit", label, uname())
@@ -2000,7 +2125,8 @@ def delete_permit(pid):
             company = aff.companyId if aff is not None else None
         else:
             company = (s.get(M.Vehicle, p.vehicleId) or M.Vehicle()).companyId
-        trash.trash_permit(s, p, f"{tp.nameAr if tp else 'تصريح'}{' ' + p.permitNo if p.permitNo else ''} — {who}", company, uname())
+        trash.trash_permit(s, p, f"{tp.nameAr if tp else 'تصريح'}{' ' + p.permitNo if p.permitNo else ''}"
+                                 f"{' + ' + ' + '.join(names) if names else ''} — {who}", company, uname(), [k.id for k in kids])
     return jsonify({"ok": True, "trash": True})
 
 
@@ -2082,12 +2208,39 @@ def _save_permit_list(model, prefix, rid, extra=None):
 def _applies_to(r, d):
     r.appliesTo = d.get("appliesTo") if d.get("appliesTo") in PERMIT_HOLDERS else None
     r.defaultIssuer = (d.get("defaultIssuer") or "").strip() or None
+    before = r.requiresTypeId
+    r.requiresTypeId = d.get("requiresTypeId") or None
+    r.sameExpiry = bool(r.requiresTypeId and d.get("sameExpiry"))
+    if r.requiresTypeId and r.requiresTypeId != before:          # تصاريحه الموجودة تتربط بأساسي من نفس الشخص
+        s = object_session(r)
+        s.flush()
+        link_dependents(s, r)
+
+
+def _requires_problem(s, rid, req):
+    """النوع المطلوب قبل النوع ده: موجود، ومش هو نفسه، ومن غير دايرة (أ محتاج ب وب محتاج أ) ← رسالة أو None."""
+    if not req:
+        return None
+    seen, cur = {rid}, req
+    while cur:
+        if cur in seen:
+            return "مينفعش: النوعين هيبقوا محتاجين بعض"
+        seen.add(cur)
+        tp = s.get(M.PermitType, cur)
+        if tp is None:
+            return "النوع المطلوب قبله غير موجود"
+        cur = tp.requiresTypeId
+    return None
 
 
 @app.post("/api/permit-types")
 @app.put("/api/permit-types/<rid>")
 @admin_required
 def save_permit_type(rid=None):
+    with db.session_scope(commit=False) as s:
+        msg = _requires_problem(s, rid or "", body().get("requiresTypeId"))
+    if msg:
+        return err(msg, 400, block=True)
     return _save_permit_list(M.PermitType, "pt", rid, _applies_to)
 
 
@@ -2115,6 +2268,10 @@ def _delete_permit_list(model, rid, used):
 @app.delete("/api/permit-types/<rid>")
 @admin_required
 def delete_permit_type(rid):
+    with db.session_scope(commit=False) as s:
+        need = [t.nameAr for t in s.scalars(select(M.PermitType).where(M.PermitType.requiresTypeId == rid))]
+    if need:
+        return err(f"مش هينفع الحذف: النوع ده مطلوب قبل «{'، '.join(need)}» — شيل الشرط من هناك الأول", 409, block=True)
     return _delete_permit_list(M.PermitType, rid, select(func.count()).select_from(M.Permit).where(M.Permit.typeId == rid))
 
 

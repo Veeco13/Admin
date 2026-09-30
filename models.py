@@ -75,7 +75,7 @@ class Project(Base):
     fileNumber: Mapped[Optional[str]] = col("file_number", SHORT, index=True)      # الرقم المدني للترخيص
     laborOffice: Mapped[Optional[str]] = col("labor_office", NAME)
     expiryDate: Mapped[Optional[date]] = col("expiry_date", Date)                   # نهاية الترخيص
-    kind: Mapped[Optional[str]] = col("kind", String(20))                           # main ترخيص رئيسي | gov عقد حكومي
+    kind: Mapped[Optional[str]] = col("kind", String(20))                           # main ترخيص رئيسي | gov عقد حكومي | sub عقد من الباطن
     contractNo: Mapped[Optional[str]] = col("contract_no", SHORT)                   # رقم العقد الحكومي
     agencyId: Mapped[Optional[str]] = col("agency_id", ID, fk("agencies.id"))       # الوكالة اللي العقد تابع لها
     startDate: Mapped[Optional[date]] = col("start_date", Date)                     # بداية الترخيص
@@ -517,6 +517,10 @@ class PermitType(Base):
     appliesTo: Mapped[Optional[str]] = col("applies_to", String(10))           # employee | vehicle | فاضي = الاتنين
     position: Mapped[int] = col("position", Integer, nullable=False, default=0)
     defaultIssuer: Mapped[Optional[str]] = col("default_issuer", NAME)          # الجهة المانحة اللي بتتملى لوحدها
+    # تصريح بيعتمد على تصريح تاني (الرتقة والعبدلي ← KOC): مايطلعش غير لو صاحبه معاه تصريح ساري من النوع ده،
+    # و sameExpiry ← بينتهي مع تاريخه وعلى نفس عقده. من غير FK (مرجع لنفس الجدول — الترتيب في الاستعادة مايفرقش)
+    requiresTypeId: Mapped[Optional[str]] = col("requires_type_id", ID)
+    sameExpiry: Mapped[Optional[bool]] = col("same_expiry", Boolean)
 
 
 class PermitPlace(Base):
@@ -528,13 +532,16 @@ class PermitPlace(Base):
 
 
 class Permit(Base):
-    """تصريح لموظف أو لعربية: النوع والرقم والجهة المانحة والأماكن، ومربوط بعقد / مشروع (الافتراضي عقد صاحبه)."""
+    """تصريح لموظف أو لعربية: النوع والرقم والجهة المانحة والأماكن، وطالع على عقد (حكومي أو من الباطن — الافتراضي
+    عقد صاحبه) وهو اللي بيحد تاريخه مع الإقامة / التأمين / الدفتر."""
     __tablename__ = "permits"
     id: Mapped[str] = col("id", ID, primary_key=True)
     holderKind: Mapped[str] = col("holder_kind", String(10), nullable=False)    # employee | vehicle
     employeeId: Mapped[Optional[str]] = col("employee_id", ID, fk("employees.id"), index=True)
     vehicleId: Mapped[Optional[str]] = col("vehicle_id", ID, fk("vehicles.id"), index=True)
     typeId: Mapped[str] = col("type_id", ID, fk("permit_types.id"), nullable=False)
+    # التصريح الأساسي اللي ده معتمد عليه (الرتقة ← الـ KOC بتاعه) — من غير FK زي requiresTypeId
+    parentId: Mapped[Optional[str]] = col("parent_id", ID, index=True)
     permitNo: Mapped[Optional[str]] = col("permit_no", SHORT)
     issuer: Mapped[Optional[str]] = col("issuer", NAME)                          # الجهة المانحة
     projectId: Mapped[Optional[str]] = col("project_id", ID, fk("projects.id"))

@@ -109,12 +109,13 @@ def trash_candidate(s, c, user):
     return _save(s, t, rows, {}, [], {})
 
 
-def trash_permit(s, p, label, company_id, user):
+def trash_permit(s, p, label, company_id, user, linked=()):
+    """التصريح ومعاه التصاريح المربوطة بيه (linked — الرتقة مع الـ KOC) في نفس السجل ← بيرجعوا مع بعض."""
     t = _new("permit", p.id, label, [company_id], user)
     files = []
     rows = {}
-    rows["permits"], rows["permit_place_links"] = _take_permits(s, t, M.Permit.id == p.id, files)
-    return _save(s, t, rows, {}, files, {})
+    rows["permits"], rows["permit_place_links"] = _take_permits(s, t, M.Permit.id.in_([p.id, *linked]), files)
+    return _save(s, t, rows, {}, files, {"permits": len(rows["permits"])} if linked else {})
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +165,9 @@ def restore(s, t):
                     r[col] = None
     rows["permits"] = [r for r in rows.get("permits") or [] if exists(M.PermitType, r.get("type_id"))]
     kept = {r["id"] for r in rows["permits"]}
+    for r in rows["permits"]:                 # التصريح الأساسي (الـ KOC) اتمسح من وقتها ← الربط بيتشال
+        if r.get("parent_id") and r["parent_id"] not in kept and not exists(M.Permit, r["parent_id"]):
+            r["parent_id"] = None
     rows["permit_place_links"] = [r for r in rows.get("permit_place_links") or [] if r["permit_id"] in kept and exists(M.PermitPlace, r["place_id"])]
     for f in data.get("files") or []:
         _move(f["to"], f["from"])

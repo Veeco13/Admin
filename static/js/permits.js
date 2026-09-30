@@ -4,21 +4,26 @@
    عرض «قايمة» وعرض «مين معاه إيه» (مصفوفة: صاحب التصريح × نوع التصريح).
    بيانات الموظف / العربية بتيجي من مركز الإقامات والموظفين ومركز السيارات (STATE.permitHolders) للعرض بس.
    كل نوع تصريح (KOC، الرتقة والعبدلي، الوفرة…) بيتسجّل لوحده برقمه وتواريخه، و«🔄 تجديد» بيعمل تصريح جديد
-   والقديم بيفضل تاريخ (مالوش تنبيه). العقد / المشروع اختياري. الأنواع والأماكن لمدير النظام.
+   والقديم بيفضل تاريخ (مالوش تنبيه). العقد مطلوب (حكومي أو من الباطن) وهو اللي بيحد التاريخ مع الإقامة /
+   التأمين / الدفتر. النوع المعتمد على نوع تاني (الرتقة ← KOC) مايطلعش غير مع أساسي ساري وبينتهي معاه وعلى
+   عقده. الأنواع والأماكن لمدير النظام.
    ===================================================================== */
 const PERMIT_HOLDERS = {
   employee: { l: 'موظف', ico: '👤', tab: 'تصاريح الموظفين', report: 'تقرير تصاريح الموظفين', csv: 'employee-permits' },
   vehicle:  { l: 'سيارة', ico: '🚗', tab: 'تصاريح السيارات', report: 'تقرير تصاريح السيارات', csv: 'vehicle-permits' },
 };
 const PERMIT_APPLIES = { '': 'الموظفين والسيارات', employee: 'الموظفين بس', vehicle: 'السيارات بس' };
-const PERMIT_GROUPS = { '': 'بدون تجميع', type: 'النوع', place: 'المكان', company: 'الشركة', issuer: 'الجهة المانحة' };
+const PERMIT_GROUPS = { '': 'بدون تجميع', type: 'النوع', project: 'العقد', place: 'المكان', company: 'الشركة', issuer: 'الجهة المانحة' };
 const PERMIT_FILTER_DEFAULT = { q: '', type: '', place: '', company: '', tier: '', status: '', ended: false, old: false, view: 'list', mType: '', mState: '', mAll: false };
 // ملخص فوق كل قايمة (بالضغط بيفلتر)
 const PERMIT_STATUS = {
   valid:   { l: 'ساري',          test: d => d !== null && d >= 0 },
   expired: { l: 'منتهي',         test: d => d !== null && d < 0 },
   soon:    { l: 'خلال 30 يوم',   test: d => d !== null && d >= 0 && d <= 30 },
+  // الرتقة اللي الـ KOC بتاعه اتجدّد (فيه KOC ساري أبعد) ← مستني تجديده هو كمان
+  renew:   { l: 'جاهز للتجديد مع التصريح الأساسي', fn: p => !!permitDepRenew(p) },
 };
+function permitStatusIs(p, st) { const x = PERMIT_STATUS[st]; return !!x && (x.fn ? x.fn(p) : x.test(daysUntil(p.expiryDate))); }
 // فلتر المصفوفة على نوع واحد
 const PERMIT_MSTATE = { has: 'عنده', none: 'مش عنده', expired: 'عنده ومنتهي', soon: 'عنده وبينتهي خلال 30 يوم' };
 
@@ -40,13 +45,28 @@ function holderName(kind, h) { return !h ? '' : kind === 'employee' ? (LANG === 
 function permitHolderName(p) { return holderName(p.holderKind, permitHolder(p)); }
 function holderDriver(h) { return LANG === 'en' && h.driverNameEn ? h.driverNameEn : h.driverName || ''; }
 function permitTypesFor(kind) { return (STATE.permitTypes || []).filter(tp => !tp.appliesTo || tp.appliesTo === kind); }
-function permitProjectOptions(sel) {
-  return opt('', t('— بدون —'), !sel) + scopedProjects().slice().sort((a, b) => projectSortKey(a).localeCompare(projectSortKey(b), 'ar'))
-    .map(p => opt(p.id, projectName(p.id) + (p.contractNo ? ' · ' + p.contractNo : ''), p.id === sel)).join('');
+// العقود اللي التصاريح بتطلع عليها (وبتحد تاريخها): العقد الحكومي والعقد من الباطن — نفس PERMIT_PROJECT_KINDS على السيرفر
+const PERMIT_PROJECT_KINDS = ['gov', 'sub'];
+function permitProjectOk(pr) { return !!pr && PERMIT_PROJECT_KINDS.includes(pr.kind); }
+function projectEnded(pr) { return !!(pr && pr.expiryDate && pr.expiryDate < todayISO()); }
+function permitProjectLabel(id, withEnd = true) {
+  const pr = IDX.project[id];
+  if (!pr) return '';
+  return projectName(id) + (pr.contractNo ? ' · ' + pr.contractNo : '') + (pr.kind === 'sub' ? ` (${t('من الباطن')})` : '')
+    + (withEnd && pr.expiryDate ? ` — ${t('لحد')} ${fmtDate(pr.expiryDate)}` : '');
 }
-/** أقصى تاريخ للتصريح = أقرب تاريخ من: الموظف ← الإقامة ونهاية العقد اللي مسجّل عليه (إذن العمل مش داخل)،
-    والعربية ← نهاية العقد والتأمين والدفتر. [{l, d}] الأقرب الأول (نفس permit_cap على السيرفر). */
-function permitCaps(kind, h) {
+/** قايمة العقود في التصريح: الحكومية واللي من الباطن بس، واللي خلص مايظهرش (إلا لو هو عقد التصريح نفسه) */
+function permitProjectOptions(sel) {
+  const list = scopedProjects().filter(pr => permitProjectOk(pr) && (!projectEnded(pr) || pr.id === sel))
+    .sort((a, b) => projectSortKey(a).localeCompare(projectSortKey(b), 'ar'));
+  if (sel && IDX.project[sel] && !list.some(pr => pr.id === sel)) list.unshift(IDX.project[sel]);
+  return opt('', t('— اختار العقد —'), !sel) + list.map(pr => opt(pr.id, permitProjectLabel(pr.id), pr.id === sel)).join('');
+}
+/** العقد اللي بيتختار لوحده: العقد اللي صاحب التصريح مسجّل عليه — لو حكومي أو من الباطن ولسه ماخلصش */
+function permitDefaultProject(h) { const pr = h && IDX.project[h.projectId]; return permitProjectOk(pr) && !projectEnded(pr) ? pr.id : ''; }
+/** أقصى تاريخ للتصريح = أقرب تاريخ من: الموظف ← الإقامة (إذن العمل مش داخل)، والعربية ← التأمين والدفتر —
+    ونهاية العقد اللي التصريح طالع عليه (مش العقد اللي صاحبه مسجّل عليه). [{l, d}] الأقرب الأول (نفس permit_cap على السيرفر). */
+function permitCaps(kind, h, projectId) {
   if (!h) return [];
   const out = [];
   if (kind === 'employee') { if (h.residencyExp) out.push({ l: t('الإقامة'), d: h.residencyExp }); }
@@ -54,11 +74,30 @@ function permitCaps(kind, h) {
     if (h.insuranceExpiry) out.push({ l: t('التأمين'), d: h.insuranceExpiry });
     if (h.govLicenseExpiry) out.push({ l: t('الدفتر'), d: h.govLicenseExpiry });
   }
-  if (h.contractEnd) out.push({ l: `${t('العقد')}${h.projectId && IDX.project[h.projectId] ? ' ' + projectName(h.projectId) : ''}`, d: h.contractEnd });
+  const pr = IDX.project[projectId];
+  if (permitProjectOk(pr) && pr.expiryDate) out.push({ l: `${t('العقد')} ${projectName(pr.id)}`, d: pr.expiryDate });
   return out.sort((a, b) => a.d.localeCompare(b.d));
 }
+/* ---------- التصريح المعتمد على تصريح تاني (الرتقة والعبدلي ← KOC) ---------- */
+/** النوع اللي لازم يبقى معاه ساري قبل النوع ده */
+function permitReqType(typeId) { const tp = IDX.permitType[typeId]; return tp && tp.requiresTypeId ? IDX.permitType[tp.requiresTypeId] || null : null; }
+function permitParent(p) { return p && p.parentId ? IDX.permit[p.parentId] || null : null; }
+function permitKids(p) { return (STATE.permits || []).filter(x => x.parentId === p.id); }
+function permitNoText(p) { return p && p.permitNo ? ` ${t('رقم')} ${p.permitNo}` : ''; }
+/** الأساسي الساري الأبعد انتهاءً لصاحب التصريح (نفس permit_parent_for على السيرفر) */
+function holderParentPermit(kind, hid, typeId) {
+  return permitsOf(kind, hid).filter(q => q.typeId === typeId && permitValid(q))
+    .sort((a, b) => String(b.expiryDate).localeCompare(String(a.expiryDate)) || String(b.createdAt || '').localeCompare(String(a.createdAt || '')))[0] || null;
+}
+/** المعتمد جاهز للتجديد: الأساسي بتاعه اتجدّد (فيه أساسي ساري أبعد من تاريخه) ← الأساسي الجديد، أو null */
+function permitDepRenew(p) {
+  const req = permitReqType(p.typeId);
+  if (!req || !permitCurrent(p) || permitNeedsCancel(p)) return null;
+  const par = permitParent(p), nw = holderParentPermit(p.holderKind, permitHolderId(p), req.id);
+  return nw && (!par || nw.id !== par.id) && nw.expiryDate > (p.expiryDate || '') ? nw : null;
+}
 /** التصريح مربوط بأنهي تاريخ (تاريخه = تاريخ من تواريخ الحد) */
-function permitTiedTo(p) { return permitCaps(p.holderKind, permitHolder(p)).find(c => c.d === p.expiryDate) || null; }
+function permitTiedTo(p) { return permitCaps(p.holderKind, permitHolder(p), p.projectId).find(c => c.d === p.expiryDate) || null; }
 /** الموظف مستقيل / إنهاء خدمات / في فترة إنذار وتصريحه لسه ساري ← لازم يتلغي */
 function permitNeedsCancel(p) {
   const h = permitHolder(p);
@@ -66,16 +105,26 @@ function permitNeedsCancel(p) {
 }
 /** التصريح قرّب ينتهي (90 يوم) والحد بقى أبعد (الإقامة أو العقد اتجددوا) ← ممكن يتجدد لحد الحد الجديد */
 function permitRenewHint(p) {
-  if (!permitCurrent(p) || permitNeedsCancel(p)) return null;
+  if (!permitCurrent(p) || permitNeedsCancel(p) || permitReqType(p.typeId)) return null;     // المعتمد ← permitDepRenew
   const d = daysUntil(p.expiryDate);
   if (d === null || d > 90) return null;
-  const cs = permitCaps(p.holderKind, permitHolder(p));
+  const cs = permitCaps(p.holderKind, permitHolder(p), p.projectId);
   return cs.length && cs[0].d > p.expiryDate ? cs[0] : null;
 }
 function permitFlagsHtml(p) {
-  const tie = permitTiedTo(p), hint = permitRenewHint(p), cap = permitCaps(p.holderKind, permitHolder(p))[0];
+  const req = permitReqType(p.typeId);
+  if (req) {
+    const par = permitParent(p), nw = permitDepRenew(p), cur = permitCurrent(p), rn = esc(permitTypeName(req));
+    return `${par ? `<div class="small muted">🔗 ${t('مع')} ${rn}${esc(permitNoText(par))}</div>` : ''}
+      ${cur && !par ? `<div class="small" style="color:var(--red)">⛔ ${t('من غير')} ${rn}</div>` : ''}
+      ${cur && par && permitValid(p) && !permitValid(par) ? `<div class="small" style="color:var(--red)">⛔ ${rn} ${t('بتاعه منتهي')}</div>` : ''}
+      ${permitNeedsCancel(p) ? `<div class="small" style="color:var(--red)">⚠️ ${t('لازم يتلغي')}</div>` : ''}
+      ${nw ? `<div class="small" style="color:var(--green)">🔄 ${t('جاهز للتجديد')} — ${rn} ${t('الجديد لحد')} ${fmtDate(nw.expiryDate)}</div>` : ''}`;
+  }
+  const tie = permitTiedTo(p), hint = permitRenewHint(p), cap = permitCaps(p.holderKind, permitHolder(p), p.projectId)[0];
   const over = cap && permitCurrent(p) && p.expiryDate > cap.d;       // اتسجّل قبل قاعدة «أقرب تاريخ»
   return `${tie ? `<div class="small muted">🔗 ${t('مع')} ${esc(tie.l)}</div>` : ''}
+    ${!p.projectId && permitCurrent(p) ? `<div class="small" style="color:var(--orange)">⚠️ ${t('من غير عقد')}</div>` : ''}
     ${over ? `<div class="small" style="color:var(--red)" title="${esc(t('تاريخ التصريح بعد أقرب تاريخ مسموح — راجعه'))}">⛔ ${t('بعد')} ${esc(cap.l)} (${fmtDate(cap.d)})</div>` : ''}
     ${permitNeedsCancel(p) ? `<div class="small" style="color:var(--red)">⚠️ ${t('لازم يتلغي')}</div>` : ''}
     ${hint ? `<div class="small" style="color:var(--green)">🔄 ${t('ممكن يتجدد لحد')} ${fmtDate(hint.d)} (${esc(hint.l)})</div>` : ''}`;
@@ -155,10 +204,11 @@ function openPermitAddModal(kind, preset) {
   const fixedHolder = pre.holderId || '';
   const types = permitTypesFor(kind), places = STATE.permitPlaces || [];
   const noun = kind === 'employee' ? 'للموظف' : 'للسيارة';
+  const h0 = fixedHolder ? holderOf(kind, fixedHolder) : null;
   const m = openModal({
     title: `${PERMIT_HOLDERS[kind].ico} ${t('إضافة تصاريح')} — ${t(PERMIT_HOLDERS[kind].l)}`, size: 'wide',
     body: `${fixedHolder ? '' : permitHolderPicker(kind)}
-      <div id="permit-holder" style="margin:8px 0 4px">${fixedHolder ? holderCardHtml(kind, holderOf(kind, fixedHolder)) : ''}</div>
+      <div id="permit-holder" style="margin:8px 0 4px">${fixedHolder ? holderCardHtml(kind, h0) : ''}</div>
       <div id="pa-has"></div>
       <div class="small muted" style="margin:8px 0 4px"><span class="req">${t('التصاريح اللي طالعة')} ${t(noun)}</span> — ${t('علّم على كل الأنواع، وكل نوع هيطلع له سطر')}</div>
       <div class="row" style="flex-wrap:wrap;gap:4px 18px">${types.map(tp => `<label class="check"><input type="checkbox" data-type="${tp.id}" ${tp.id === pre.typeId ? 'checked' : ''}> <b>${esc(permitTypeName(tp))}</b> <span class="small muted" data-has="${tp.id}"></span></label>`).join('')
@@ -166,77 +216,132 @@ function openPermitAddModal(kind, preset) {
       <div id="pa-table" style="margin-top:10px" hidden>
         <div class="row" style="margin-bottom:4px"><span class="small" id="pa-cap"></span><span class="spacer"></span><button type="button" class="btn sm" id="pa-same" hidden>📅 ${t('نفس التواريخ للكل')}</button></div>
         <div class="table-wrap"><table class="data"><thead><tr><th>${t('النوع')}</th><th>${t('رقم التصريح')}</th><th>${t('الجهة المانحة')}</th><th>${t('تاريخ الإصدار')}</th><th><span class="req">${t('تاريخ الانتهاء')}</span></th><th class="pa-filecol">${t('المرفق')}</th></tr></thead>
-          <tbody>${types.map(tp => `<tr data-row="${tp.id}" hidden><td style="white-space:nowrap"><b>${esc(permitTypeName(tp))}</b></td>
+          <tbody>${types.map(tp => `<tr data-row="${tp.id}" hidden><td style="white-space:nowrap"><b>${esc(permitTypeName(tp))}</b><div class="small muted" data-dep-note></div></td>
             <td><input data-f="permitNo" dir="ltr" style="width:100px"></td>
             <td><input data-f="issuer" list="dl-permit-issuer" value="${esc(tp.defaultIssuer || '')}" style="width:170px"></td>
-            <td><input type="date" data-f="issueDate"></td><td><input type="date" data-f="expiryDate"></td>
+            <td><input type="date" data-f="issueDate"></td><td><input type="date" data-f="expiryDate" ${permitReqType(tp.id) && tp.sameExpiry ? `readonly title="${esc(t('بيتحط لوحده بتاريخ التصريح الأساسي'))}"` : ''}></td>
             <td class="pa-filecol"><input type="file" data-f="file" accept=".pdf,image/*" style="width:150px;font-size:11px"></td></tr>`).join('')}</tbody></table></div>
         <datalist id="dl-permit-issuer">${permitIssuers().map(i => `<option value="${esc(i)}">`).join('')}</datalist></div>
       <div class="form" style="margin-top:10px">
-        <label title="${esc(t('العقد أو المشروع اللي التصريح طالع عليه — ممكن يختلف عن عقد صاحبه ومكان شغله'))}">${t('العقد / المشروع (اختياري)')}<select name="projectId">${permitProjectOptions('')}</select></label>
+        <label title="${esc(t('العقد اللي التصريح طالع عليه (حكومي أو من الباطن) — ممكن يختلف عن العقد اللي صاحبه مسجّل عليه، وهو اللي بيحدد أقصى تاريخ'))}"><span class="req">${t('العقد')}</span><select name="projectId">${permitProjectOptions(permitDefaultProject(h0))}</select></label>
         <label>${t('ملاحظات')}<input name="notes"></label>
+        <div class="small" id="pa-proj-note" style="grid-column:1/-1"></div>
         ${places.length ? `<div style="grid-column:1/-1"><div class="small muted" style="margin-bottom:4px">${t('الأماكن')}</div>
           <div class="row" style="flex-wrap:wrap;gap:4px 14px">${places.map(pl => `<label class="check"><input type="checkbox" data-place="${pl.id}"> ${esc(permitPlaceName(pl))}</label>`).join('')}</div></div>` : ''}
         <div style="grid-column:1/-1"><label class="check"><input type="checkbox" id="pa-onefile"> 📎 ${t('مرفق واحد للكل (التصاريح متصوّرة في ملف واحد)')}</label>
           <input type="file" id="pa-file" accept=".pdf,image/*" hidden style="margin-top:4px"></div>
       </div>
-      <div class="small muted" style="margin-top:8px">${t('العقد والأماكن والملاحظات بتتسجّل على كل التصاريح، وتقدر تعدّل أي تصريح لوحده بعدين.')}</div>`,
+      <div class="small muted" style="margin-top:8px">${t('العقد والأماكن والملاحظات بتتسجّل على كل التصاريح، وتقدر تعدّل أي تصريح لوحده بعدين. والتصريح المربوط بتصريح أساسي (زي الرتقة مع الـ KOC) بياخد تاريخه وعقده.')}</div>`,
     foot: `<button class="btn primary write-only" data-p="permits.edit" data-save>${t('حفظ')}</button><button class="btn" data-close>${t('إلغاء')}</button>`,
   });
   const E = m.el;
   const rows = () => $$('tr[data-row]', E).filter(r => !r.hidden);
   const field = (r, f) => $(`[data-f="${f}"]`, r);
-  let autoExp = '';
-  const syncHolder = () => {
-    const hid = pickedPermitHolder(E, kind, fixedHolder), cs = hid ? permitCaps(kind, holderOf(kind, hid)) : [];
-    if (!fixedHolder) $('#permit-holder', E).innerHTML = hid ? holderCardHtml(kind, holderOf(kind, hid)) : '';
-    $('#pa-has', E).innerHTML = hid ? holderPermitsHtml(kind, hid) : '';
-    bindHolderPermits($('#pa-has', E), () => m.close());
+  const projSel = $('[name=projectId]', E);
+  const box = id => $(`[data-type="${id}"]`, E);
+  const holder = () => { const hid = pickedPermitHolder(E, kind, fixedHolder); return hid ? { hid, h: holderOf(kind, hid) } : null; };
+  /** الأساسي للنوع المعتمد (الرتقة ← KOC): سطره في نفس الشاشة (row) أو الساري عند صاحبه (par) — أو null للنوع العادي */
+  const depOf = typeId => {
+    const req = permitReqType(typeId);
+    if (!req) return null;
+    const same = !!(IDX.permitType[typeId] || {}).sameExpiry, b = box(req.id);
+    if (b && b.checked) return { req, same, row: $(`tr[data-row="${req.id}"]`, E) };
+    const H = holder();
+    return { req, same, par: H ? holderParentPermit(kind, H.hid, req.id) : null };
+  };
+  // السطور المعتمدة بتاخد تاريخ الأساسي (سطره اللي فوق وإنت بتكتبه، أو تصريحه الساري)
+  const fillDeps = () => rows().forEach(r => {
+    const d = depOf(r.dataset.row), note = $('[data-dep-note]', r), inp = field(r, 'expiryDate');
+    if (!d) { note.textContent = ''; return; }
+    const pexp = d.row ? field(d.row, 'expiryDate').value : d.par ? d.par.expiryDate : '';
+    if (d.same) inp.value = pexp || '';
+    else if (pexp && (!inp.max || pexp < inp.max)) inp.max = pexp;
+    note.textContent = d.row ? `🔗 ${t('مع')} ${permitTypeName(d.req)} ${t(d.same ? 'اللي فوق — بنفس تاريخه وعقده' : 'اللي فوق — مايعدّيش تاريخه')}`
+      : d.par ? `🔗 ${t('مع')} ${permitTypeName(d.req)}${permitNoText(d.par)} — ${permitProjectLabel(d.par.projectId, false)}` : '';
+  });
+  let autoExp = '', autoProj = projSel.value, lastHid = null;
+  const sync = () => {
+    const H = holder(), hid = H ? H.hid : '';
+    if (hid !== lastHid) {             // صاحب جديد ← العقد اللي مسجّل عليه بيتختار (لو الاختيار لسه تلقائي)
+      if (!fixedHolder) $('#permit-holder', E).innerHTML = hid ? holderCardHtml(kind, H.h) : '';
+      $('#pa-has', E).innerHTML = hid ? holderPermitsHtml(kind, hid) : '';
+      bindHolderPermits($('#pa-has', E), () => m.close());
+      if (!projSel.value || projSel.value === autoProj) { autoProj = hid ? permitDefaultProject(H.h) : ''; projSel.value = autoProj; }
+      lastHid = hid;
+    }
+    // النوع المعتمد متاح بس لو معاه أساسي ساري أو متعلّم عليه هنا
     types.forEach(tp => {
       const cur = hid ? holderCurrentPermits(kind, hid, tp.id).filter(permitValid) : [];
-      $(`[data-has="${tp.id}"]`, E).textContent = cur.length ? `(${t('عنده ساري لحد')} ${fmtDate(cur[cur.length - 1].expiryDate)})` : '';
+      const d = depOf(tp.id), ok = !d || !!d.row || !!d.par, c = box(tp.id);
+      c.disabled = !ok;
+      if (!ok && c.checked) c.checked = false;
+      $(`[data-has="${tp.id}"]`, E).textContent = !ok ? `(${t('محتاج')} ${permitTypeName(d.req)} ${t('ساري')})`
+        : cur.length ? `(${t('عنده ساري لحد')} ${fmtDate(cur[cur.length - 1].expiryDate)})` : '';
     });
-    // أقصى تاريخ = أقرب تاريخ (الإقامة / العقد / التأمين / الدفتر) ← بيتحط لوحده في كل سطر، والتاريخ بعده ممنوع
-    const cap = cs.length ? cs[0].d : '';
-    $$('[data-f="expiryDate"]', E).forEach(i => { i.max = cap; if (!i.value || i.value === autoExp) i.value = cap; });
-    autoExp = cap;
-    $('#pa-cap', E).innerHTML = permitCapText(kind, hid, cs);
-  };
-  const syncRows = () => {
     $$('[data-type]', E).forEach(c => { $(`tr[data-row="${c.dataset.type}"]`, E).hidden = !c.checked; });
-    const n = rows().length;
-    $('#pa-table', E).hidden = !n;
-    $('#pa-same', E).hidden = n < 2;
+    const vis = rows();
+    $('#pa-table', E).hidden = !vis.length;
+    $('#pa-same', E).hidden = vis.length < 2;
+    // العقد مش محتاج لو كل السطور بتاخد عقد أساسي معاه بالفعل
+    const needProj = !vis.length || vis.some(r => { const d = depOf(r.dataset.row); return !d || !d.same || !!d.row; });
+    projSel.disabled = !needProj;
+    // أقصى تاريخ = أقرب تاريخ (الإقامة / العقد المختار / التأمين / الدفتر) ← بيتحط لوحده في كل سطر، والتاريخ بعده ممنوع
+    const cs = hid ? permitCaps(kind, H.h, projSel.value) : [], cap = cs.length ? cs[0].d : '';
+    vis.filter(r => !(depOf(r.dataset.row) || {}).same).forEach(r => {
+      const inp = field(r, 'expiryDate');
+      inp.max = cap;
+      if (!inp.value || inp.value === autoExp) inp.value = cap;
+    });
+    autoExp = cap;
+    fillDeps();
+    $('#pa-cap', E).innerHTML = !hid || !needProj ? '' : projSel.value ? permitCapText(kind, hid, cs)
+      : `<span style="color:var(--orange)">⚠️ ${t('اختار العقد اللي التصريح طالع عليه — هو اللي بيحدد أقصى تاريخ')}</span>`;
+    const reg = H && H.h.projectId && IDX.project[H.h.projectId];
+    $('#pa-proj-note', E).innerHTML = needProj && reg && projSel.value && projSel.value !== reg.id
+      ? `ℹ️ ${t(kind === 'employee' ? 'الموظف مسجّل على' : 'السيارة مسجّلة على')} <b>${esc(projectName(reg.id))}</b> — ${t('التصريح طالع على')} <b>${esc(projectName(projSel.value))}</b>` : '';
   };
-  $$('[data-type]', E).forEach(c => c.onchange = syncRows);
+  $$('[data-type]', E).forEach(c => c.onchange = sync);
+  projSel.onchange = sync;
+  E.addEventListener('input', ev => { if (ev.target.dataset && ev.target.dataset.f === 'expiryDate') fillDeps(); });
   const pick = $('[name=holderPick]', E);
-  if (pick) { pick.addEventListener('change', syncHolder); pick.addEventListener('input', syncHolder); pick.focus(); }
-  syncHolder(); syncRows();
+  if (pick) { pick.addEventListener('change', sync); pick.addEventListener('input', sync); pick.focus(); }
+  sync();
   $('#pa-same', E).onclick = () => {
     const [first, ...rest] = rows();
-    rest.forEach(r => ['issueDate', 'expiryDate'].forEach(f => { field(r, f).value = field(first, f).value; }));
+    rest.forEach(r => {
+      field(r, 'issueDate').value = field(first, 'issueDate').value;
+      if (!field(r, 'expiryDate').readOnly) field(r, 'expiryDate').value = field(first, 'expiryDate').value;
+    });
+    fillDeps();
   };
   const one = $('#pa-onefile', E);
   one.onchange = () => { $('#pa-file', E).hidden = !one.checked; $$('.pa-filecol', E).forEach(c => { c.hidden = one.checked; }); };
   $('[data-save]', E).onclick = async ev => {
-    const hid = pickedPermitHolder(E, kind, fixedHolder);
-    if (!hid) return openBlockAlert(t(kind === 'employee' ? 'اختار الموظف من القايمة' : 'اختار السيارة'));
+    const H = holder();
+    if (!H) return openBlockAlert(t(kind === 'employee' ? 'اختار الموظف من القايمة' : 'اختار السيارة'));
+    const hid = H.hid;
+    fillDeps();
     const list = rows().map(r => ({ r, typeId: r.dataset.row, permitNo: field(r, 'permitNo').value.trim(), issuer: field(r, 'issuer').value.trim(),
-      issueDate: field(r, 'issueDate').value, expiryDate: field(r, 'expiryDate').value }));
+      issueDate: field(r, 'issueDate').value, expiryDate: field(r, 'expiryDate').value, dep: depOf(r.dataset.row) }));
     if (!list.length) return openBlockAlert(t('علّم على نوع تصريح واحد على الأقل'));
-    const caps = permitCaps(kind, holderOf(kind, hid));
+    const projectId = projSel.disabled ? '' : projSel.value;
+    if (!projSel.disabled && !projectId) return openBlockAlert(t('اختار العقد اللي التصريح طالع عليه'));
+    const caps = permitCaps(kind, H.h, projectId);
     for (const x of list) {
       const name = permitTypeName(IDX.permitType[x.typeId]);
+      if (x.dep && !x.dep.row && !x.dep.par) return openBlockAlert(`«${name}»: ${t('محتاج')} «${permitTypeName(x.dep.req)}» ${t('ساري')}`);
       if (!x.expiryDate) return openBlockAlert(`«${name}»: ${t('تاريخ الانتهاء مطلوب')}`);
       if (x.issueDate && x.issueDate > x.expiryDate) return openBlockAlert(`«${name}»: ${t('تاريخ الإصدار بعد تاريخ الانتهاء')}`);
+      if (x.dep && x.dep.same) continue;                       // تاريخه تاريخ الأساسي
       if (caps.length && x.expiryDate > caps[0].d) return openBlockAlert(`«${name}»: ${t('مش هينفع: التصريح بينتهي بعد')} ${caps[0].l} (${fmtDate(caps[0].d)}). ${t(kind === 'employee' ? 'لو اتجدد، حدّث تاريخه في مركز الإقامات والموظفين أو العقود الأول.' : 'لو اتجدد، حدّث تاريخه في مركز السيارات أو العقود الأول.')}`);
     }
     // نوع عنده منه تصريح ساري ← تأكيد واحد للكل (التجديد من «🔄 تجديد» في التصريح القديم)
     const dup = list.map(x => [x, holderCurrentPermits(kind, hid, x.typeId).filter(permitValid)]).filter(([, s]) => s.length);
-    if (dup.length && !await openConfirm(`${esc(holderName(kind, holderOf(kind, hid)))} ${t('عنده بالفعل')}: ${dup.map(([x, s]) => `«${esc(permitTypeName(IDX.permitType[x.typeId]))}» ${t('ساري لحد')} ${fmtDate(s[s.length - 1].expiryDate)}`).join('، ')}.\n${t('لو ده تجديد، استخدم «🔄 تجديد» من التصريح القديم. تضيف تصريح تاني؟')}`, { okLabel: t('إضافة') })) return;
-    const payload = { holderKind: kind, holderId: hid, projectId: $('[name=projectId]', E).value, notes: $('[name=notes]', E).value,
+    if (dup.length && !await openConfirm(`${esc(holderName(kind, H.h))} ${t('عنده بالفعل')}: ${dup.map(([x, s]) => `«${esc(permitTypeName(IDX.permitType[x.typeId]))}» ${t('ساري لحد')} ${fmtDate(s[s.length - 1].expiryDate)}`).join('، ')}.\n${t('لو ده تجديد، استخدم «🔄 تجديد» من التصريح القديم. تضيف تصريح تاني؟')}`, { okLabel: t('إضافة') })) return;
+    const payload = { holderKind: kind, holderId: hid, projectId, notes: $('[name=notes]', E).value,
       placeIds: $$('[data-place]', E).filter(c => c.checked).map(c => c.dataset.place),
-      permits: list.map(({ typeId, permitNo, issuer, issueDate, expiryDate }) => ({ typeId, permitNo, issuer, issueDate, expiryDate })) };
+      permits: list.map(({ typeId, permitNo, issuer, issueDate, expiryDate, dep }) => ({ typeId, permitNo, issuer, issueDate, expiryDate,
+        parentId: dep && dep.par ? dep.par.id : undefined })) };
     const btn = ev.currentTarget; btn.disabled = true;
     try {
       const r = await api('POST', '/api/permits/batch', payload);
@@ -267,11 +372,14 @@ function openPermitModal(id, kind0, preset) {
   const pre = preset || {};
   const renewOf = pre.renewOf ? (STATE.permits || []).find(x => x.id === pre.renewOf) : null;
   const fixedHolder = p ? permitHolderId(p) : pre.holderId || '';
-  const x = p || { typeId: pre.typeId || '', issuer: pre.issuer || '', placeIds: pre.placeIds || [], projectId: pre.projectId || '', notes: pre.notes || '' };
+  // التصريح الجديد: عقد التصريح القديم (في التجديد) لو لسه ماخلصش، وإلا العقد اللي صاحبه مسجّل عليه
+  const newProject = pre.projectId && !projectEnded(IDX.project[pre.projectId]) ? pre.projectId : permitDefaultProject(fixedHolder ? holderOf(kind, fixedHolder) : null);
+  const x = p || { typeId: pre.typeId || '', issuer: pre.issuer || '', placeIds: pre.placeIds || [], projectId: newProject, notes: pre.notes || '' };
   if (!p && !x.issuer && x.typeId) x.issuer = (IDX.permitType[x.typeId] || {}).defaultIssuer || '';
   const issuers = permitIssuers();
   const places = STATE.permitPlaces || [];
   const types = permitTypesFor(kind);
+  const kids = p ? permitKids(p) : [];
   const picker = fixedHolder ? '' : permitHolderPicker(kind);
   const title = p ? 'تعديل تصريح' : renewOf ? 'تجديد تصريح' : 'إضافة تصريح';
   const m = openModal({
@@ -280,14 +388,16 @@ function openPermitModal(id, kind0, preset) {
       ${picker}<div id="permit-holder" style="margin:8px 0 12px">${fixedHolder ? holderCardHtml(kind, holderOf(kind, fixedHolder)) : ''}</div>
       ${p ? holderPermitsHtml(kind, fixedHolder, p.id) : ''}
       ${p && permitSuperseded(p) ? `<div class="notice warn" style="margin-bottom:8px">${t('التصريح ده اتجدّد — فيه تصريح أحدث من نفس النوع.')}</div>` : ''}
+      ${kids.length ? `<div class="notice" style="margin-bottom:8px">🔗 ${t('مربوط بيه')}: ${kids.map(k => `«${esc(permitLabel(k))}${esc(permitNoText(k))}»`).join('، ')} — ${t('تغيير التاريخ أو العقد هيتطبّق عليه كمان، ونوع التصريح مايتغيّرش.')}</div>` : ''}
       <div class="form">
-        <label><span class="req">${t('نوع التصريح')}</span><select name="typeId">${opt('', types.length ? t('— اختار النوع —') : t('مفيش أنواع — مدير النظام بيضيفها'), !x.typeId)}${types.map(tp => opt(tp.id, permitTypeName(tp), tp.id === x.typeId)).join('')}</select></label>
+        <label><span class="req">${t('نوع التصريح')}</span><select name="typeId" ${kids.length ? 'disabled' : ''}>${opt('', types.length ? t('— اختار النوع —') : t('مفيش أنواع — مدير النظام بيضيفها'), !x.typeId)}${types.map(tp => opt(tp.id, permitTypeName(tp), tp.id === x.typeId)).join('')}</select></label>
         <label>${t('رقم التصريح')}<input name="permitNo" value="${esc(x.permitNo || '')}" dir="ltr"></label>
         <label>${t('الجهة المانحة')}<input name="issuer" list="dl-permit-issuer" value="${esc(x.issuer || '')}"><datalist id="dl-permit-issuer">${issuers.map(i => `<option value="${esc(i)}">`).join('')}</datalist></label>
-        <label title="${esc(t('العقد أو المشروع اللي التصريح طالع عليه — ممكن يختلف عن عقد صاحبه ومكان شغله'))}">${t('العقد / المشروع (اختياري)')}<select name="projectId">${permitProjectOptions(x.projectId)}</select></label>
+        <label title="${esc(t('العقد اللي التصريح طالع عليه (حكومي أو من الباطن) — ممكن يختلف عن العقد اللي صاحبه مسجّل عليه، وهو اللي بيحدد أقصى تاريخ'))}"><span class="req">${t('العقد')}</span><select name="projectId">${permitProjectOptions(x.projectId || '')}</select></label>
         <label>${t('تاريخ الإصدار')}<input type="date" name="issueDate" value="${esc(x.issueDate || '')}"></label>
         <label><span class="req">${t('تاريخ الانتهاء')}</span><input type="date" name="expiryDate" value="${esc(x.expiryDate || '')}"></label>
-        <div class="full small" id="pm-cap"></div>
+        <div id="pm-dep" style="grid-column:1/-1"></div>
+        <div class="small" id="pm-cap" style="grid-column:1/-1"></div>
         ${places.length ? `<div class="full"><div class="small muted" style="margin-bottom:4px">${t('الأماكن')}</div>
           <div class="row" style="flex-wrap:wrap;gap:4px 14px">${places.map(pl => `<label class="check"><input type="checkbox" data-place="${pl.id}" ${(x.placeIds || []).includes(pl.id) ? 'checked' : ''}> ${esc(permitPlaceName(pl))}</label>`).join('')}</div></div>` : ''}
         <label class="full">${t('ملاحظات')}<input name="notes" value="${esc(x.notes || '')}"></label>
@@ -304,16 +414,52 @@ function openPermitModal(id, kind0, preset) {
   });
   const E = m.el;
   const pickedHolder = () => pickedPermitHolder(E, kind, fixedHolder);
-  // أقصى تاريخ = أقرب تاريخ (الإقامة / العقد / التأمين / الدفتر) ← بيتحط لوحده في التصريح الجديد، والتاريخ بعده ممنوع
-  const expInp = $('[name=expiryDate]', E);
-  let autoExp = '';
+  const expInp = $('[name=expiryDate]', E), projSel = $('[name=projectId]', E), typeSel = $('[name=typeId]', E), issuerInp = $('[name=issuer]', E);
+  /** النوع المعتمد (الرتقة ← KOC): الأساسي بتاعه — في التعديل اللي مربوط بيه، وفي الجديد الساري الأبعد عند صاحبه */
+  const depNow = () => {
+    const req = permitReqType(typeSel.value), hid = pickedHolder();
+    if (!req) return null;
+    const par = p && p.typeId === typeSel.value && permitParent(p) ? permitParent(p) : hid ? holderParentPermit(kind, hid, req.id) : null;
+    return { req, same: !!(IDX.permitType[typeSel.value] || {}).sameExpiry, par };
+  };
+  // التجديد: الأساسي لسه نفسه (الـ KOC ماتجددش) ← مفيش تاريخ جديد يتجدد له
+  const staleRenew = dep => !!(renewOf && dep && dep.par && renewOf.parentId === dep.par.id);
+  // أقصى تاريخ = أقرب تاريخ (الإقامة / العقد المختار / التأمين / الدفتر) ← بيتحط لوحده في التصريح الجديد، والتاريخ بعده ممنوع
+  let autoExp = '', autoProj = projSel.value, lastHid = fixedHolder;
   const syncCap = () => {
-    const hid = pickedHolder(), cs = hid ? permitCaps(kind, holderOf(kind, hid)) : [];
+    const hid = pickedHolder(), h = hid ? holderOf(kind, hid) : null, dep = depNow(), box = $('#pm-dep', E);
+    if (!p && hid !== lastHid) {
+      if (!projSel.value || projSel.value === autoProj) { autoProj = permitDefaultProject(h); projSel.value = autoProj; }
+      lastHid = hid;
+    }
+    const tn = esc(permitTypeName(IDX.permitType[typeSel.value]));
+    if (dep && dep.same) {                      // التاريخ والعقد بتوع الأساسي
+      expInp.readOnly = true; projSel.disabled = true;
+      if (dep.par) {
+        expInp.value = dep.par.expiryDate || '';
+        if (!p) autoExp = expInp.value;
+        if (dep.par.projectId && !$$('option', projSel).some(o => o.value === dep.par.projectId)) projSel.innerHTML = permitProjectOptions(dep.par.projectId);
+        projSel.value = dep.par.projectId || '';
+      }
+      const rn = esc(permitTypeName(dep.req));
+      box.innerHTML = !dep.par ? `<div class="notice warn">⛔ «${tn}» ${t('مابيطلعش غير لو معاه')} «${rn}» ${t('ساري — ضيفه الأول.')}</div>`
+        : staleRenew(dep) ? `<div class="notice warn">🔄 «${rn}»${esc(permitNoText(dep.par))} ${t('لسه ماتجددش (ساري لحد')} ${fmtDate(dep.par.expiryDate)}) — ${t('جدّده الأول، وبعد ما تستلمه جدّد')} «${tn}».</div>`
+        : `<div class="notice">🔗 ${t('مربوط بـ')} «${rn}»${esc(permitNoText(dep.par))} — ${t('ساري لحد')} ${fmtDate(dep.par.expiryDate)} · ${t('العقد')}: ${esc(permitProjectLabel(dep.par.projectId, false))}. ${t('التاريخ والعقد بيمشوا معاه.')}</div>`;
+      $('#pm-cap', E).innerHTML = '';
+      return;
+    }
+    expInp.readOnly = false; projSel.disabled = false;
+    box.innerHTML = dep && !dep.par ? `<div class="notice warn">⛔ «${tn}» ${t('مابيطلعش غير لو معاه')} «${esc(permitTypeName(dep.req))}» ${t('ساري — ضيفه الأول.')}</div>` : '';
+    const cs = hid ? permitCaps(kind, h, projSel.value) : [];
+    if (dep && dep.par && dep.par.expiryDate) { cs.push({ l: permitTypeName(dep.req), d: dep.par.expiryDate }); cs.sort((a, b) => a.d.localeCompare(b.d)); }
     expInp.max = cs.length ? cs[0].d : '';
     if (!p && cs.length && (!expInp.value || expInp.value === autoExp)) { expInp.value = cs[0].d; autoExp = cs[0].d; }
-    $('#pm-cap', E).innerHTML = permitCapText(kind, hid, cs);
+    const reg = h && h.projectId && IDX.project[h.projectId];
+    $('#pm-cap', E).innerHTML = !hid ? '' : !projSel.value ? `<span style="color:var(--orange)">⚠️ ${t('اختار العقد اللي التصريح طالع عليه — هو اللي بيحدد أقصى تاريخ')}</span>`
+      : permitCapText(kind, hid, cs) + (reg && projSel.value !== reg.id ? `<div>ℹ️ ${t(kind === 'employee' ? 'الموظف مسجّل على' : 'السيارة مسجّلة على')} <b>${esc(projectName(reg.id))}</b> — ${t('التصريح طالع على')} <b>${esc(projectName(projSel.value))}</b></div>` : '');
   };
   syncCap();
+  projSel.onchange = syncCap;
   const pick = $('[name=holderPick]', E);
   if (pick) {
     const show = () => { const hid = pickedHolder(); $('#permit-holder', E).innerHTML = hid ? holderCardHtml(kind, holderOf(kind, hid)) : ''; syncCap(); };
@@ -322,24 +468,33 @@ function openPermitModal(id, kind0, preset) {
     pick.focus();
   }
   // الجهة المانحة الافتراضية للنوع (لو الخانة فاضية أو فيها افتراضي نوع تاني)
-  const typeSel = $('[name=typeId]', E), issuerInp = $('[name=issuer]', E);
   let lastDefault = (IDX.permitType[typeSel.value] || {}).defaultIssuer || '';
   typeSel.addEventListener('change', () => {
     const def = (IDX.permitType[typeSel.value] || {}).defaultIssuer || '';
     if (!issuerInp.value.trim() || issuerInp.value.trim() === lastDefault) issuerInp.value = def;
     lastDefault = def;
+    syncCap();
   });
   $('[data-save]', E).onclick = async ev => {
-    const d = formValues(E), hid = pickedHolder();
+    const d = formValues(E), hid = pickedHolder(), dep = depNow();
     if (!hid) return openBlockAlert(t(kind === 'employee' ? 'اختار الموظف من القايمة' : 'اختار السيارة'));
     if (!d.typeId) return openBlockAlert(t('اختار نوع التصريح'));
+    const tn = permitTypeName(IDX.permitType[d.typeId]);
+    if (dep && !dep.par) return openBlockAlert(`«${tn}» ${t('مابيطلعش غير لو معاه')} «${permitTypeName(dep.req)}» ${t('ساري — ضيفه الأول.')}`);
+    if (staleRenew(dep)) return openBlockAlert(`«${permitTypeName(dep.req)}» ${t('لسه ماتجددش — جدّده الأول، وبعد ما تستلمه جدّد')} «${tn}».`);
+    const same = !!(dep && dep.same), projectId = projSel.value;
+    if (!same && !projectId) return openBlockAlert(t('اختار العقد اللي التصريح طالع عليه'));
     if (!d.expiryDate) return openBlockAlert(t('تاريخ الانتهاء مطلوب'));
     if (d.issueDate && d.issueDate > d.expiryDate) return openBlockAlert(t('تاريخ الإصدار بعد تاريخ الانتهاء'));
-    const caps = permitCaps(kind, holderOf(kind, hid));
-    if (caps.length && d.expiryDate > caps[0].d) return openBlockAlert(`${t('مش هينفع: التصريح بينتهي بعد')} ${caps[0].l} (${fmtDate(caps[0].d)}). ${t(kind === 'employee' ? 'لو اتجدد، حدّث تاريخه في مركز الإقامات والموظفين أو العقود الأول.' : 'لو اتجدد، حدّث تاريخه في مركز السيارات أو العقود الأول.')}`);
+    if (!same) {
+      const caps = permitCaps(kind, holderOf(kind, hid), projectId);
+      if (dep && dep.par && dep.par.expiryDate) { caps.push({ l: permitTypeName(dep.req), d: dep.par.expiryDate }); caps.sort((a, b) => a.d.localeCompare(b.d)); }
+      if (caps.length && d.expiryDate > caps[0].d) return openBlockAlert(`${t('مش هينفع: التصريح بينتهي بعد')} ${caps[0].l} (${fmtDate(caps[0].d)}). ${t(kind === 'employee' ? 'لو اتجدد، حدّث تاريخه في مركز الإقامات والموظفين أو العقود الأول.' : 'لو اتجدد، حدّث تاريخه في مركز السيارات أو العقود الأول.')}`);
+    }
     const placeIds = $$('[data-place]', E).filter(c => c.checked).map(c => c.dataset.place);
-    const payload = { holderKind: kind, holderId: hid, typeId: d.typeId, permitNo: d.permitNo, issuer: d.issuer, projectId: d.projectId,
-      issueDate: d.issueDate, expiryDate: d.expiryDate, notes: d.notes, placeIds: places.length ? placeIds : (p ? p.placeIds || [] : x.placeIds || []) };
+    const payload = { holderKind: kind, holderId: hid, typeId: d.typeId, permitNo: d.permitNo, issuer: d.issuer, projectId,
+      issueDate: d.issueDate, expiryDate: d.expiryDate, notes: d.notes, parentId: dep && dep.par ? dep.par.id : undefined,
+      placeIds: places.length ? placeIds : (p ? p.placeIds || [] : x.placeIds || []) };
     const fileInp = $('[name=file]', E), file = fileInp && fileInp.files[0];
     const btn = ev.currentTarget; btn.disabled = true;
     try {
@@ -374,8 +529,10 @@ function openPermitModal(id, kind0, preset) {
     try { await persist('DELETE', `/api/permits/${p.id}/file`, undefined, 'تم الحذف'); reopen(); } catch (_) { /* */ }
   };
   $('[data-permit-del]', E).onclick = async () => {
-    if (!await openConfirm(`${t('حذف التصريح')} «${esc(permitLabel(p))}${p.permitNo ? ' ' + esc(p.permitNo) : ''}» — ${esc(permitHolderName(p))}؟\n${trashNote()}`, { danger: true, okLabel: t('حذف') })) return;
-    try { m.close(); await persist('DELETE', '/api/permits/' + p.id, undefined, 'اتنقل لسلة المحذوفات'); } catch (_) { /* */ }
+    // التصاريح المربوطة بيه (الرتقة مع الـ KOC) بتتنقل للسلة معاه وبترجع معاه
+    const linked = kids.length ? `\n${t('ومعاه المربوط بيه')}: ${kids.map(k => `«${esc(permitLabel(k))}${esc(permitNoText(k))}»`).join('، ')} — ${t('هيتنقلوا للسلة مع بعض ويرجعوا مع بعض.')}` : '';
+    if (!await openConfirm(`${t('حذف التصريح')} «${esc(permitLabel(p))}${p.permitNo ? ' ' + esc(p.permitNo) : ''}» — ${esc(permitHolderName(p))}؟${linked}\n${trashNote()}`, { danger: true, okLabel: t('حذف') })) return;
+    try { m.close(); await persist('DELETE', `/api/permits/${p.id}${kids.length ? '?linked=1' : ''}`, undefined, 'اتنقل لسلة المحذوفات'); } catch (_) { /* */ }
   };
 }
 
@@ -396,12 +553,12 @@ function holderMatches(kind, h, q) {
 function permitsFiltered(kind, F) {
   const q = norm(F.q);
   return allPermits(kind, F.ended, F.old).filter(p => {
-    const h = permitHolder(p), d = daysUntil(p.expiryDate);
+    const h = permitHolder(p);
     if (F.type && p.typeId !== F.type) return false;
     if (F.place && !(F.place === '__none' ? !(p.placeIds || []).length : (p.placeIds || []).includes(F.place))) return false;
     if (F.company && h.companyId !== F.company) return false;
     if (F.tier && !tierIn(p.expiryDate, F.tier)) return false;
-    if (F.status && !PERMIT_STATUS[F.status].test(d)) return false;
+    if (F.status && !permitStatusIs(p, F.status)) return false;
     return !q || holderMatches(kind, h, q) || [p.permitNo, p.issuer, permitLabel(p), permitPlacesText(p), p.notes].some(v => norm(v).includes(q));
   }).sort((a, b) => String(a.expiryDate || '').localeCompare(String(b.expiryDate || '')));
 }
@@ -414,7 +571,7 @@ function permitRowHtml(kind, p, showPlaces) {
     : `<td><b class="num">${esc(h.plate)}</b><div class="small muted">${esc([t(VEHICLE_TYPES[h.vehicleType] || ''), h.model].filter(Boolean).join(' · '))}</div></td>
        <td>${esc(companyName(h.companyId))}<div class="small muted">${esc(ccLabel(h.costCenter))}</div></td>
        <td>${esc(holderDriver(h)) || '<span class="muted">—</span>'}</td>`;
-  return `<tr class="clickable${old ? ' muted' : ''}" data-id="${p.id}">${holderCells}<td>${esc(permitLabel(p))}${old ? ` <span class="chip">${t('مُجدَّد')}</span>` : ''}</td><td class="num" dir="ltr" style="white-space:nowrap">${esc(p.permitNo || '')}</td>
+  return `<tr class="clickable${old ? ' muted' : ''}" data-id="${p.id}">${holderCells}<td>${esc(permitLabel(p))}${old ? ` <span class="chip">${t('مُجدَّد')}</span>` : ''}${p.projectId ? `<div class="small muted">${esc(projectName(p.projectId))}</div>` : ''}</td><td class="num" dir="ltr" style="white-space:nowrap">${esc(p.permitNo || '')}</td>
     <td>${esc(p.issuer || '')}</td>${showPlaces ? `<td>${permitPlaceChips(p)}</td>` : ''}<td>${fmtDate(p.issueDate)}</td><td>${old ? fmtDate(p.expiryDate) : datePill(p.expiryDate) + permitFlagsHtml(p)}</td>
     <td>${p.fileUrl ? `<button class="btn sm" data-permit-file="${p.id}" title="${esc(t('عرض المرفق'))}">📎</button>` : ''}</td></tr>`;
 }
@@ -465,7 +622,10 @@ function renderPermits() {
   const all = allPermits(kind, F.ended, false), list = matrix ? [] : permitsFiltered(kind, F);
   const mrows = matrix ? permitMatrixRows(kind, F) : [];
   const cos = uniq(((STATE.permitHolders || {})[kind === 'employee' ? 'employees' : 'vehicles'] || []).map(h => h.companyId)).filter(c => IDX.company[c]).sort((a, b) => companyName(a).localeCompare(companyName(b), 'ar'));
-  const cnt = st => all.filter(p => PERMIT_STATUS[st].test(daysUntil(p.expiryDate))).length;
+  const cnt = st => all.filter(p => permitStatusIs(p, st)).length;
+  // «الرتقة محتاج يتجدد»: الـ KOC بتاعه اتجدّد (بيظهر بس لو فيه)
+  const depTypes = types.filter(tp => permitReqType(tp.id)), nRenew = cnt('renew');
+  const renewLabel = depTypes.length === 1 ? `${permitTypeName(depTypes[0])} ${t('محتاج يتجدد')}` : PERMIT_STATUS.renew.l;
   const chip = (st, label, n, color) => `<span class="chip clickable ${F.status === st ? 'on' : ''}" data-status="${st}"${color ? ` style="color:${color}"` : ''}>${esc(t(label))} <b class="num">${n}</b></span>`;
   const heads = kind === 'employee' ? ['الموظف', 'الجنسية / المهنة', 'الشركة / مكان الشغل'] : ['اللوحة', 'الشركة / مكان الشغل', 'مع مين'];
   const listFilters = `<select id="pm-type">${opt('', t('— كل الأنواع —'), !F.type)}${types.map(tp => opt(tp.id, permitTypeName(tp), tp.id === F.type)).join('')}</select>
@@ -486,7 +646,8 @@ function renderPermits() {
     <div class="row no-print" style="gap:6px;margin:0 0 8px;flex-wrap:wrap">
       <span class="chip clickable ${!matrix ? 'on' : ''}" data-pview="list">☰ ${t('قايمة')}</span><span class="chip clickable ${matrix ? 'on' : ''}" data-pview="matrix">▦ ${t('مين معاه إيه')}</span>
       <span style="width:14px"></span>
-      ${matrix ? '' : chip('', 'الإجمالي', all.length) + chip('valid', 'ساري', cnt('valid'), 'var(--green)') + chip('expired', 'منتهي', cnt('expired'), 'var(--red)') + chip('soon', 'خلال 30 يوم', cnt('soon'), 'var(--orange)')}</div>
+      ${matrix ? '' : chip('', 'الإجمالي', all.length) + chip('valid', 'ساري', cnt('valid'), 'var(--green)') + chip('expired', 'منتهي', cnt('expired'), 'var(--red)') + chip('soon', 'خلال 30 يوم', cnt('soon'), 'var(--orange)')
+        + (nRenew || F.status === 'renew' ? chip('renew', '🔄 ' + renewLabel, nRenew, 'var(--green)') : '')}</div>
     <div class="filters no-print"><input type="search" id="pm-q" placeholder="${esc(t(kind === 'employee' ? 'بحث بالاسم أو الرقم المدني أو رقم الملف أو رقم التصريح…' : 'بحث باللوحة أو السائق أو رقم التصريح…'))}" value="${esc(F.q)}">
       ${matrix ? matrixFilters : listFilters}
       <select id="pm-co">${opt('', t('— كل الشركات —'), !F.company)}${cos.map(c => opt(c, companyName(c), c === F.company)).join('')}</select>
@@ -556,6 +717,7 @@ function openPermitsReportModal(kind, F) {
 }
 function permitGroupKeys(p, by) {
   if (by === 'type') return [[p.typeId, permitLabel(p)]];
+  if (by === 'project') return [[p.projectId || '', projectName(p.projectId) || t('بدون عقد')]];
   if (by === 'place') return (p.placeIds || []).length ? p.placeIds.map(x => [x, permitPlaceName(IDX.permitPlace[x])]) : [['', t('بدون مكان')]];
   if (by === 'company') { const c = permitHolder(p).companyId; return [[c || '', companyName(c) || t('بدون شركة')]]; }
   if (by === 'issuer') return [[p.issuer || '', p.issuer || t('بدون جهة')]];
@@ -583,6 +745,7 @@ function printPermitsReport(kind, list, F, groupBy) {
        ...(groupBy === 'company' ? [] : [[t('الشركة'), p => esc(companyName(H(p).companyId)), 'txt']]), [t('مع مين'), p => esc(holderDriver(H(p))), 'txt']];
   const cols = [...holderCols,
     ...(groupBy === 'type' ? [] : [[t('نوع التصريح'), p => esc(permitLabel(p)) + (permitSuperseded(p) ? ` <small>(${t('مُجدَّد')})</small>` : ''), 'txt']]), [t('رقم التصريح'), p => esc(p.permitNo || ''), 'num'],
+    ...(groupBy === 'project' ? [] : [[t('العقد'), p => esc(projectName(p.projectId)), 'txt']]),
     ...(groupBy === 'issuer' ? [] : [[t('الجهة المانحة'), p => esc(p.issuer || ''), 'txt']]), ...(permitHasPlaces() ? [[t('الأماكن'), p => esc(permitPlacesText(p)), 'txt']] : []),
     [t('الإصدار'), p => fmtDate(p.issueDate), 'num'],
     [t('الانتهاء'), p => { const tr = tierOf(p.expiryDate); return `<span class="pill ${TIERS[tr] ? TIERS[tr].cls : ''}">${fmtDate(p.expiryDate)}</span>`; }, 'num'],
@@ -600,7 +763,7 @@ function printPermitsReport(kind, list, F, groupBy) {
   } else body = list.map(row).join('');
   const table = `<table class="rpt"><thead><tr><th>#</th>${cols.map(([l, , cls]) => `<th class="${cls === 'txt' ? 'txt' : ''}">${esc(l)}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table>
     ${groupBy === 'place' ? `<div class="small" style="margin-top:4px;color:#66736f">${t('التصريح اللي بيغطي أكتر من مكان بيظهر تحت كل مكان.')}</div>` : ''}`;
-  const n2 = st => list.filter(p => PERMIT_STATUS[st].test(daysUntil(p.expiryDate))).length;
+  const n2 = st => list.filter(p => permitStatusIs(p, st)).length;
   const cos = uniq(list.map(p => H(p).companyId));
   openReportWindow({
     title: t(PERMIT_HOLDERS[kind].report), subtitle: groupBy ? `${t('تجميع حسب')}: ${t(PERMIT_GROUPS[groupBy])}` : '', landscape: true, criteria: crit.join(' · '),
@@ -641,10 +804,11 @@ function openPermitListsModal(tab) {
   const permits = STATE.permits || [];
   const types = STATE.permitTypes || [], places = STATE.permitPlaces || [];
   const used = (kind, id) => kind === 'types' ? permits.filter(p => p.typeId === id).length : permits.filter(p => (p.placeIds || []).includes(id)).length;
-  const table = (kind, rows) => `<table class="data"><thead><tr><th>${t('الاسم (عربي)')}</th><th>${t('الاسم (إنجليزي)')}</th>${kind === 'types' ? `<th>${t('لمين')}</th><th>${t('الجهة المانحة الافتراضية')}</th>` : ''}<th>${t('التصاريح')}</th><th></th></tr></thead><tbody>
-    ${rows.map(r => `<tr><td><b>${esc(r.nameAr)}</b></td><td dir="ltr">${esc(r.nameEn || '')}</td>${kind === 'types' ? `<td>${esc(t(PERMIT_APPLIES[r.appliesTo || '']))}</td><td>${esc(r.defaultIssuer || '—')}</td>` : ''}<td class="num">${used(kind, r.id)}</td>
+  const cond = r => r.requiresTypeId ? `${t('محتاج')} ${esc(permitTypeName(IDX.permitType[r.requiresTypeId]))} ${t('ساري')}${r.sameExpiry ? ' · ' + t('بينتهي معاه') : ''}` : '<span class="muted">—</span>';
+  const table = (kind, rows) => `<table class="data"><thead><tr><th>${t('الاسم (عربي)')}</th><th>${t('الاسم (إنجليزي)')}</th>${kind === 'types' ? `<th>${t('لمين')}</th><th>${t('الجهة المانحة الافتراضية')}</th><th>${t('الشرط')}</th>` : ''}<th>${t('التصاريح')}</th><th></th></tr></thead><tbody>
+    ${rows.map(r => `<tr><td><b>${esc(r.nameAr)}</b></td><td dir="ltr">${esc(r.nameEn || '')}</td>${kind === 'types' ? `<td>${esc(t(PERMIT_APPLIES[r.appliesTo || '']))}</td><td>${esc(r.defaultIssuer || '—')}</td><td class="small">${cond(r)}</td>` : ''}<td class="num">${used(kind, r.id)}</td>
       <td style="white-space:nowrap"><button class="btn sm" data-edit="${kind}:${r.id}">✏️</button> <button class="btn sm danger" data-del="${kind}:${r.id}">🗑️</button></td></tr>`).join('')
-      || `<tr><td colspan="6" class="empty">${t('القايمة فاضية')}</td></tr>`}</tbody></table>
+      || `<tr><td colspan="7" class="empty">${t('القايمة فاضية')}</td></tr>`}</tbody></table>
     <button class="btn" data-add="${kind}" style="margin-top:8px">➕ ${t(kind === 'types' ? 'إضافة نوع' : 'إضافة مكان')}</button>`;
   const m = openModal({
     title: '⚙️ ' + t('أنواع وأماكن التصاريح'), size: 'wide',
@@ -674,10 +838,14 @@ function openPermitListItemModal(kind, id, after) {
     body: `<div class="form"><label class="full"><span class="req">${t('الاسم (عربي)')}</span><input name="nameAr" value="${esc(r.nameAr || '')}"></label>
       <label class="full">${t('الاسم (إنجليزي)')}<input name="nameEn" dir="ltr" value="${esc(r.nameEn || '')}"></label>
       ${kind === 'types' ? `<label class="full">${t('لمين')}<select name="appliesTo">${Object.entries(PERMIT_APPLIES).map(([k, l]) => opt(k, t(l), k === (r.appliesTo || ''))).join('')}</select></label>
-      <label class="full">${t('الجهة المانحة الافتراضية')}<input name="defaultIssuer" value="${esc(r.defaultIssuer || '')}" placeholder="${esc(t('بتتملى لوحدها في التصريح الجديد (وتتعدّل)'))}"></label>` : ''}</div>`,
+      <label class="full">${t('الجهة المانحة الافتراضية')}<input name="defaultIssuer" value="${esc(r.defaultIssuer || '')}" placeholder="${esc(t('بتتملى لوحدها في التصريح الجديد (وتتعدّل)'))}"></label>
+      <label class="full" title="${esc(t('التصريح ده مايطلعش غير لو صاحبه معاه تصريح ساري من النوع ده (زي الرتقة والعبدلي مع الـ KOC)'))}">${t('مطلوب قبله تصريح ساري من نوع')}<select name="requiresTypeId">${opt('', t('— مفيش —'), !r.requiresTypeId)}${(STATE.permitTypes || []).filter(x => x.id !== id).map(x => opt(x.id, permitTypeName(x), x.id === r.requiresTypeId)).join('')}</select></label>
+      <label class="check full"><input type="checkbox" name="sameExpiry" ${r.sameExpiry ? 'checked' : ''}> ${t('بينتهي مع تاريخه وعلى نفس عقده')}</label>` : ''}</div>`,
     foot: `<button class="btn primary" data-save>${t('حفظ')}</button><button class="btn" data-close>${t('إلغاء')}</button>`,
   });
   $('[name=nameAr]', m.el).focus();
+  const reqSel = $('[name=requiresTypeId]', m.el), same = $('[name=sameExpiry]', m.el);
+  if (reqSel) { const syncReq = () => { same.disabled = !reqSel.value; if (!reqSel.value) same.checked = false; }; reqSel.onchange = syncReq; syncReq(); }
   $('[data-save]', m.el).onclick = async () => {
     const d = formValues(m.el);
     if (!d.nameAr) return openBlockAlert(t('الاسم مطلوب'));

@@ -205,6 +205,7 @@ function buildIndex() {
     template: Object.fromEntries(STATE.templates.map(x => [x.id, x])),
     permitType: Object.fromEntries((STATE.permitTypes || []).map(x => [x.id, x])),
     permitPlace: Object.fromEntries((STATE.permitPlaces || []).map(x => [x.id, x])),
+    permit: Object.fromEntries((STATE.permits || []).map(x => [x.id, x])),
     permitsOf: { employee: {}, vehicle: {} },          // تصاريح كل موظف / عربية
     // بيانات أصحاب التصاريح (من مركز الموظفين والسيارات — للعرض بس في قسم التصاريح)
     permitHolder: {
@@ -233,7 +234,7 @@ function profLabel(v) { return vt('profession', v); }
 /* ---------- الوكالات والعقود والمشاريع الحكومية ----------
    الموظف (والسيارة) ليه: الكفيل (الشركة) · العقد / المشروع المسجّل عليه ← وكالته · مكان الشغل الفعلي (مركز التكلفة).
    «برّه وكالة عقده» = مركز التكلفة مش من مراكز وكالة العقد (agencies.costCenterIds). */
-const PROJECT_KINDS = { main: 'ترخيص رئيسي (أهلي)', gov: 'عقد حكومي' };
+const PROJECT_KINDS = { main: 'ترخيص رئيسي (أهلي)', gov: 'عقد حكومي', sub: 'عقد من الباطن' };
 const VEHICLE_TYPES = { private: 'خصوصي', truck: 'شاحنة', pickup: 'شاحنة نصف', tanker: 'صهريج', bus: 'حافلة', motorcycle: 'دراجة نارية', equipment: 'معدات', other: 'أخرى' };
 function agencyById(id) { return (STATE.agencies || []).find(a => a.id === id) || null; }
 function agencyName(a) { return a ? (LANG === 'en' && a.nameEn ? a.nameEn : a.nameAr) : ''; }
@@ -244,7 +245,7 @@ function empProjectId(e) { return primaryAff(e).projectId || null; }
 function empOutsideAgency(e) { return outsideAgency(empProjectId(e), e.costCenter); }
 function projectKindLabel(p) { return p && p.kind ? t(PROJECT_KINDS[p.kind]) : t('مشروع'); }
 /** الترتيب: الترخيص الرئيسي، وبعدين العقود الحكومية بترتيب الوكالة، وبعدين الباقي */
-function projectSortKey(p) { const a = p.agencyId ? agencyById(p.agencyId) : null; return `${p.kind === 'main' ? 0 : p.kind === 'gov' ? 1 : 2}|${String((a && a.position) || 0).padStart(3, '0')}|${projectName(p.id)}`; }
+function projectSortKey(p) { const a = p.agencyId ? agencyById(p.agencyId) : null; return `${p.kind === 'main' ? 0 : p.kind === 'gov' ? 1 : p.kind === 'sub' ? 2 : 3}|${String((a && a.position) || 0).padStart(3, '0')}|${projectName(p.id)}`; }
 /** «عقد حكومي · Superior · رقم العقد 19053598» */
 function projectSummary(p) {
   if (!p) return '';
