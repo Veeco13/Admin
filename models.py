@@ -547,5 +547,31 @@ class PermitPlaceLink(Base):
     placeId: Mapped[str] = col("place_id", ID, fk("permit_places.id"), primary_key=True)
 
 
-# النسخ الاحتياطي: العهد والفواتير والوكالات والتصاريح كمان
-ALL_MODELS.extend([FeeItem, Custody, CustodyLine, Invoice, Agency, AgencyCostCenter, PermitType, PermitPlace, Permit, PermitPlaceLink])
+# ---------------------------------------------------------------------------
+# الخطابات والشهادات (letters.py): شهادة راتب / استمرارية راتب / طلب إجازة — رقم لكل خطاب ونسخة من بياناته
+# ---------------------------------------------------------------------------
+class HrLetter(Base):
+    __tablename__ = "hr_letters"
+    __table_args__ = (UniqueConstraint("series", "year", "no"),)
+    id: Mapped[str] = col("id", ID, primary_key=True)
+    kind: Mapped[str] = col("kind", String(20), nullable=False)                 # salary | continuity | leave
+    series: Mapped[str] = col("series", String(10), nullable=False)             # SCR (الشهادات) | LV (الإجازة)
+    year: Mapped[int] = col("year", Integer, nullable=False)
+    no: Mapped[int] = col("no", Integer, nullable=False)
+    number: Mapped[str] = col("number", SHORT, nullable=False, unique=True)     # HR-SCR-2026-0001 / LV-2026-0001
+    employeeId: Mapped[Optional[str]] = col("employee_id", ID, fk("employees.id"), index=True)
+    companyId: Mapped[Optional[str]] = col("company_id", ID, fk("companies.id"))
+    data: Mapped[Optional[str]] = col("data", TEXT)                             # نسخة البيانات وقت الإصدار (JSON)
+    status: Mapped[Optional[str]] = col("status", String(20))                   # الإجازة: submitted | approved | rejected
+    dateFrom: Mapped[Optional[date]] = col("date_from", Date)
+    dateTo: Mapped[Optional[date]] = col("date_to", Date)
+    days: Mapped[Optional[int]] = col("days", Integer)
+    createdBy: Mapped[Optional[str]] = col("created_by", NAME)
+    createdAt: Mapped[Optional[datetime]] = col("created_at", DateTime)
+    decidedBy: Mapped[Optional[str]] = col("decided_by", NAME)
+    decidedAt: Mapped[Optional[datetime]] = col("decided_at", DateTime)
+
+
+# النسخ الاحتياطي: العهد والفواتير والوكالات والتصاريح والخطابات كمان
+ALL_MODELS.extend([FeeItem, Custody, CustodyLine, Invoice, Agency, AgencyCostCenter, PermitType, PermitPlace, Permit, PermitPlaceLink,
+                   HrLetter])

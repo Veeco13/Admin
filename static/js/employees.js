@@ -121,6 +121,7 @@ function renderEmployees() {
         ${can('admin') ? `<button class="btn" id="e-export">📤 ${t('تصدير CSV')}</button>` : ''}
         <button class="btn" id="e-print">🖨️ تقرير</button>
         <button class="btn" id="e-cal">📅 تقويم التجديدات</button>
+        <button class="btn" id="e-letters">📨 ${t('سجل الخطابات')}</button>
       </div></div>
     <div class="filters no-print">
       <input type="search" id="f-q" placeholder="بحث بالاسم، الرقم المدني، الجواز، رقم الملف…" value="${esc(f.q)}">
@@ -199,6 +200,7 @@ function renderEmployees() {
   const ex = $('#e-export'); if (ex) ex.onclick = () => exportGuard(`${t('الموظفين')} (${list.length})`, () => exportEmployeesCsv(list));
   $('#e-print').onclick = () => openEmployeeReportModal();
   $('#e-cal').onclick = () => renderRenewalCalendarModal();
+  $('#e-letters').onclick = () => openLettersLog();
   if (sel) {
     const selected = () => list.filter(e => EMP_SELECTED.has(e.id)).concat([...EMP_SELECTED].filter(id => !list.find(e => e.id === id)).map(id => IDX.employee[id]).filter(Boolean));
     $('#b-assign').onclick = () => openBulkAssignModal([...EMP_SELECTED]);
@@ -754,6 +756,7 @@ async function openProfileCard(id, tab = 'info') {
       <button class="btn" data-a="driving">🚗 نموذج رخصة القيادة</button>
       ${isKuwaitiStaff(e) ? `<button class="btn" data-a="kw">🇰🇼 ${t('نماذج العمالة الوطنية')}</button>` : ''}
       <button class="btn" data-a="clearance">🧾 إقرار مخالصة</button>
+      <button class="btn" data-a="letters">📨 ${t('الخطابات والشهادات')}${lettersOf(e.id).length ? ` (${lettersOf(e.id).length})` : ''}</button>
       <button class="btn" data-a="print">🖨️ طباعة</button>
       <span class="spacer"></span>
       <button class="btn danger write-only" data-p="employees.delete" data-a="delete">🗑️ حذف</button>`,
@@ -777,6 +780,7 @@ async function openProfileCard(id, tab = 'info') {
     else if (a === 'driving') openOfficialFormModal('driving', 'employee', e.id);
     else if (a === 'kw') openKuwaitiFormsChooser(e.id);
     else if (a === 'clearance') openClearanceModal(e.id);
+    else if (a === 'letters') { m.close(); openLettersModal(e.id); }
     else if (a === 'print') printHtml(e.name, `<h1>${esc(e.name)}</h1><div class="muted">${esc(e.nameEn || '')} · ${esc(e.id)}</div>` + $('[data-pane="info"]', m.el).innerHTML + $('[data-pane="docs"]', m.el).innerHTML);
     else if (a === 'delete') {
       const np = permitsOf('employee', e.id).length;

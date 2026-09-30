@@ -94,6 +94,8 @@ zahed/
 | `js/employees.js` | EMPLOYEES VIEW، EMPLOYEE MODAL، DUPLICATE PREVENTION، BULK ASSIGN، المرفقات | `filteredEmployees`، `renderEmployees`، `openProfileCard`، `handleImportCsv`، `exportEmployeesCsv`، `openEmployeeReportModal`، `printEmployeeReport`، `exportEmployeeReportCsv`، `openEmployeeModal`، `renderAffRows`، `collectAffRows`، `findDuplicateCivilId`، `findDuplicatePassport`، `findDuplicateNameNationality`، `saveEmployee`، `openBulkAssignModal`، `openBulkRenewModal`، `openQuickRenewModal`، `openGovStageModal`، `loadDriveFiles`، `uploadFileForEmployee` |
 | `js/org.js` | COMPANIES (الشركات + المشاريع + مراكز التكلفة)، VEHICLES | `renderCompanies`، `renderCompaniesTab`، `companyAlerts`، `openCompanyDetails`، `fillCompanyDetails`، `renderProjectsTab`، `projectsTable`، `renderCostCentersTab`، `openCompanyModal`، `openProjectModal`، `openSignatoryModal`، `openTrafficAuthModal`، `openCivilAffairsAuthModal`، `openCivilIdDocModal`، `renderVehicles`، `openVehicleModal`، `openCostCenterModal` |
 | `js/permits.js` | PERMITS (قسم التصاريح المستقل) | `renderPermits`، `openPermitModal`، `holderCardHtml`، `permitsFiltered`، `openPermitsReportModal`، `printPermitsReport`، `openPermitListsModal`، `permitsOf`، `permitHolder` |
+| `js/letters.js` | LETTERS (الخطابات والشهادات من بطاقة الموظف) | `openLettersModal`، `openSalaryCertModal`، `openLeaveRequestModal`، `printLeaveForm`، `openLettersLog`، `reprintLetter`، `setLeaveStatus`، `lettersOf` |
+| `letters.py` | شهادة الراتب / الاستمرارية (قالب `forms/salary_certificate.xlsx`) وطلب الإجازة | `salary_defaults`، `salary_xlsx`، `leave_snapshot`، `next_number`، `words_ar`، `words_en`، `bank_names`، `to_api` |
 | `js/contract.js` | CONTRACT GENERATOR، COMPANY LOG / AUDIT LOG | `renderContractView`، `buildContractHtml`، `renderCompanyLog` |
 | `js/recruit.js` | RECRUITMENT، CANDIDATES REPORT + MODAL | `recruitStagesForSource`، `recruitStageInfo`، `migrateRecruitStages`، `renderRecruitFunnelCard`، `renderRecruitment`، `renderCandidatesReportModal`، `printCandidatesReport`، `openCandidateModal`، `convertCandidateToEmployee` |
 | `models.py` / `db.py` / `db_transfer.py` | DATABASE (SQLAlchemy) | الموديلات، `session_scope`، `init_db`، `to_dict`، `apply`، `coerce`، `dump_state`، `export_tables`، `import_tables`، `transfer` |
@@ -408,6 +410,10 @@ fill_docx_template()  ← {{ field }} حتى لو متقسّم على أكتر �
 | POST / PUT / DELETE | `/api/permits[/<id>]` | التصاريح — صلاحية `permits.*` ونطاق شركات صاحبها — القسم 24 |
 | POST / DELETE | `/api/permits/<id>/file` | مرفق التصريح (صورة أو PDF)، والعرض من `/files/permit/<id>` (عرض بس) |
 | POST / PUT / DELETE | `/api/permit-types[/<id>]` · `/api/permit-places[/<id>]` | أنواع وأماكن التصاريح (مدير النظام بس) |
+| GET | `/api/employees/<id>/letter-defaults` | بيانات شهادة الراتب قبل الإصدار (`sensitive.salary`) — القسم 26 |
+| POST | `/api/employees/<id>/letters` | خطاب برقم جديد: `{kind: salary\|continuity, toAr, toEn, jobAr, jobEn, bankAr, bankEn}` (`sensitive.salary`) أو `{kind: leave, leaveType, from, to, address, phone, notes}` (`employees.edit`) |
+| GET | `/api/letters/<id>/pdf` | الشهادة PDF من نسختها المحفوظة (معاينة بس) |
+| PUT | `/api/letters/<id>/status` | طلب الإجازة: `submitted` / `approved` / `rejected` |
 | POST / PUT / DELETE | `/api/agencies[/<id>]` | الوكالات ومراكز التكلفة التابعة ليها (`companies.edit` / `companies.delete`) — القسم 23 |
 | POST | `/api/companies/<id>/docs/<kind>` | مستندات الشركة والشعار (`kind=logo`) |
 | POST | `/api/signatory-docs/<civilId>` | بطاقة المفوّض |
@@ -479,6 +485,7 @@ fill_docx_template()  ← {{ field }} حتى لو متقسّم على أكتر �
 | `0020` | العقود والمشاريع الحكومية والوكالات: جدولين `agencies` و`agency_cost_centers` (سوبيرور ← SUP، سكومي ← SCO + SMP)، و`projects.kind` (`main` / `gov`) / `contract_no` / `agency_id` / `start_date`، و`vehicles.project_id` / `cost_center` / `vehicle_type` / `owner_company_id` (المالك الفعلي). البيانات الأولى من تراخيص الهيئة (ملف 100100253): الترخيص الرئيسي 3563650 والست عقود بأرقامها وتواريخها |
 | `0021` | التصاريح: `permit_types` (بـ `applies_to`: employee / vehicle / فاضي = الاتنين — بيتزرع تصريح دخول، بطاقة أمنية، تصريح مرور)، `permit_places`، `permits` (موظف أو عربية، النوع والرقم والجهة المانحة والعقد والإصدار والانتهاء والمرفق والملاحظات)، و`permit_place_links`، وصلاحية «التصاريح» (`permits.*`) للأدوار اللي كان معاها نفس الشي في الموظفين أو السيارات |
 | `0022` | أنواع التصاريح الفعلية: `permit_types.default_issuer` (الجهة المانحة الافتراضية)، والأنواع التجريبية بتتشال لو مفيش عليها تصاريح، وبيتضاف «تصريح KOC» (شركة نفط الكويت)، «تصريح الرتقة والعبدلي» (الإدارة العامة لأمن الحدود)، «تصريح الوفرة» (العمليات المشتركة) |
+| `0023` | الخطابات والشهادات: جدول `hr_letters` (النوع، السلسلة والسنة والرقم — فريد (`series`, `year`, `no`) و`number` فريد، الموظف والشركة، نسخة البيانات JSON، وللإجازة الحالة والتواريخ والأيام ومين قرّر وإمتى) |
 | `0017` | الحالة الوظيفية: `employees.service_end_type` (مستقيل / إنهاء خدمات — ومع فترة الإنذار الحالة اللي بعدها) و`employees.service_end_reason`؛ «منتهي خدمته» القديمة ← نوعها `terminated` |
 | `0009` | `companies.unified_number`؛ `employees` و`candidates`: `unified_number`، `blood_type`، `address_*`، `home_phone`؛ و`candidates.gender` — للنماذج الرسمية |
 
@@ -822,3 +829,13 @@ docker compose exec db pg_dump -U lunx lunx > lunx.sql          # نسخة SQL �
   - الشركات: مستندات منتهية أو من غير تاريخ، ومن غير مفوّض بالتوقيع. مراكز التكلفة: من غير شركة أو رمز. السيارات: تأمين أو دفتر منتهي أو من غير تاريخ، سايقها خدمته منتهية، من غير شركة.
   - الحسابات: بكلمة سر افتراضية أو ضعيفة، وكلمة سر التصدير لو لسه ماتحددتش.
   - بيتطبع كتقرير، و«🔄 فحص تاني» بعد التصليح.
+
+## 26. الخطابات والشهادات (`letters.py`، `static/js/letters.js`)
+- **المكان:** بطاقة الموظف ← «📨 الخطابات والشهادات (العدد)»، و«📨 سجل الخطابات» فوق قايمة الموظفين (كل الخطابات، بحث وفلتر بالنوع والحالة).
+- **كل خطاب ليه رقم مايتغيّرش ونسخة من بياناته وقت الإصدار** (`hr_letters.data`)، فإعادة الطباعة 🖨️ بتطلع نفس الخطاب بنفس الرقم حتى لو بيانات الموظف اتغيّرت بعدها. الترقيم لكل سنة: `HR-SCR-YYYY-NNNN` للشهادتين (سلسلة واحدة)، و`LV-YYYY-NNNN` لطلبات الإجازة. كل إصدار بيتسجّل في سجل التدقيق وسجل الموظف (وكمان الاعتماد والرفض). حذف الموظف بيسيب خطاباته في السجل.
+- **💵 شهادة راتب / شهادة استمرارية راتب** (`sensitive.salary` — ومن غيرها الشهادات مابتظهرش خالص):
+  - القالب هو قالب الشركة نفسه (`forms/salary_certificate.xlsx` — شيت لكل نوع) **من غير أي تغيير في الشكل أو النص**؛ البيانات الوظيفية بس بتتملى وبيتشال الشيت التاني، وبيطلع PDF صفحة واحدة (Excel أو LibreOffice على السيرفر) للطباعة على الورق الرسمي، معاينة وطباعة بس. الرقم المرجعي بيتكتب تحت («Ref # ...»).
+  - البيانات: التاريخ، السادة (عربي / إنجليزي — فاضية = «إلى من يهمه الأمر»)، اسم الشركة من **شركة الموظف**، الاسم والجنسية والرقم المدني وتاريخ التعيين، الوظيفة من المهنة (عربي / إنجليزي — وبتتعدّل في النافذة)، الراتب رقم وبالحروف عربي وإنجليزي، والبنك ورقم الحساب (لـ `sensitive.bank` بس).
+  - **البدلات مابتتذكرش في أي مكان** — في شهادة الاستمرارية سطر «الراتب» بس، وسطور البدلات والإجمالي بتتشال.
+  - لو فيه نقص (الاسم الإنجليزي، تاريخ التعيين، اسم الشركة الإنجليزي) النافذة بتنبّه قبل الإصدار. من غير راتب أو شركة الإصدار بيترفض.
+- **🏖️ طلب إجازة** (`employees.edit`): نوع الإجازة (مدفوعة، بدون راتب، مدفوعة مقدمًا، مع الراتب، تناوب، ظرف خاص)، من / إلى (النهاية مش قبل البداية)، عدد الأيام وتاريخ العودة بيتحسبوا لوحدهم، والتليفون والعنوان أثناء الإجازة. بيتسجّل «مقدَّم» ويتطبع من المتصفح بتصميم A4 عربي وإنجليزي (شعار واسم شركة الموظف، البيانات، الأنواع، التواريخ، تسليم العهد لمدير القسم ومعاه أرقام عربيات الموظف، موافقة مدير الإدارة، خانات الموارد البشرية بالقلم، و4 توقيعات). بعدها ✅ اعتماد أو ✖ رفض من البطاقة أو السجل، والحالة بتظهر على النموذج لو اتطبع تاني. رصيد الإجازات بيتكتب بالقلم لحد مرحلة الإجازات.
