@@ -896,6 +896,8 @@ def import_extra_upload():
         return err(f"خطأ في قراءة الملف: {e}")
     return jsonify({"ok": True, "token": token, "fileName": f.filename, "sheets": sheets,
                     "fields": {k: v[0] for k, v in import_extra.EMP_FIELDS.items()},
+                    "vehFields": {k: v[0] for k, v in import_extra.VEH_FIELDS.items()},
+                    "vehImportFields": import_extra.VEH_IMPORT_FIELDS,
                     "matchBy": {k: v[0] for k, v in import_extra.MATCH_BY.items()}})
 
 
@@ -906,6 +908,8 @@ def _extra_plan(s, d):
     rows = import_extra.read_book(path).get(d.get("sheet"))
     if rows is None:
         raise ValueError("الشيت مش موجود")
+    if d.get("target") == "vehicles":
+        return import_extra.analyze_vehicles(s, rows, int(d.get("headerRow") or 0), d.get("map"), d.get("companyId"), d.get("confirm"))
     mc = d.get("matchCol")
     return import_extra.analyze(s, rows, int(d.get("headerRow") or 0), int(mc) if mc not in (None, "") else None,
                                 d.get("matchBy"), d.get("map"), d.get("confirm"))
@@ -936,6 +940,11 @@ def import_extra_apply():
             return err(str(e))
         if not res["fillTotal"]:
             return err("مفيش خانات فاضية هتتملى من الملف ده")
+        if d.get("target") == "vehicles":
+            batch, summary = import_extra.apply_vehicles(s, plan, d.get("fileName") or d.get("token"), d.get("sheet"), uname(), res, d.get("companyId"))
+            db.log_audit(s, "vehicle_import", f"استيراد السيارات: {batch.fileName} ({batch.sheet}) — اتضاف {summary['added']} عربية "
+                         f"واتكمّلت {summary['updated']}، واتخطّى {summary['skipped']} سطر", uname())
+            return jsonify({"ok": True, "batchId": batch.id, **summary})
         batch, summary = import_extra.apply_plan(s, plan, d.get("fileName") or d.get("token"), d.get("sheet"), uname(), res)
         db.log_audit(s, "employee_import", f"استيراد تكميلي: {batch.fileName} ({batch.sheet}) — اتملى {summary['values']} خانة "
                      f"لـ {summary['employees']} موظف" + (f"، {summary['conflicts']} مختلف اتساب زي ما هو" if summary["conflicts"] else ""), uname())

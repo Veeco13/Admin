@@ -33,6 +33,24 @@ EMP_FIELDS = {
     "phone": ("الهاتف", "phone", ("mobile", "الهاتف", "موبايل", "تليفون")),
     "email": ("البريد الإلكتروني", "email", ("email", "الإيميل", "البريد")),
 }
+# السيارات: دور كل عمود في ملف تسجيل السيارات ← (الاسم، كلمات في العنوان)
+VEH_FIELDS = {
+    "licenseType": ("نوع الترخيص", ("نوع الترخيص",)),
+    "plateNo": ("رقم اللوحة", ("رقم اللوحة", "اللوحة", "plate")),
+    "adminNo": ("الرقم الإداري", ("الرقم الإداري", "الرقم الاداري")),
+    "make": ("الماركة / النوع", ("نوع المركبة", "الماركة", "make")),
+    "year": ("سنة الصنع", ("موديل", "سنة الصنع", "year")),
+    "affairsFile": ("رقم ملف الشؤون", ("رقم الملف", "ملف الشؤون")),
+    "owner": ("تبع مين / مع مين", ("سائق", "تبع مين", "مع مين", "المستخدم")),
+    "notes": ("الملاحظات (للتخطّي)", ("الملاحظات", "ملاحظات")),
+}
+# نوع الترخيص ← نوع المركبة (الترخيص مكتوب على أول عربية في كل مجموعة بس ← بيتنقل للي تحتها)
+LICENSE_TYPES = (("انشا", "equipment"), ("إنشا", "equipment"), ("باص", "bus"), ("حافل", "bus"), ("خصوصي", "private"), ("نقل", "truck"))
+SKIP_NOTES = ("غير موجود", "لا يمكن التسجيل")
+# «تبع مين» ← مركز التكلفة بالرمز (الرموز ثابتة): سوبيريور بأي كتابة ← SUP، سكومي ← SCO
+CC_ALIASES = {"SUP": ("سوبيريور", "سوبيرور", "سويبريور", "superior"), "SCO": ("سكومي", "scomi")}
+VEH_IMPORT_FIELDS = {"vehicleType": "نوع المركبة", "model": "الموديل", "affairsProjectId": "ملف الشؤون", "ownerCompanyId": "المالك الفعلي",
+                     "costCenter": "مركز التكلفة", "userName": "مع مين", "driverId": "مع مين (موظف)", "companyId": "الشركة"}
 # المطابقة ← كلمات في عنوان العمود
 MATCH_BY = {"civil": ("الرقم المدني", ("civil id", "civilid", "الرقم المدني", "رقم مدني")),
             "code": ("الرقم الوظيفي", ("رمز الموظف", "الرقم الوظيفي")),
@@ -125,17 +143,32 @@ def suggest(headers):
     return match_col, match_by, mapping
 
 
+def suggest_vehicles(headers):
+    mapping, used = {}, set()
+    for i, h in enumerate(headers):
+        hn = _hnorm(h)
+        for f, (_, keys) in VEH_FIELDS.items():
+            if f not in used and any(k in hn for k in keys):
+                mapping[i] = f
+                used.add(f)
+                break
+    return mapping
+
+
 def describe(path):
-    """الشيتات ← عناوينها وعدد صفوفها وعينة، واقتراح المطابقة والأعمدة."""
+    """الشيتات ← عناوينها وعدد صفوفها وعينة، واقتراح المطابقة والأعمدة (للموظفين وللسيارات)."""
     out = []
     for name, rows in read_book(path).items():
         h = header_row(rows)
         headers = [cell_text(x) for x in (rows[h] if rows else ())]
         mc, mb, mp = suggest(headers)
+        vmap = suggest_vehicles(headers)
         out.append({"name": name, "headerRow": h, "rows": max(len(rows) - h - 1, 0), "total": len(rows),
                     "top": [[cell_text(v) for v in r] for r in rows[:20]],      # لو صف العناوين اتغيّر من الشاشة
                     "columns": [{"i": i, "letter": col_letter(i), "title": x} for i, x in enumerate(headers)],
-                    "matchCol": mc, "matchBy": mb, "map": {str(k): v for k, v in mp.items()}})
+                    "target": "vehicles" if "plateNo" in vmap.values() else "employees",
+                    "matchCol": mc, "matchBy": mb, "map": {str(k): v for k, v in mp.items()},
+                    "vehMap": {str(k): v for k, v in vmap.items()}})
     return out
 
 
@@ -306,10 +339,207 @@ def apply_plan(s, plan, file_name, sheet, user, res):
     return batch, summary
 
 
+# ---------------------------------------------------------------------------
+# السيارات (ملف تسجيل السيارات): عربيات جديدة + تكميل الموجودة
+# ---------------------------------------------------------------------------
+def _plate(adm, no):
+    """اللوحة بشكل السيستم «الرقم الإداري-رقم اللوحة» (من غير رقم إداري ← الرقم بس، زي المعدات)."""
+    no, adm = cell_text(no), cell_text(adm)
+    if not no:
+        return ""
+    return f"{adm}-{no}" if adm and adm != "0" else no
+
+
+def _vehicle_type(lic):
+    n = norm_name(lic)
+    return next((t for k, t in LICENSE_TYPES if norm_name(k) in n), None) if n else None
+
+
+def _affairs_project(value, projects):
+    """«111» / «650-» ← ملف الشركة اللي رقمه بينتهي بالرقم ده (لو ملف واحد بس) — (المشروع، رسالة لو مش معروف)."""
+    digits = re.sub(r"\D", "", cell_text(value))
+    if not digits:
+        return None, None
+    hits = [p for p in projects if (p.fileNumber or "").endswith(digits)]
+    if len(hits) == 1:
+        return hits[0], None
+    return None, ("أكتر من ملف بنفس الرقم" if hits else "ملف مش متسجّل للشركة")
+
+
+def _owner(text, companies, ccs):
+    """«تبع مين» ← (مالك فعلي، مركز تكلفة، مع مين). «الاسم (سكومي)» ← مركز سكومي + الاسم، «سوبيريور» ← مركز سوبيرور،
+    اسم شركة ← المالك الفعلي، وأي حاجة تانية ← مع مين (اسم حر)."""
+    t = re.sub(r"\s+", " ", cell_text(text)).strip()
+    if not t:
+        return None, None, None
+    m = re.match(r"^(.*?)\s*\(([^)]+)\)\s*$", t)
+    tag, name = (m.group(2).strip(), m.group(1).strip()) if m else (None, t)
+
+    def alias(x):
+        n = norm_name(x)
+        return next((ccs.get(code) for code, keys in CC_ALIASES.items() if any(norm_name(k) == n or norm_name(k) in n.split() for k in keys)), None)
+    if tag:
+        return None, alias(tag), name or None
+    cc = alias(name)
+    if cc and len(name.split()) <= 2:
+        return None, cc, None
+    n = norm_name(name)
+    co = next((c for c in companies if len(n) >= 5 and n in norm_name(c.nameAr)), None)
+    if co is not None:
+        return co, None, None
+    return None, None, name
+
+
+def analyze_vehicles(s, rows, header, mapping, company_id, confirm=None):
+    """الخطة: عربيات جديدة، وتكميل الموجودة (الفاضي بس)، والمتخطّاة، واقتراحات ربط «مع مين» بموظف."""
+    co = s.get(M.Company, company_id or "")
+    if co is None:
+        raise ValueError("اختار الشركة المسجّلة باسمها العربيات")
+    mapping = {int(k): f for k, f in (mapping or {}).items() if f in VEH_FIELDS}
+    col = {f: c for c, f in mapping.items()}
+    if "plateNo" not in col:
+        raise ValueError("اختار عمود رقم اللوحة")
+    confirm = {int(k): v for k, v in (confirm or {}).items()}
+    projects = list(s.scalars(select(M.Project).where(M.Project.companyId == co.id)))
+    companies = list(s.scalars(select(M.Company)))
+    ccs = {c.code: c.name for c in s.scalars(select(M.CostCenter)) if c.code}
+    existing = {v.plate: v for v in s.scalars(select(M.Vehicle))}
+    emps = [(norm_name(e.name), e) for e in s.scalars(select(M.Employee))]
+    get = lambda r, f: r[col[f]] if f in col and col[f] < len(r) else None  # noqa: E731
+    res = {"new": [], "fills": [], "conflicts": [], "skipped": [], "unknownFiles": [], "suggest": [], "dupRows": 0, "confirmed": 0}
+    plan, seen, lic = [], set(), None
+    for n, r in enumerate(rows[header + 1:]):
+        rowno = header + 2 + n
+        if cell_text(get(r, "licenseType")):
+            lic = cell_text(get(r, "licenseType"))              # بيتنقل للعربيات اللي تحته
+        plate = _plate(get(r, "adminNo"), get(r, "plateNo"))
+        if not plate:
+            continue
+        note = cell_text(get(r, "notes"))
+        if any(k in note for k in SKIP_NOTES):
+            res["skipped"].append({"row": rowno, "plate": plate, "reason": note})
+            continue
+        if plate in seen:
+            res["dupRows"] += 1
+            continue
+        seen.add(plate)
+        proj, bad_file = _affairs_project(get(r, "affairsFile"), projects)
+        if bad_file:
+            res["unknownFiles"].append({"row": rowno, "plate": plate, "value": cell_text(get(r, "affairsFile")), "reason": bad_file})
+        owner_co, cc, user = _owner(get(r, "owner"), companies, ccs)
+        driver = None
+        if user and rowno in confirm:
+            driver = s.get(M.Employee, confirm[rowno]) if confirm[rowno] else None
+            res["confirmed"] += 1 if driver is not None else 0
+        elif user and len(norm_name(user).split()) >= 2:            # اسم بكلمتين أو أكتر ← أقرب موظفين (اختياري)
+            nk = norm_name(user)
+            cands = sorted(((name_score(nk, nn), e) for nn, e in emps), key=lambda x: -x[0])
+            cands = [{"id": e.id, "name": e.name, "score": sc, "costCenter": e.costCenter or ""} for sc, e in cands[:3] if sc >= 0.6]
+            if cands:
+                res["suggest"].append({"row": rowno, "key": user, "plate": plate, "candidates": cands})
+        vals = {"vehicleType": _vehicle_type(lic), "model": " ".join(x for x in (cell_text(get(r, "make")), cell_text(get(r, "year"))) if x) or None,
+                "affairsProjectId": proj.id if proj else None, "ownerCompanyId": owner_co.id if owner_co is not None and owner_co.id != co.id else None,
+                "costCenter": cc, "driverId": driver.id if driver is not None else None, "userName": None if driver is not None else user}
+        show = {"row": rowno, "plate": plate, "type": vals["vehicleType"], "model": vals["model"], "affairs": proj.nameAr if proj else "",
+                "owner": owner_co.nameAr if vals["ownerCompanyId"] else "", "costCenter": cc or "",
+                "user": driver.name if driver is not None else (user or ""), "linked": driver is not None}
+        v = existing.get(plate)
+        if v is None:
+            plan.append({"new": True, "plate": plate, "vals": vals})
+            res["new"].append(show)
+            continue
+        fills = {}
+        for f, val in vals.items():
+            if val in (None, ""):
+                continue
+            if f in ("userName", "driverId") and (v.driverId or v.userName):          # مع مين: لو فيه حد متسجّل ← يفضل
+                cur = v.driverId or v.userName
+                if str(cur) != str(val):
+                    res["conflicts"].append({"row": rowno, "plate": plate, "field": "userName", "current": _who(s, v), "file": show["user"]})
+                continue
+            cur = getattr(v, f)
+            if cur in (None, ""):
+                fills[f] = val
+                res["fills"].append({"row": rowno, "plate": plate, "field": f, "value": _show_val(s, f, val)})
+            elif str(cur) != str(val):
+                res["conflicts"].append({"row": rowno, "plate": plate, "field": f, "current": _show_val(s, f, cur), "file": _show_val(s, f, val)})
+        if not v.companyId:
+            fills["companyId"] = co.id
+        if fills:
+            plan.append({"new": False, "vehicle": v, "vals": fills})
+    res["newCount"] = len(res["new"])
+    res["updateCount"] = sum(1 for p in plan if not p["new"])
+    res["fillTotal"] = len(res["new"]) + sum(len(p["vals"]) for p in plan if not p["new"])
+    res["company"] = co.nameAr
+    return plan, res
+
+
+def _who(s, v):
+    e = s.get(M.Employee, v.driverId) if v.driverId else None
+    return e.name if e is not None else (v.userName or "")
+
+
+def _show_val(s, f, val):
+    if f in ("affairsProjectId",):
+        p = s.get(M.Project, val)
+        return p.nameAr if p else val
+    if f in ("ownerCompanyId", "companyId"):
+        c = s.get(M.Company, val)
+        return c.nameAr if c else val
+    if f == "driverId":
+        e = s.get(M.Employee, val)
+        return e.name if e else val
+    return str(val)
+
+
+def apply_vehicles(s, plan, file_name, sheet, user, res, company_id):
+    batch = M.ImportBatch(id=db.new_id("ib"), target="vehicles", fileName=file_name, sheet=sheet, createdBy=user, createdAt=db.now())
+    s.add(batch)
+    s.flush()
+    added = updated = values = 0
+    for p in plan:
+        if p["new"]:
+            v = M.Vehicle(id=db.new_id("veh"), plate=p["plate"], companyId=company_id, **{k: val for k, val in p["vals"].items() if val not in (None, "")})
+            s.add(v)
+            s.flush()
+            s.add(M.ImportChange(batchId=batch.id, entity="vehicle", recordId=v.id, field="__created", newValue=p["plate"]))
+            added += 1
+            continue
+        v = p["vehicle"]
+        for f, val in p["vals"].items():
+            s.add(M.ImportChange(batchId=batch.id, entity="vehicle", recordId=v.id, field=f, oldValue=None, newValue=str(val)))
+            setattr(v, f, val)
+            values += 1
+        updated += 1
+    summary = {"vehicles": added + updated, "added": added, "updated": updated, "values": values + added,
+               "skipped": len(res["skipped"]), "conflicts": len(res["conflicts"]), "confirmed": res["confirmed"]}
+    batch.summary = json.dumps(summary, ensure_ascii=False)
+    return batch, summary
+
+
 def undo_batch(s, batch, user):
-    """بيرجّع القيمة القديمة لكل خانة لسه زي ما الاستيراد سابها (اللي اتعدّلت بعده بتفضل)."""
+    """بيرجّع القيمة القديمة لكل خانة لسه زي ما الاستيراد سابها (اللي اتعدّلت بعده بتفضل). العربيات اللي اتضافت
+    بتتشال، إلا لو اتضاف لها تصاريح أو بيانات مابيحطهاش الاستيراد (التأمين، الدفتر، العقد، الملاحظات)."""
     restored, kept, per_emp = 0, [], {}
     for ch in s.scalars(select(M.ImportChange).where(M.ImportChange.batchId == batch.id)):
+        if ch.entity == "vehicle":
+            v = s.get(M.Vehicle, ch.recordId)
+            if v is None:
+                continue
+            if ch.field == "__created":
+                used = s.scalar(select(M.Permit.id).where(M.Permit.vehicleId == v.id).limit(1))
+                if used or v.insuranceExpiry or v.govLicenseExpiry or v.projectId or v.notes:
+                    kept.append({"id": v.id, "name": v.plate, "field": ch.field, "label": "العربية اتضاف لها بيانات أو تصاريح"})
+                    continue
+                s.delete(v)
+                restored += 1
+                continue
+            if str(getattr(v, ch.field) or "") != (ch.newValue or ""):
+                kept.append({"id": v.id, "name": v.plate, "field": ch.field, "label": VEH_IMPORT_FIELDS.get(ch.field, ch.field)})
+                continue
+            setattr(v, ch.field, ch.oldValue)
+            restored += 1
+            continue
         if ch.entity != "employee":
             continue
         e = s.get(M.Employee, ch.recordId)
