@@ -685,6 +685,184 @@ function bindImportResult(m, r) {
 /* =====================================================================
    بطاقة الموظف (Profile Card)
    ===================================================================== */
+/* ---------- بطاقة الموظف: الشاشة والطباعة ----------
+   الأقسام (empCardSections) واحدة للاتنين. الشاشة: كروت، والخانة الفاضية مابتظهرش — بتتجمع في «⚠️ ناقص» تحت
+   الكارت. الطباعة: A4 طولي من openReportWindow (شعار شركة الموظف)، جداول عنوان / قيمة، والمالية بس لو اتختارت. */
+const empYears = n => (LANG === 'en' ? `${n} ${n === 1 ? 'year' : 'years'}` : `${n} ${t('سنة')}`);
+const empMonths = n => (LANG === 'en' ? `${n} ${n === 1 ? 'month' : 'months'}` : `${n} ${t('شهر')}`);
+function empServiceText(from, to) {
+  if (!from) return '';
+  const a = new Date(from), b = to ? new Date(to) : new Date();
+  let m = (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth()) - (b.getDate() < a.getDate() ? 1 : 0);
+  if (m < 0) return '';
+  const y = Math.floor(m / 12);
+  m %= 12;
+  return [y ? empYears(y) : '', m ? empMonths(m) : ''].filter(Boolean).join(LANG === 'en' ? ', ' : ` ${t('و')}`) || t('أقل من شهر');
+}
+/** [{key, icon, title, fields: [[العنوان، القيمة HTML]]}] — القيمة الفاضية = ناقصة. print ← الكفيل والعقد في بيانات العمل
+    (الشاشة بتعرضهم في empContractBlock)، money ← البيانات المالية (في الطباعة بس لو اتختارت) */
+function empCardSections(e, { print = false, money = true } = {}) {
+  const aff = primaryAff(e), pr = IDX.project[aff.projectId], ccCo = costCenterCompanyId(e.costCenter);
+  const num = v => v ? `<span class="num">${esc(v)}</span>` : '';
+  const ltr = v => v ? `<span dir="ltr">${esc(v)}</span>` : '';
+  const sub = (v, s) => v ? `${v}${s ? ` <small class="ec-sub">(${esc(s)})</small>` : ''}` : '';
+  const age = ageYears(e.dateOfBirth);
+  // بدل السكن مع البيانات المالية للي يشوفها، وفي بيانات العمل لغيره (مشمول / غير مشمول بس)
+  const moneyView = can('sensitive.salary') || can('sensitive.bank');
+  const housing = ['بدل السكن', e.housingIncluded ? (e.housingAmount ? fmtMoney(e.housingAmount) : t('مشمول')) : t('غير مشمول')];
+  const secs = [
+    { key: 'personal', icon: '👤', title: 'البيانات الشخصية', fields: [
+      ['الرقم المدني', num(e.id)], ['الجنسية', esc(personNat(e))],
+      ['تاريخ الميلاد', sub(fmtDate(e.dateOfBirth), age !== null && age !== undefined ? empYears(age) : '')], ['الجنس', esc(t(GENDER_LABELS[e.gender] || ''))],
+      ['مكان الميلاد', esc(e.placeOfBirth)], ['فصيلة الدم', ltr(e.bloodType)], ['الرقم الموحد', num(e.unifiedNumber)],
+      ...(isKuwaitiStaff(e) ? [] : [['تاريخ دخول الكويت', fmtDate(e.kuwaitEntryDate)]])] },
+    { key: 'contact', icon: '📞', title: 'التواصل والسكن', fields: [
+      ['الهاتف', ltr(e.phone)], ['هاتف المنزل', ltr(e.homePhone)], ['البريد الإلكتروني', ltr(e.email)], ['عنوان السكن', esc(addressText(e))]] },
+    { key: 'work', icon: '💼', title: 'بيانات العمل', fields: [
+      ...(print ? [['الكفيل', esc(companyName(aff.companyId))],
+        ['العقد / المشروع', pr ? esc(projectName(pr.id)) + (pr.contractNo ? ` <small class="ec-sub">${esc(pr.contractNo)}</small>` : '') : '']] : []),
+      ['المهنة', esc(personProf(e))], ['تاريخ التعيين', sub(fmtDate(e.dateOfHire), empServiceText(e.dateOfHire, e.serviceEndDate))],
+      ['نوع العقد', esc(e.contractType)], ['رقم الملف', num(e.fileNo)], ['الرقم الوظيفي', num(e.dpId)], ['مركز التكلفة', esc(ccLabel(e.costCenter))],
+      ...(print ? [['شغال فعليًا في', esc(companyName(ccCo))]] : []), ['مكان العمل الفعلي', esc(e.actualWorkplace)],
+      ...(moneyView ? [] : [housing]),
+      ...(e.serviceEndDate || empEnded(e) ? [['آخر يوم عمل', fmtDate(e.serviceEndDate)], ['سبب انتهاء الخدمة', esc(t(e.serviceEndReason || ''))]] : [])] },
+    { key: 'edu', icon: '🎓', title: 'المؤهل الدراسي', fields: [
+      ['المؤهل الدراسي', esc(e.qualification)], ['التخصص', esc(e.specialization)], ['الجامعة / جهة التخرج', esc(e.university)]] },
+  ];
+  if (money && moneyView) secs.push({ key: 'money', icon: '💰', title: 'البيانات المالية', fields: [
+    ...(can('sensitive.salary') ? [['الراتب', e.salary ? fmtMoney(e.salary) : '']] : []), housing,
+    ...(can('sensitive.bank') ? [['البنك', esc(e.bank)], ['IBAN', ltr(e.iban)]] : [])] });
+  return secs;
+}
+/** المستندات: الجواز برقمه وإصداره، وإذن العمل بإصداره */
+function empCardDocs(e) {
+  const extra = { passportExp: { no: e.passportNo, issue: e.passportIssueDate }, workPermitExp: { issue: e.workPermitIssue } };
+  return EMP_DATE_FIELDS.filter(f => (!f.driverOnly || e.isDriver) && (f.key !== 'residencyExp' || empNeedsResidency(e) || e.residencyExp))   // الكويتي والخليجي مالهمش إقامة
+    .map(f => ({ key: f.key, label: t(f.label), exp: e[f.key], ...(extra[f.key] || {}) }));
+}
+
+/* ----- الشاشة ----- */
+function empCardHeadHtml(e) {
+  const comp = empDocCompleteness(e);
+  return `<div class="ec-head"><div class="avatar">${esc(initials(e.name))}</div>
+      <div><h2>${esc(e.name)} ${e.isDriver ? '🚚' : ''}</h2>${e.nameEn ? `<div class="en">${esc(e.nameEn)}</div>` : ''}
+        <div class="ec-meta">${statusPill(e.employmentStatus)} ${e.govStage ? govStagePill(e.govStage) : ''}
+          ${[personProf(e), personNat(e), companyName(empCompanyId(e))].filter(Boolean).map(x => `<span class="chip">${esc(x)}</span>`).join('')}</div></div>
+      <div class="ec-ids"><span>${t('الرقم المدني')}</span><b>${esc(e.id)}</b><span>${t('رقم الملف')}</span><b>${esc(e.fileNo || '—')}</b>
+        <span>${t('الرقم الوظيفي')}</span><b>${esc(e.dpId || '—')}</b><span>${t('اكتمال المستندات')}</span><b>${comp.pct}%</b></div></div>
+    <div class="ec-docs">${empCardDocs(e).map(d => {
+      const n = daysUntil(d.exp), cls = n === null ? '' : n < 0 ? 'bad' : n <= 90 ? 'warn' : 'ok';
+      return `<div class="ec-doc ${cls}"><span>${esc(d.label)}${d.no ? ` · <bdi dir="ltr">${esc(d.no)}</bdi>` : ''}</span><b>${d.exp ? fmtDate(d.exp) : '—'}</b>
+        <small>${esc(daysText(n) || t('مش متسجّل'))}</small></div>`;
+    }).join('')}</div>
+    <div class="small muted" style="margin-top:4px">${t('آخر تعديل')}: ${fmtDateTime(e.lastUpdated)} ${esc(e.lastUpdatedBy || '')}</div>`;
+}
+function empCardInfoHtml(e) {
+  const secs = Object.fromEntries(empCardSections(e).map(s => [s.key, s]));
+  const fieldsHtml = s => {
+    const has = s.fields.filter(f => f[1]), miss = s.fields.filter(f => !f[1]).map(f => esc(t(f[0])));
+    return `<div class="ec-f">${has.map(([l, v]) => `<div><span>${esc(t(l))}</span><b>${v}</b></div>`).join('') || `<div class="muted">${t('مفيش بيانات')}</div>`}</div>
+      ${miss.length ? `<div class="ec-missing">⚠️ ${t('ناقص')}: ${miss.join(LANG === 'en' ? ', ' : '، ')}</div>` : ''}`;
+  };
+  const card = (s, extra = '', wide = false) => `<section class="ec-card${wide ? ' wide' : ''}"><h4>${s.icon} ${t(s.title)}</h4>${fieldsHtml(s)}${extra}</section>`;
+  const ccCo = costCenterCompanyId(e.costCenter), affs = e.affiliations || [];
+  const field = (l, v) => `<div><span>${esc(t(l))}</span>${v || '<span class="muted">—</span>'}</div>`;
+  const permits = permitsOf('employee', e.id).filter(permitCurrent);
+  const vehicles = STATE.vehicles.filter(v => v.driverId === e.id);
+  const work = `<div class="ec-block">${empContractBlock(e)}</div>
+    ${ccCo && !affs.some(a => a.companyId === ccCo) ? `<div class="notice" style="margin-top:8px">🏭 ${t('شغال فعليًا في')}: <b>${esc(companyName(ccCo) || '—')}</b> <span class="small">(${t('مركز التكلفة')}: ${esc(e.costCenter)})</span></div>` : ''}
+    ${affs.length > 1 ? `<div class="small" style="margin-top:8px"><span class="muted">${t('مسجّل كمان على')}:</span> ${affs.slice(1).map(a => `<span class="chip">${esc(companyName(a.companyId) || '—')}${a.projectId ? ' · ' + esc(projectName(a.projectId)) : ''}</span>`).join(' ')}</div>` : ''}`;
+  return `<div class="ec-grid">
+    ${card(secs.personal)}${card(secs.contact)}
+    ${card(secs.work, work, true)}
+    ${card(secs.edu, '', !secs.money)}${secs.money ? card(secs.money) : ''}
+    ${isKuwaitiStaff(e) ? `<section class="ec-card wide">${kuwaitiInfoHtml(e, field)}</section>` : ''}
+    ${permits.length ? `<section class="ec-card"><h4>🪪 ${t('التصاريح')}</h4><div class="row" style="flex-wrap:wrap;gap:6px">${permits.map(p => `<span class="chip ${can('permits.view') ? 'clickable' : ''}" data-open-permit="${p.id}" style="color:var(--${permitValid(p) ? 'green' : 'red'})">${esc(permitLabel(p))}${p.permitNo ? ` <span class="num">${esc(p.permitNo)}</span>` : ''} · ${fmtDate(p.expiryDate)}</span>`).join('')}</div></section>` : ''}
+    ${vehicles.length ? `<section class="ec-card"><h4>🚗 ${t('السيارات')}</h4>${vehicles.map(v => `<div>🚗 <b class="num">${esc(v.plate)}</b> <span class="muted">${esc(v.model || '')}</span></div>`).join('')}</section>` : ''}
+    ${e.notes ? `<section class="ec-card wide"><h4>📝 ${t('ملاحظات')}</h4><div style="white-space:pre-line">${esc(e.notes)}</div></section>` : ''}</div>`;
+}
+
+/* ----- الطباعة ----- */
+const EMP_CARD_PRINT_CSS = `
+  .ec-id{display:grid;grid-template-columns:auto 1fr auto;gap:14px;align-items:center;margin:12px 0 4px;padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--band);break-inside:avoid}
+  .ec-av{width:62px;height:62px;border-radius:8px;background:var(--head);color:#fff;display:grid;place-items:center;font-size:24px;font-weight:700}
+  .ec-name{font-size:17px;font-weight:700;line-height:1.35}
+  .ec-en{direction:ltr;unicode-bidi:plaintext;color:var(--muted);font-size:10.5px;letter-spacing:.3px}
+  .ec-tags{margin-top:6px;display:flex;gap:5px;flex-wrap:wrap}
+  .ec-tag{border:1px solid var(--line);background:#fff;border-radius:10px;padding:0 8px;font-size:9.5px;line-height:17px}
+  .ec-tag.st{border-color:var(--head);color:var(--head);font-weight:600}
+  .ec-keys{border-collapse:collapse;font-size:10px}
+  .ec-keys th{color:var(--muted);font-weight:500;text-align:start;padding:2px 0;padding-inline-end:12px;white-space:nowrap}
+  .ec-keys td{font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .ec-sec{margin-top:11px;break-inside:avoid}
+  .ec-sec h3{margin:0 0 5px;font-size:11.5px;color:var(--head);border-bottom:1.5px solid var(--head);padding-bottom:3px}
+  table.ec-kv{width:100%;border-collapse:collapse;table-layout:fixed}
+  table.ec-kv th{background:var(--band);color:var(--muted);font-weight:500;text-align:start;padding:4px 8px;border:1px solid var(--line);width:17%;font-size:9.5px}
+  table.ec-kv td{padding:4px 8px;border:1px solid var(--line);font-weight:600;width:33%;overflow-wrap:anywhere}
+  .ec-sub{color:var(--muted);font-weight:400} .ec-none{color:#b3bcb9;font-weight:400} .num{font-variant-numeric:tabular-nums}`;
+function empKvTable(fields) {
+  const cells = fields.map(([l, v]) => `<th>${esc(t(l))}</th><td>${v || '<span class="ec-none">—</span>'}</td>`);
+  if (cells.length % 2) cells.push('<th></th><td></td>');
+  let rows = '';
+  for (let i = 0; i < cells.length; i += 2) rows += `<tr>${cells[i]}${cells[i + 1]}</tr>`;
+  return `<table class="ec-kv">${rows}</table>`;
+}
+function empCardPrintBody(e, o) {
+  const main = LANG === 'en' && e.nameEn ? e.nameEn : e.name, second = main === e.name ? e.nameEn : e.name;
+  const secs = empCardSections(e, { print: true, money: o.money }).filter(s => s.key === 'personal' || s.key === 'work' || s.fields.some(f => f[1]));
+  const tier = d => { const tr = tierOf(d); return TIERS[tr] ? TIERS[tr].cls : ''; };
+  const permits = o.permits ? permitsOf('employee', e.id).filter(permitCurrent) : [];
+  const vehicles = STATE.vehicles.filter(v => v.driverId === e.id);
+  const sec = (title, body) => `<section class="ec-sec"><h3>${title}</h3>${body}</section>`;
+  const st = EMP_STATUS_LABELS[e.employmentStatus] || EMP_STATUS_LABELS.active;
+  const kids = e.children || [];
+  const kw = isKuwaitiStaff(e) ? empKvTable([['الحالة الاجتماعية', esc(maritalLabel(e))], ['رقم الجنسية', esc(e.nationalityNo)],
+    ['المادة (الجنسية)', esc(e.citizenshipArticle)], ['تاريخ التجنس', fmtDate(e.naturalizationDate)],
+    ['الدراسة الحالية', esc(e.studyInstitution)], ['الأبناء', kids.length ? String(kids.length) : '']]) : '';
+  return `<style>${EMP_CARD_PRINT_CSS}</style>
+    <div class="ec-id"><div class="ec-av">${esc(initials(e.name))}</div>
+      <div><div class="ec-name">${esc(main)}</div>${second ? `<div class="ec-en">${esc(second)}</div>` : ''}
+        <div class="ec-tags"><span class="ec-tag st">${esc(LANG === 'en' ? st.en : st.ar)}</span>
+          ${[personProf(e), personNat(e), companyName(empCompanyId(e))].filter(Boolean).map(x => `<span class="ec-tag">${esc(x)}</span>`).join('')}</div></div>
+      <table class="ec-keys">${[['الرقم المدني', e.id], ['رقم الملف', e.fileNo], ['الرقم الوظيفي', e.dpId], ['تاريخ التعيين', fmtDate(e.dateOfHire)]]
+        .map(([l, v]) => `<tr><th>${esc(t(l))}</th><td>${esc(v || '—')}</td></tr>`).join('')}</table></div>
+    ${secs.map(s => sec(`${s.icon} ${esc(t(s.title))}`, empKvTable(s.fields))).join('')}
+    ${kw ? sec(`🇰🇼 ${esc(t('بيانات العمالة الوطنية'))}`, kw) : ''}
+    ${sec(`🪪 ${esc(t('المستندات والتواريخ'))}`, `<table class="rpt"><thead><tr><th class="txt">${t('المستند')}</th><th>${t('الرقم')}</th><th>${t('تاريخ الإصدار')}</th><th>${t('تاريخ الانتهاء')}</th><th>${t('الحالة')}</th></tr></thead>
+      <tbody>${empCardDocs(e).map(d => `<tr><td class="txt"><b>${esc(d.label)}</b></td><td class="num">${esc(d.no || '—')}</td><td class="num">${fmtDate(d.issue) || '—'}</td>
+        <td class="num">${d.exp ? `<span class="pill ${tier(d.exp)}">${fmtDate(d.exp)}</span>` : '—'}</td><td>${esc(daysText(daysUntil(d.exp))) || `<span class="ec-none">${t('مش متسجّل')}</span>`}</td></tr>`).join('')}</tbody></table>`)}
+    ${permits.length ? sec(`🪪 ${esc(t('التصاريح'))}`, `<table class="rpt"><thead><tr><th class="txt">${t('نوع التصريح')}</th><th>${t('الرقم')}</th><th class="txt">${t('العقد')}</th><th>${t('الإصدار')}</th><th>${t('الانتهاء')}</th><th>${t('الحالة')}</th></tr></thead>
+      <tbody>${permits.map(p => `<tr><td class="txt"><b>${esc(permitLabel(p))}</b></td><td class="num">${esc(p.permitNo || '—')}</td><td class="txt">${esc(projectName(p.projectId)) || '—'}</td>
+        <td class="num">${fmtDate(p.issueDate) || '—'}</td><td class="num"><span class="pill ${tier(p.expiryDate)}">${fmtDate(p.expiryDate)}</span></td><td>${esc(daysText(daysUntil(p.expiryDate)))}</td></tr>`).join('')}</tbody></table>`) : ''}
+    ${vehicles.length ? sec(`🚗 ${esc(t('السيارات'))}`, empKvTable(vehicles.map(v => ['رقم اللوحة', `<span class="num">${esc(v.plate)}</span> <small class="ec-sub">${esc(v.model || '')}</small>`]))) : ''}
+    ${o.notes && e.notes ? sec(`📝 ${esc(t('ملاحظات'))}`, `<div style="border:1px solid var(--line);padding:6px 8px;white-space:pre-line">${esc(e.notes)}</div>`) : ''}`;
+}
+function printEmployeeCard(e, o = {}) {
+  const name = LANG === 'en' && e.nameEn ? e.nameEn : e.name;
+  openReportWindow({ title: t('بطاقة بيانات موظف'), subtitle: name, company: IDX.company[empCompanyId(e)] || null, landscape: false,
+    meta: [[t('الرقم المدني'), e.id]], body: empCardPrintBody(e, o) });
+}
+/** قبل الطباعة: اللغة، والتصاريح والملاحظات، والبيانات المالية (مقفولة افتراضيًا — للي معاه الصلاحية بس) */
+function openEmployeeCardPrint(e) {
+  const money = can('sensitive.salary') || can('sensitive.bank');
+  const hasPermits = permitsOf('employee', e.id).some(permitCurrent);
+  const m = openModal({
+    title: `🖨️ ${t('طباعة بطاقة الموظف')}`, size: 'narrow',
+    body: `<div class="form"><label class="full">${t('لغة الطباعة')}<select name="lang">${opt('ar', 'العربية', LANG !== 'en')}${opt('en', 'English', LANG === 'en')}</select></label>
+      ${hasPermits ? `<label class="check full"><input type="checkbox" name="permits" checked> 🪪 ${t('التصاريح')}</label>` : ''}
+      ${e.notes ? `<label class="check full"><input type="checkbox" name="notes"> 📝 ${t('الملاحظات')}</label>` : ''}
+      ${money ? `<label class="check full"><input type="checkbox" name="money"> 💰 ${t('البيانات المالية (الراتب والبنك)')}</label>` : ''}</div>
+      <div class="small muted" style="margin-top:8px">${t('A4 طولي — معاينة وطباعة بس.')}</div>`,
+    foot: `<button class="btn primary" data-go>🖨️ ${t('معاينة وطباعة')}</button><button class="btn" data-close>${t('إلغاء')}</button>`,
+  });
+  $('[data-go]', m.el).onclick = () => {
+    const d = formValues(m.el);
+    m.close();
+    withLang(d.lang, () => printEmployeeCard(e, { permits: !!d.permits, notes: !!d.notes, money: money && !!d.money }));
+    printLog(`${t('بطاقة الموظف')}: ${e.name} (${e.id})${d.money ? ' — ' + t('مع البيانات المالية') : ''}`, 'employee');
+  };
+}
+
 async function openProfileCard(id, tab = 'info') {
   const e = IDX.employee[id];
   if (!e) return toast('الموظف غير موجود', 'err');
@@ -692,14 +870,24 @@ async function openProfileCard(id, tab = 'info') {
   const tl = (STATE.employeeTimeline[e.id] || []).slice().reverse();
   const moves = tl.filter(x => MOVE_ICONS[x.type]);
   const ccCo = costCenterCompanyId(e.costCenter);
-  const vehicles = STATE.vehicles.filter(v => v.driverId === e.id);
   const field = (l, v) => `<div><span>${esc(t(l))}</span>${v || '<span class="muted">—</span>'}</div>`;
+  // الزراير: الأساسية ظاهرة، والنماذج والإجراءات في قايمتين (كل بند بصلاحيته)
+  const menuItem = (a, label, perm = '', write = false) => ((!perm || canAll(perm)) && (!write || !document.body.classList.contains('readonly'))
+    ? `<button type="button" data-a="${a}">${label}</button>` : '');
+  const menu = (label, items) => { const html = items.join(''); return html ? `<details class="ec-menu"><summary class="btn">${label} ▾</summary><div>${html}</div></details>` : ''; };
+  const forms = menu(`📄 ${t('النماذج والخطابات')}`, [
+    menuItem('contract', `📄 ${t('عقد العمل')}`, 'contract.view employees.view sensitive.salary'),
+    empNeedsResidency(e) ? menuItem('residency', `🪪 ${t('نموذج الإقامة')}`, 'sensitive.documents') : '',
+    menuItem('driving', `🚗 ${t('نموذج رخصة القيادة')}`),
+    isKuwaitiStaff(e) ? menuItem('kw', `🇰🇼 ${t('نماذج العمالة الوطنية')}`) : '',
+    menuItem('clearance', `🧾 ${t('إقرار مخالصة')}`),
+    menuItem('letters', `📨 ${t('الخطابات والشهادات')}${lettersOf(e.id).length ? ` (${lettersOf(e.id).length})` : ''}`)]);
+  const actions = menu(`⚙️ ${t('إجراءات')}`, [
+    menuItem('status', `🔄 ${t('الحالة الوظيفية')}`, 'employees.edit', true),
+    menuItem('stage', `🏛️ ${t('مرحلة المعاملة')}`, 'employees.edit', true)]);
   const m = openModal({
     title: esc(t('بطاقة الموظف')), size: 'wide',
-    body: `<div class="profile-head"><div class="avatar">${esc(initials(e.name))}</div>
-        <div style="flex:1"><h2 style="margin:0">${esc(e.name)} ${e.isDriver ? '🚚' : ''}</h2><div class="muted" dir="ltr" style="text-align:start">${esc(e.nameEn || '')}</div>
-        <div class="row small">${statusPill(e.employmentStatus)} ${govStagePill(e.govStage)} <span class="muted">${t('آخر تعديل')}: ${fmtDateTime(e.lastUpdated)} ${esc(e.lastUpdatedBy || '')}</span></div></div>
-        <div style="width:150px"><div class="small muted">${t('اكتمال المستندات')} ${comp.pct}%</div><div class="progress"><i style="width:${comp.pct}%"></i></div></div></div>
+    body: `${empCardHeadHtml(e)}
       ${empEndNotice(e)}
       ${approvalsBannerHtml(e.id)}
       ${e.govStageNote ? `<div class="notice warn" style="margin-top:10px">⚠️ ${esc(e.govStageNote)}</div>` : ''}
@@ -711,28 +899,7 @@ async function openProfileCard(id, tab = 'info') {
         <button data-tab="moves" class="${tab === 'moves' ? 'active' : ''}">🏢 ${t('التحركات')} (${moves.length})</button>
         <button data-tab="timeline" class="${tab === 'timeline' ? 'active' : ''}">السجل (${tl.length})</button>
       </div>
-      <div data-pane="info" ${tab !== 'info' ? 'hidden' : ''}><div class="kv">
-        ${field('الرقم المدني', `<b class="num">${esc(e.id)}</b>`)}${field('الجنسية', esc(e.nationality))}${field('المهنة', esc(e.profession) + (e.professionEn ? `<div class="small muted">${esc(e.professionEn)}</div>` : ''))}
-        ${field('تاريخ الميلاد', fmtDate(e.dateOfBirth))}${field('الجنس', esc(t(GENDER_LABELS[e.gender] || '')))}${field('مكان الميلاد', esc(e.placeOfBirth))}
-        ${field('تاريخ إصدار الجواز', fmtDate(e.passportIssueDate))}${field('تاريخ التعيين', fmtDate(e.dateOfHire))}${field('تاريخ دخول الكويت', fmtDate(e.kuwaitEntryDate))}${field('تاريخ انتهاء الخدمة', fmtDate(e.serviceEndDate))}${e.serviceEndReason ? field('سبب انتهاء الخدمة', esc(t(e.serviceEndReason))) : ''}
-        ${field('الرقم الموحد', e.unifiedNumber ? `<span class="num">${esc(e.unifiedNumber)}</span>` : '')}${field('فصيلة الدم', esc(e.bloodType))}
-        ${field('عنوان السكن', esc(addressText(e)))}${field('هاتف المنزل', esc(e.homePhone))}${can('sensitive.salary') ? field('الراتب', fmtMoney(e.salary)) : ''}
-        ${field('بدل السكن', e.housingIncluded ? (e.housingAmount ? fmtMoney(e.housingAmount) : t('مشمول')) : t('غير مشمول'))}
-        ${field('نوع العقد', esc(e.contractType))}${field('رقم الملف', esc(e.fileNo))}${field('مركز التكلفة', esc(e.costCenter))}
-        ${field('مكان العمل الفعلي', esc(e.actualWorkplace))}${field('الهاتف', esc(e.phone))}${field('البريد الإلكتروني', esc(e.email))}${can('sensitive.bank') ? field('البنك', esc(e.bank) + (e.iban ? `<div class="small muted">${esc(e.iban)}</div>` : '')) : ''}
-        ${field('الرقم الوظيفي', e.dpId ? `<span class="num">${esc(e.dpId)}</span>` : '')}
-        ${field('المؤهل الدراسي', esc(e.qualification))}${field('التخصص', esc(e.specialization))}${field('الجامعة / جهة التخرج', esc(e.university))}
-      </div>
-      ${isKuwaitiStaff(e) ? kuwaitiInfoHtml(e, field) : ''}
-      <h4>${t('الكفالة والعقد ومكان الشغل')}</h4>
-      ${empContractBlock(e)}
-      <h4>${t('الشركات والمشاريع')}</h4>
-      ${costCenterCompanyId(e.costCenter) && !(e.affiliations || []).some(a => a.companyId === costCenterCompanyId(e.costCenter))
-        ? `<div class="notice" style="margin:4px 0">🏭 ${t('شغال فعليًا في')}: <b>${esc(companyName(costCenterCompanyId(e.costCenter)) || '—')}</b> <span class="small">(${t('مركز التكلفة')}: ${esc(e.costCenter)})</span></div>` : ''}
-      ${(e.affiliations || []).map((a, i) => `<div class="row" style="padding:4px 0">${i === 0 ? '<span class="chip on">' + t('أساسي') + '</span>' : '<span class="chip">' + t('إضافي') + '</span>'} <b>${esc(companyName(a.companyId) || '—')}</b> <span class="muted">${esc(projectName(a.projectId))}</span></div>`).join('') || '<div class="muted">—</div>'}
-      ${vehicles.length ? `<h4>${t('السيارات')}</h4>` + vehicles.map(v => `<div>🚗 ${esc(v.plate)} ${esc(v.model || '')}</div>`).join('') : ''}
-      ${e.notes ? `<h4>${t('ملاحظات')}</h4><div style="white-space:pre-line">${esc(e.notes)}</div>` : ''}
-      </div>
+      <div data-pane="info" ${tab !== 'info' ? 'hidden' : ''}>${empCardInfoHtml(e)}</div>
       <div data-pane="docs" ${tab !== 'docs' ? 'hidden' : ''}>
         <table class="data"><thead><tr><th>المستند</th><th>الرقم</th><th>تاريخ الانتهاء</th><th>المتبقي</th><th class="write-only" data-p="employees.edit"></th></tr></thead><tbody>
         ${EMP_DATE_FIELDS.filter(f => !f.driverOnly || e.isDriver).map(f => `<tr><td>${esc(t(f.label))}</td><td>${f.key === 'passportExp' ? esc(e.passportNo || '') : ''}</td><td>${datePill(e[f.key])}</td><td class="small">${esc(daysText(daysUntil(e[f.key])))}</td>
@@ -754,16 +921,8 @@ async function openProfileCard(id, tab = 'info') {
         <ul class="timeline">${moves.map(x => `<li><span class="muted small">${fmtDateTime(x.date)} · ${esc(x.user || '')}</span><br>${MOVE_ICONS[x.type]} ${esc(x.label)}</li>`).join('') || `<li class="muted">${t('مفيش تحركات مسجّلة')}</li>`}</ul>
       </div>
       <div data-pane="timeline" ${tab !== 'timeline' ? 'hidden' : ''}><ul class="timeline">${tl.map(x => `<li><span class="muted small">${fmtDateTime(x.date)} · ${esc(x.user || '')}</span><br>${esc(x.label)}</li>`).join('') || '<li class="muted">—</li>'}</ul></div>`,
-    foot: `<button class="btn primary write-only" data-p="employees.edit" data-a="edit">✏️ تعديل</button>
-      <button class="btn write-only" data-p="employees.edit" data-a="status">🔄 ${t('الحالة الوظيفية')}</button>
-      <button class="btn write-only" data-p="employees.edit" data-a="stage">🏛️ مرحلة المعاملة</button>
-      <button class="btn" data-p="contract.view employees.view sensitive.salary" data-a="contract">📄 عقد العمل</button>
-      ${empNeedsResidency(e) ? '<button class="btn" data-p="sensitive.documents" data-a="residency">🪪 نموذج الإقامة</button>' : ''}
-      <button class="btn" data-a="driving">🚗 نموذج رخصة القيادة</button>
-      ${isKuwaitiStaff(e) ? `<button class="btn" data-a="kw">🇰🇼 ${t('نماذج العمالة الوطنية')}</button>` : ''}
-      <button class="btn" data-a="clearance">🧾 إقرار مخالصة</button>
-      <button class="btn" data-a="letters">📨 ${t('الخطابات والشهادات')}${lettersOf(e.id).length ? ` (${lettersOf(e.id).length})` : ''}</button>
-      <button class="btn" data-a="print">🖨️ طباعة</button>
+    foot: `<button class="btn primary write-only" data-p="employees.edit" data-a="edit">✏️ ${t('تعديل')}</button>
+      <button class="btn" data-a="print">🖨️ ${t('طباعة البطاقة')}</button>${forms}${actions}
       <span class="spacer"></span>
       <button class="btn danger write-only" data-p="employees.delete" data-a="delete">🗑️ حذف</button>`,
   });
@@ -775,8 +934,13 @@ async function openProfileCard(id, tab = 'info') {
   if (tab === 'files' && can('sensitive.documents')) loadDriveFiles(e.id, m.el);
   $$('[data-renew]', m.el).forEach(b => b.onclick = () => { m.close(); openQuickRenewModal(e.id, b.dataset.renew); });
   const up = $('#emp-upload', m.el); if (up) up.onclick = () => uploadFileForEmployee(e.id, m.el);
+  $$('[data-open-permit]', m.el).forEach(c => c.onclick = () => { if (!can('permits.view')) return; m.close(); setView('permits', { focusPermit: c.dataset.openPermit }); });
+  // القايمة المفتوحة بتتقفل بالضغط برّاها (وفتح قايمة بيقفل التانية)
+  m.el.addEventListener('click', ev => $$('details.ec-menu[open]', m.el).forEach(d => { if (!d.contains(ev.target)) d.open = false; }));
   $$('[data-a]', m.el).forEach(b => b.onclick = async () => {
     const a = b.dataset.a;
+    const dm = b.closest('details');
+    if (dm) dm.open = false;
     if (a === 'edit') { m.close(); openEmployeeModal(e.id); }
     else if (a === 'stage') { m.close(); openGovStageModal(e.id); }
     else if (a === 'status') { m.close(); openEmployeeStatusModal(e.id); }
@@ -787,7 +951,7 @@ async function openProfileCard(id, tab = 'info') {
     else if (a === 'kw') openKuwaitiFormsChooser(e.id);
     else if (a === 'clearance') openClearanceModal(e.id);
     else if (a === 'letters') { m.close(); openLettersModal(e.id); }
-    else if (a === 'print') printHtml(e.name, `<h1>${esc(e.name)}</h1><div class="muted">${esc(e.nameEn || '')} · ${esc(e.id)}</div>` + $('[data-pane="info"]', m.el).innerHTML + $('[data-pane="docs"]', m.el).innerHTML);
+    else if (a === 'print') openEmployeeCardPrint(e);
     else if (a === 'delete') {
       const np = permitsOf('employee', e.id).length;
       if (!canApprove()) {                      // من غير صلاحية الموافقة ← طلب حذف بسبب
