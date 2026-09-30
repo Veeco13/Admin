@@ -96,6 +96,7 @@ zahed/
 | `js/permits.js` | PERMITS (قسم التصاريح المستقل) | `renderPermits`، `openPermitAddModal`، `openPermitModal`، `holderPermitsHtml`، `holderCardHtml`، `permitsFiltered`، `openPermitsReportModal`، `printPermitsReport`، `openPermitListsModal`، `permitsOf`، `permitHolder` |
 | `js/letters.js` | LETTERS (الخطابات والشهادات من بطاقة الموظف) | `openLettersModal`، `openSalaryCertModal`، `openLeaveRequestModal`، `openReturnModal`، `printFormSheet`، `printLeaveForm`، `printReturnForm`، `openLettersLog`، `reprintLetter`، `setLeaveStatus`، `returnOfLeave`، `lettersOf` |
 | `js/importx.js` | IMPORT EXTRA (📥 استيراد بيانات تكميلية — مدير النظام) | `openImportExtraModal` (رفع ← الشيت والمطابقة والأعمدة ← معاينة وتأكيد الأسماء ← اعتماد، والدفعات السابقة والتراجع) |
+| `backup.py` | النسخة الكاملة (ZIP) والتلقائية اليومية والاستعادة — القسم 28 | `create`، `list_backups`، `retention`، `kick`، `status`، `read_zip`، `restore_files`، `check_folder`، `folder` |
 | `import_extra.py` | الاستيراد التكميلي: بيملى الفاضي بس (الموظفين) ويضيف / يكمّل العربيات، ودفعات بتتسجّل للتراجع | `read_book`، `describe`، `suggest`، `analyze`، `apply_plan`، `analyze_vehicles`، `apply_vehicles`، `undo_batch`، `parse_value`، `norm_name`، `name_score` |
 | `letters.py` | شهادة الراتب / الاستمرارية (قالب `forms/salary_certificate.xlsx`) وطلب الإجازة والعودة منها | `salary_defaults`، `salary_xlsx`، `leave_snapshot`، `return_snapshot`، `return_of`، `next_number`، `date_en`، `date_ar`، `words_ar`، `words_en`، `bank_names`، `to_api` |
 | `js/contract.js` | CONTRACT GENERATOR، COMPANY LOG / AUDIT LOG | `renderContractView`، `buildContractHtml`، `renderCompanyLog` |
@@ -418,6 +419,11 @@ fill_docx_template()  ← {{ field }} حتى لو متقسّم على أكتر �
 | POST | `/api/employees/<id>/letters` | خطاب برقم جديد: `{kind: salary\|continuity, toAr, toEn, jobAr, jobEn, bankAr, bankEn}` (`sensitive.salary`) أو `{kind: leave, leaveType, from, to, address, phone, notes}` أو `{kind: return, leaveId \| (leaveType, from, to), actualDate, reason, notes}` (`employees.edit`) |
 | GET | `/api/letters/<id>/pdf` | الشهادة PDF من نسختها المحفوظة (معاينة بس) |
 | PUT | `/api/letters/<id>/status` | طلب الإجازة: `submitted` / `approved` / `rejected` |
+| GET | `/api/backup` | نسخة كاملة دلوقتي (ZIP) بتتحفظ في المجلد وبتتنزّل (مدير النظام) — القسم 28 |
+| GET · POST | `/api/backups` | قايمة النسخ والحالة والمجلد / نسخة كاملة يدوية |
+| GET · DELETE | `/api/backups/<name>` | تنزيل / حذف نسخة |
+| POST | `/api/backups/<name>/restore` · `/api/restore` | الاستعادة من نسخة في المجلد / من ملف مرفوع (zip أو json) — قبلها نسخة «قبل الاستعادة» |
+| PUT | `/api/backups/folder` | `{path}` مجلد النسخ (فاضي = الافتراضي) |
 | POST | `/api/import-extra/upload` | الملف ← الشيتات وأول صفوفها واقتراح المطابقة والأعمدة (مدير النظام) — القسم 27 |
 | POST | `/api/import-extra/preview` · `/apply` | `{token, sheet, headerRow, matchCol, matchBy: civil\|code\|name, map: {عمود: خانة}, confirm: {صف: رقم مدني}}` ← المعاينة / الحفظ |
 | GET · POST | `/api/import-extra/batches` · `/batches/<id>/undo` | الدفعات السابقة والتراجع |
@@ -531,10 +537,8 @@ python manage_db.py transfer sqlite:///lunx.db "postgresql+psycopg://lunx:PASS@l
 - مجلد `uploads/` ملفات على القرص وملوش علاقة بالقاعدة، فانقله زي ما هو.
 
 ### النسخ الاحتياطي
-- **تلقائي يومي:** أول طلب في اليوم بيعمل نسخة JSON كاملة (بالمستخدمين) في `backups/`.
-  - بيحتفظ بآخر 30 نسخة، وده ممكن يتغيّر من `LUNX_BACKUP_KEEP`.
-  - مكان الحفظ ممكن يتغيّر من `LUNX_BACKUP_DIR`.
-- **يدوي:** من الواجهة (👤 ← نسخة احتياطية)، أو `python manage_db.py backup`.
+- **النسخة الكاملة (ZIP) — القسم 28:** تلقائي كل يوم في الخلفية، ويدوي من «💾 النسخ الاحتياطية»، والمجلد بيتحدد من الشاشة (الافتراضي `LUNX_BACKUP_DIR`).
+- **`python manage_db.py backup`:** نسخة JSON للجداول بس (`lunx-manual-….json`).
 - **الاستعادة بتقبل:**
   - نسخ الإصدار ده.
   - نسخ v353-flask.1 و.2.
@@ -604,7 +608,7 @@ docker compose exec db pg_dump -U lunx lunx > lunx.sql          # نسخة SQL �
 | `LUNX_ADMIN_PASSWORD` | `admin123` | كلمة سر admin **أول مرة بس** |
 | `LUNX_AUTO_MIGRATE` | `0` في Docker و`1` محليًا | تطبيق تعديلات الهيكل عند تحميل التطبيق |
 | `LUNX_BEHIND_PROXY` / `LUNX_COOKIE_SECURE` | `0` | خليهم `1` ورا Nginx/Traefik بـ HTTPS |
-| `LUNX_BACKUP_KEEP` / `LUNX_BACKUP_DIR` | `30` / `/data/backups` | النسخ اليومية |
+| `LUNX_BACKUP_DIR` | `/data/backups` | مجلد النسخ الافتراضي (مدير النظام بيغيّره من «💾 النسخ الاحتياطية») |
 | `LUNX_MAX_UPLOAD_MB` | `25` | أقصى حجم مرفق |
 | `WORKERS` / `THREADS` / `TIMEOUT` | `3` / `4` / `120` | إعدادات gunicorn |
 
@@ -883,3 +887,13 @@ docker compose exec db pg_dump -U lunx lunx > lunx.sql          # نسخة SQL �
   - **تبع مين (`_owner`):** اسم شركة ← المالك الفعلي (زي أبراج سيرفيسز)؛ «سوبيريور» بأي كتابة ← مركز التكلفة SUP؛ «الاسم (سكومي)» ← مركز SCO + الاسم في «مع مين»؛ وأي اسم تاني ← «مع مين» اسم حر. الأسماء اللي بكلمتين أو أكتر ليها اقتراحات ربط بموظف (اختياري — «يفضل اسم حر» افتراضي). **مفيش تعليم «سائق»**.
   - **بتتخطّى:** السطور اللي في ملاحظاتها «غير موجودة» أو «لا يمكن التسجيل».
   - **التراجع** بيشيل العربيات اللي اتضافت، إلا لو اتضاف لها تصاريح أو تأمين أو دفتر أو عقد أو ملاحظات (بتفضل وبيتقال عليها)، وبيرجّع الخانات اللي اتكمّلت. سجل التدقيق: `vehicle_import`.
+
+## 28. حماية البيانات (المرحلة 2)
+### 💾 النسخة الاحتياطية الكاملة (`backup.py`)
+- **ZIP واحد:** `data.json` (كل الجداول بالمستخدمين — نفس صيغة النسخة القديمة)، و`database/lunx.db` (لقطة سليمة من SQLite وهي شغالة)، و`files/uploads/…` و`files/templates_docs/…` (مرفقات الموظفين والتصاريح والتوقيعات واللوجوهات ومستندات الشركات والقوالب — من غير ملفات الاستيراد المؤقتة)، و`manifest.json` (النوع والتاريخ والأعداد).
+- **التلقائية اليومية:** أول فتح للبرنامج في اليوم (`/api/state` ← `backup.kick`) بيبدأها **في الخلفية** (مابتأخرش الشاشة)، وقفل ملف يومي بيضمن إن worker واحد بس يعملها. لو فشلت بيتسجّل السبب وبتتعاد بعد ساعة.
+- **المجلد:** مدير النظام بيختاره من الشاشة (`meta backup_dir` — لازم مسار كامل ويتكتب فيه)، والأحسن هارد تاني أو OneDrive. من غيره: `LUNX_BACKUP_DIR` (`backups/` جوّه مجلد البيانات).
+- **الاحتفاظ (`retention`):** التلقائية: آخر 14 يوم + أول نسخة في كل شهر لمدة 12 شهر. «قبل الاستعادة»: آخر 10. اليدوية مابتتمسحش غير من الشاشة. أسماء الملفات: `lunx-<auto|manual|pre-restore>-YYYY-MM-DD_HHMMSS.zip` (والـ JSON القديمة بتظهر «بيانات بس»).
+- **«💾 النسخ الاحتياطية» (قايمة المستخدم — مدير النظام):** الحالة (آخر نسخة تلقائية أو سبب الفشل)، المجلد، «➕ نسخة كاملة دلوقتي»، «⬇️ نسخة كاملة وتنزيلها»، «♻️ استعادة من ملف» (zip / json)، وجدول النسخ: تنزيل، استعادة، حذف. كل ده بيتسجّل في سجل التدقيق.
+- **الاستعادة:** قبلها **نسخة «قبل الاستعادة» كاملة للحالة الحالية**، وبعدين البيانات (المستخدمين وكلمات السر بيفضلوا زي ما هم) والملفات (بتستبدل اللي بنفس الاسم، ومسارات برّه مجلد البيانات بتتجاهل).
+- **التنبيه:** لو آخر نسخة تلقائية ناجحة من أكتر من يومين أو آخر محاولة فشلت ← شريط فوق الشاشة وسطر في الجرس 🔔 (نوع «النظام») لمدير النظام، و⚠️ جنب «💾 النسخ الاحتياطية» في القايمة. تنبيهات النظام مابتتعدّش في «مستند منتهي» في الرئيسية.

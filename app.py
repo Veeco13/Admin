@@ -26,6 +26,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 
 import db
+import backup
 import contracts
 import custody
 import custody_excel
@@ -409,7 +410,7 @@ def index():
 @login_required
 def api_state():
     try:
-        db.auto_backup_if_due()          # نسخة JSON يومية في backups/
+        backup.kick()                    # النسخة الكاملة اليومية (ZIP) — في الخلفية
     except Exception as e:               # النسخ الاحتياطي ما يوقفش النظام
         app.logger.warning("auto backup failed: %s", e)
     try:
@@ -424,6 +425,7 @@ def api_state():
                      else {"custodies": [], "invoices": [], "feeItems": [], "custodySettings": None})
         state["valueTranslations"] = value_i18n.merged(s)       # الجنسيات والمهن للتقارير الإنجليزية
         state["exportPasswordSet"] = bool(u.isAdmin and db.get_meta(s, EXPORT_KEY))
+        state["backupStatus"] = backup.status(s) if u.isAdmin else None      # تنبيه لو النسخة التلقائية وقفت
         links = {}
         for r in s.scalars(select(M.AgencyCostCenter)):
             links.setdefault(r.agencyId, []).append(r.costCenterId)
@@ -2991,16 +2993,104 @@ def download_template(tid):
 # ---------------------------------------------------------------------------
 @app.get("/api/backup")
 @require("system.backup", "sensitive.salary", "sensitive.bank", "sensitive.documents", all_companies=True)
-def backup():
+def download_backup():
+    """نسخة كاملة دلوقتي (ZIP: البيانات + كل الملفات) ← بتتحفظ في مجلد النسخ وبتتنزّل."""
     if not me().isAdmin:                          # النسخة الاحتياطية لمدير النظام بس
         return forbidden(NO_DOWNLOAD)
+    path = backup.create("manual")
     with db.session_scope() as s:
-        out = {"app": "Lunx", "version": APP_VERSION, "createdAt": db.now_iso(), "database": db.engine.dialect.name,
-               "tables": db.export_tables(s)}
         db.set_meta(s, "last_backup", db.now_iso())
-    buf = io.BytesIO(json.dumps(out, ensure_ascii=False, indent=1).encode("utf-8"))
-    return send_file(buf, as_attachment=True, mimetype="application/json",
-                     download_name=f"lunx-backup-{datetime.now().strftime('%Y-%m-%d')}.json")
+        db.log_audit(s, "backup_download", f"تنزيل نسخة احتياطية كاملة: {os.path.basename(path)}", uname())
+    return send_file(path, as_attachment=True, mimetype="application/zip", download_name=os.path.basename(path))
+
+
+def _restore_zip(path, source):
+    """ZIP كامل ← نسخة «قبل الاستعادة» الأول، وبعدين البيانات (من غير المستخدمين) والملفات."""
+    data, _ = backup.read_zip(path)
+    pre = os.path.basename(backup.create("pre-restore"))
+    with db.session_scope() as s:
+        counts = db.import_tables(s, data["tables"])
+        db.log_audit(s, "backup_restore", f"استعادة نسخة احتياطية كاملة ({source}) من {data.get('createdAt', '')} — "
+                     f"الحالة اللي قبلها اتحفظت في {pre}", uname())
+    return {"counts": counts, "files": backup.restore_files(path), "preRestore": pre}
+
+
+@app.get("/api/backups")
+@admin_required
+def list_backups():
+    with db.session_scope(commit=False) as s:
+        st = backup.status(s)
+    return jsonify({**st, "items": backup.list_backups(st["folder"]), "kinds": backup.KIND_LABELS})
+
+
+@app.post("/api/backups")
+@admin_required
+def create_backup():
+    try:
+        path = backup.create("manual")
+    except OSError as e:
+        return err(f"فشل عمل النسخة: {e}")
+    with db.session_scope() as s:
+        db.set_meta(s, "last_backup", db.now_iso())
+        db.log_audit(s, "backup_create", f"نسخة احتياطية كاملة يدوية: {os.path.basename(path)}", uname())
+    return jsonify({"ok": True, "name": os.path.basename(path)})
+
+
+def _backup_path(name):
+    if not backup.NAME_RE.match(name or ""):
+        abort(404)
+    path = os.path.join(backup.folder(), name)
+    if not os.path.exists(path):
+        abort(404)
+    return path
+
+
+@app.get("/api/backups/<name>")
+@admin_required
+def get_backup(name):
+    path = _backup_path(name)
+    with db.session_scope() as s:
+        db.log_audit(s, "backup_download", f"تنزيل نسخة احتياطية: {name}", uname())
+    return send_file(path, as_attachment=True, download_name=name)
+
+
+@app.delete("/api/backups/<name>")
+@admin_required
+def delete_backup(name):
+    os.remove(_backup_path(name))
+    with db.session_scope() as s:
+        db.log_audit(s, "backup_delete", f"حذف نسخة احتياطية: {name}", uname())
+    return jsonify({"ok": True})
+
+
+@app.post("/api/backups/<name>/restore")
+@admin_required
+def restore_backup_file(name):
+    path = _backup_path(name)
+    try:
+        if name.endswith(".zip"):
+            return jsonify({"ok": True, **_restore_zip(path, name)})
+        with open(path, encoding="utf-8-sig") as f:
+            return _restore_data(json.load(f))
+    except ValueError as e:
+        return err(str(e))
+    except Exception as e:                        # noqa: BLE001
+        return err(f"فشل الاستعادة: {e}")
+
+
+@app.put("/api/backups/folder")
+@admin_required
+def set_backup_folder():
+    """{path} ← مجلد النسخ التلقائية (فاضي = الافتراضي جوّه مجلد البيانات)."""
+    path = (body().get("path") or "").strip()
+    if path:
+        msg = backup.check_folder(path)
+        if msg:
+            return err(msg)
+    with db.session_scope() as s:
+        db.set_meta(s, "backup_dir", path)
+        db.log_audit(s, "backup_folder", f"مجلد النسخ الاحتياطية: {path or 'الافتراضي'}", uname())
+    return jsonify({"ok": True})
 
 
 @app.post("/api/restore")
@@ -3009,11 +3099,32 @@ def restore():
     f = request.files.get("file")
     if not f:
         return err("لا يوجد ملف")
+    if (f.filename or "").lower().endswith(".zip"):          # النسخة الكاملة
+        os.makedirs(IMPORTS_DIR, exist_ok=True)
+        tmp = os.path.join(IMPORTS_DIR, f"restore-{db.new_id('r')}.zip")
+        f.save(tmp)
+        try:
+            return jsonify({"ok": True, **_restore_zip(tmp, f.filename)})
+        except ValueError as e:
+            return err(str(e))
+        except Exception as e:                    # noqa: BLE001
+            return err(f"فشل الاستعادة: {e}")
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
     try:
         data = json.loads(f.read().decode("utf-8-sig"))
     except Exception:
         return err("ملف النسخة الاحتياطية غير صالح")
+    return _restore_data(data)
+
+
+def _restore_data(data):
+    """نسخة JSON (القديمة أو من Lunx) — قبلها نسخة كاملة «قبل الاستعادة» للحالة الحالية."""
     try:
+        backup.create("pre-restore")
         with db.session_scope() as s:
             if lunx_restore.is_lunx_state(data):          # نسخة من Lunx (نسخة الملف الواحد)
                 stats = lunx_restore.import_lunx_state(s, data, uname())

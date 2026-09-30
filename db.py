@@ -618,16 +618,16 @@ def reset_sequences(s):
 
 
 # ---------------------------------------------------------------------------
-# نسخ احتياطي تلقائي يومي (JSON مستقل عن نوع القاعدة) في مجلد backups/
+# مجلد النسخ الافتراضي — النسخة الكاملة (ZIP) واليومية في backup.py.
+# write_backup = نسخة JSON للجداول بس (أمر manage_db.py backup)
 # ---------------------------------------------------------------------------
 BACKUP_DIR = os.environ.get("LUNX_BACKUP_DIR", data_path("backups"))
-BACKUP_KEEP = int(os.environ.get("LUNX_BACKUP_KEEP", "30"))
 
 
 def write_backup(path=None, include_users=True):
     import json
     os.makedirs(BACKUP_DIR, exist_ok=True)
-    path = path or os.path.join(BACKUP_DIR, f"lunx-auto-{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.json")
+    path = path or os.path.join(BACKUP_DIR, f"lunx-manual-{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.json")
     with session_scope() as s:
         data = {"app": "Lunx", "createdAt": now_iso(), "database": engine.dialect.name,
                 "schemaRevision": current_revision(), "tables": export_tables(s, include_users=include_users)}
@@ -635,37 +635,6 @@ def write_backup(path=None, include_users=True):
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False)
     os.replace(tmp, path)
-    return path
-
-
-def auto_backup_if_due():
-    """مرة واحدة في اليوم: نسخة JSON كاملة (بالمستخدمين) + الاحتفاظ بآخر BACKUP_KEEP نسخة."""
-    today = date.today().isoformat()
-    with session_scope(commit=False) as s:
-        if get_meta(s, "last_auto_backup") == today:
-            return None
-    # قفل ملف يومي ← worker واحد بس (أو container واحد على نفس الـ volume) يعمل النسخة
-    os.makedirs(BACKUP_DIR, exist_ok=True)
-    try:
-        fd = os.open(os.path.join(BACKUP_DIR, f".lock-{today}"), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        os.close(fd)
-    except FileExistsError:
-        return None
-    for f in os.listdir(BACKUP_DIR):
-        if f.startswith(".lock-") and f != f".lock-{today}":
-            try:
-                os.remove(os.path.join(BACKUP_DIR, f))
-            except OSError:
-                pass
-    with session_scope() as s:
-        set_meta(s, "last_auto_backup", today)
-    path = write_backup()
-    files = sorted(f for f in os.listdir(BACKUP_DIR) if f.startswith("lunx-auto-") and f.endswith(".json"))
-    for old in files[:-BACKUP_KEEP]:
-        try:
-            os.remove(os.path.join(BACKUP_DIR, old))
-        except OSError:
-            pass
     return path
 
 

@@ -815,25 +815,58 @@ function toggleLang() {
 /* =====================================================================
    BACKUP / RESTORE
    ===================================================================== */
-function markBackupTaken() { lsSet('mv_last_backup', new Date().toISOString()); }
-function daysSinceLastBackup() {
-  const s = lsGet('mv_last_backup');
-  if (!s) return Infinity;
-  return Math.floor((Date.now() - new Date(s).getTime()) / 86400000);
+/* النسخة الكاملة (ZIP: البيانات + كل الملفات) بتتعمل تلقائي كل يوم على السيرفر (backup.py) — مدير النظام بيتابعها
+   من «💾 النسخ الاحتياطية»، والتنبيه بيظهر لو التلقائية وقفت أكتر من يومين أو فشلت. */
+function backupStale(bs) {
+  if (!bs) return false;
+  const ok = bs.lastOk ? daysUntil(bs.lastOk.slice(0, 10)) : null;
+  return ok === null || ok < -2 || (!!bs.lastError && (!bs.lastOk || (bs.lastErrorAt || '') > bs.lastOk));
 }
-function takeBackup() {
-  markBackupTaken();
-  const a = document.createElement('a'); a.href = '/api/backup'; document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(render, 500);
+function backupStaleText(bs) {
+  if (bs.lastError && (!bs.lastOk || (bs.lastErrorAt || '') > bs.lastOk)) return `${t('النسخة الاحتياطية التلقائية فشلت')}: ${bs.lastError}`;
+  return bs.lastOk ? `${t('آخر نسخة احتياطية تلقائية من')} ${-daysUntil(bs.lastOk.slice(0, 10))} ${t('يوم')}` : t('لسه مفيش نسخة احتياطية تلقائية');
 }
-const BACKUP_PERMS = 'system.backup sensitive.salary sensitive.bank sensitive.documents scope.all';
-async function restoreBackup() {
-  if (!can('admin')) return openBlockAlert(t('الاستعادة لمدير النظام فقط'));
-  const f = await pickFile('.json,application/json');
-  if (!f) return;
-  if (!await openConfirm(t('سيتم استبدال كل البيانات الحالية بمحتوى النسخة الاحتياطية. متابعة؟'), { danger: true, okLabel: t('استعادة') })) return;
-  const fd = new FormData(); fd.append('file', f);
-  await persist('POST', '/api/restore', fd, 'تمت الاستعادة بنجاح');
+const BACKUP_KIND_ICONS = { auto: '🔁', manual: '✋', 'pre-restore': '🛟' };
+function fmtBytes(n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'; }
+async function openBackupsModal() {
+  if (!can('admin')) return;
+  const m = openModal({ title: '💾 ' + t('النسخ الاحتياطية'), size: 'wide', body: '<div id="bk-body" class="muted">…</div>', foot: `<button class="btn" data-close>${t('إغلاق')}</button>` });
+  const draw = async () => {
+    let r;
+    try { r = await api('GET', '/api/backups'); } catch (e) { $('#bk-body', m.el).innerHTML = `<div class="notice err">${esc(e.message)}</div>`; return; }
+    $('#bk-body', m.el).innerHTML = `<div class="notice ${backupStale(r) ? 'warn' : ''}">${backupStale(r) ? '⚠️ ' + esc(backupStaleText(r)) : `✅ ${t('آخر نسخة تلقائية')}: <b>${fmtDateTime(r.lastOk)}</b>`}
+        <div class="small" style="margin-top:4px">${t('النسخة الكاملة (ZIP) فيها كل البيانات وكل الملفات: المرفقات، والتوقيعات، واللوجوهات، ومستندات الشركات، والقوالب. التلقائية بتتعمل كل يوم، وبيتحفظ آخر 14 يوم ونسخة لكل شهر لمدة سنة. اليدوية بتفضل لحد ما تمسحها.')}</div></div>
+      <div class="form" style="margin-top:10px"><label class="full">📂 ${t('مجلد النسخ الاحتياطية')} <span class="small muted">— ${t('الأحسن مجلد على هارد تاني أو OneDrive، عشان لو الجهاز باظ النسخ ماتروحش معاه')}</span>
+        <div class="row" style="gap:6px"><input id="bk-dir" dir="ltr" style="flex:1" value="${esc(r.custom ? r.folder : '')}" placeholder="${esc(r.defaultFolder)}"><button class="btn" id="bk-dir-save">${t('حفظ المجلد')}</button></div></label></div>
+      <div class="row" style="gap:8px;margin:10px 0;flex-wrap:wrap"><button class="btn primary" id="bk-new">➕ ${t('نسخة كاملة دلوقتي')}</button>
+        <button class="btn" id="bk-dl">⬇️ ${t('نسخة كاملة وتنزيلها')}</button><button class="btn" id="bk-up">♻️ ${t('استعادة من ملف')}</button></div>
+      <div class="table-wrap" style="max-height:340px"><table class="data"><thead><tr><th>${t('التاريخ')}</th><th>${t('النوع')}</th><th>${t('الحجم')}</th><th></th></tr></thead><tbody>
+        ${r.items.map(x => `<tr><td>${fmtDateTime(x.createdAt)}</td><td>${BACKUP_KIND_ICONS[x.kind] || ''} ${esc(t(r.kinds[x.kind] || x.kind))}${x.format === 'json' ? ` <span class="chip">${t('بيانات بس')}</span>` : ''}</td><td class="num">${fmtBytes(x.size)}</td>
+          <td style="white-space:nowrap"><button class="btn sm" data-bk-dl="${esc(x.name)}">⬇️</button> <button class="btn sm" data-bk-rs="${esc(x.name)}">♻️ ${t('استعادة')}</button> <button class="btn sm danger" data-bk-del="${esc(x.name)}">🗑️</button></td></tr>`).join('')
+          || `<tr><td colspan="4" class="empty">${t('مفيش نسخ في المجلد ده لسه')}</td></tr>`}</tbody></table></div>
+      <div class="small muted" style="margin-top:6px">${esc(r.folder)}</div>`;
+    const E = m.el, busy = (b, on) => { b.disabled = on; };
+    $('#bk-dir-save', E).onclick = async () => { try { await api('PUT', '/api/backups/folder', { path: $('#bk-dir', E).value.trim() }); toast(t('تم الحفظ'), 'ok'); draw(); } catch (e) { openBlockAlert(e.message); } };
+    $('#bk-new', E).onclick = async ev => { busy(ev.currentTarget, true); try { const x = await api('POST', '/api/backups', {}); toast(`${t('اتعملت')} ${x.name}`, 'ok'); draw(); } catch (e) { toast(e.message, 'err'); busy(ev.currentTarget, false); } };
+    $('#bk-dl', E).onclick = () => { const a = document.createElement('a'); a.href = '/api/backup'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(draw, 2500); };
+    $('#bk-up', E).onclick = async () => {
+      const f = await pickFile('.zip,.json');
+      if (f && await confirmRestore(f.name)) { const fd = new FormData(); fd.append('file', f); await doRestore(() => api('POST', '/api/restore', fd)); draw(); }
+    };
+    $$('[data-bk-dl]', E).forEach(b => b.onclick = () => { const a = document.createElement('a'); a.href = '/api/backups/' + encodeURIComponent(b.dataset.bkDl); document.body.appendChild(a); a.click(); a.remove(); });
+    $$('[data-bk-rs]', E).forEach(b => b.onclick = async () => { if (await confirmRestore(b.dataset.bkRs)) { await doRestore(() => api('POST', `/api/backups/${encodeURIComponent(b.dataset.bkRs)}/restore`, {})); draw(); } });
+    $$('[data-bk-del]', E).forEach(b => b.onclick = async () => {
+      if (!await openConfirm(`${t('حذف النسخة')} ${esc(b.dataset.bkDel)}؟`, { danger: true, okLabel: t('حذف') })) return;
+      try { await api('DELETE', '/api/backups/' + encodeURIComponent(b.dataset.bkDel)); draw(); } catch (e) { toast(e.message, 'err'); }
+    });
+  };
+  const confirmRestore = name => openConfirm(`${t('استعادة')} «${esc(name)}»؟\n${t('البيانات الحالية هتتستبدل بمحتوى النسخة (المستخدمين وكلمات السر بيفضلوا زي ما هم). قبل الاستعادة بتتعمل نسخة «قبل الاستعادة» من الحالة الحالية، فتقدر ترجع لها.')}`, { danger: true, okLabel: t('استعادة') });
+  const doRestore = async call => {
+    toast(t('جاري الاستعادة…'));
+    try { const r = await call(); await reload(); toast(`${t('تمت الاستعادة بنجاح')}${r.files ? ` · ${r.files} ${t('ملف')}` : ''}`, 'ok'); }
+    catch (e) { openBlockAlert(e.message); }
+  };
+  draw();
 }
 
 /* =====================================================================
@@ -890,7 +923,8 @@ function empUrgency(e) {
 /* =====================================================================
    ALERT CENTER — كل ما ينتهي خلال 90 يوم
    ===================================================================== */
-function trackedAlertItems(maxDays = 90) {
+/** التنبيهات بالتواريخ. system = تنبيهات النظام كمان (النسخ الاحتياطية) — للجرس بس، مش لعدّادات المستندات */
+function trackedAlertItems(maxDays = 90, system = false) {
   const items = [], byKey = {};
   // نفس الشخص/الشركة/السيارة بنفس التاريخ (زي الإقامة وإذن العمل) ← سطر واحد: "الإقامة + إذن العمل"
   // what بتتترجم هنا عشان المدمجة مالهاش مفتاح في القاموس، و t() على نص مترجم بترجّعه زي ما هو
@@ -946,6 +980,9 @@ function trackedAlertItems(maxDays = 90) {
       push({ kind: 'candidate', refId: c.id, name: c.name, what: 'إقامة الكفيل القديم', date: c.oldSponsorResidencyExp });
     }
   }
+  // النسخة الاحتياطية التلقائية وقفت أو فشلت (مدير النظام) ← بتفتح شاشة النسخ
+  const bs = STATE.backupStatus;
+  if (system && bs && backupStale(bs)) push({ kind: 'system', refId: 'backup', name: t('النسخ الاحتياطية'), what: backupStaleText(bs), date: (bs.lastOk || '').slice(0, 10) || todayISO() });
   return items.sort((a, b) => a.days - b.days);
 }
 function openAlertTarget(it) {
@@ -955,10 +992,11 @@ function openAlertTarget(it) {
   else if (it.kind === 'company' || it.kind === 'project') setView('companies', { focusCompany: it.refId, focusTab: it.kind === 'project' ? 'projects' : 'info' });
   else if (it.kind === 'vehicle') { setView('vehicles'); setTimeout(() => openVehicleModal(it.refId), 50); }
   else if (it.kind === 'candidate') { setView('recruitment'); setTimeout(() => openCandidateModal(it.refId), 50); }
+  else if (it.kind === 'system' && it.refId === 'backup') openBackupsModal();
 }
 function renderAlertCenterPanel(filter = 'all') {
   if (filter !== 'all') filter = tierFilterValue(filter) || 'all';        // «منتهي» من لوحة المعلومات ← خلال 30 يوم
-  const items = trackedAlertItems();
+  const items = trackedAlertItems(90, true);
   const counts = { all: items.length };
   for (const k of TIER_FILTERS) counts[k] = items.filter(i => tierIn(i.date, k)).length;
   const shown = filter === 'all' ? items : items.filter(i => tierIn(i.date, filter));
@@ -970,7 +1008,7 @@ function renderAlertCenterPanel(filter = 'all') {
     </div>
     <div class="body">${shown.length ? shown.map((it, i) => `
       <div class="alert-item" data-i="${i}">
-        <div><b>${esc(it.name)}</b><div class="small muted">${esc(t(it.what))} · ${esc(t({ employee: 'موظف', company: 'شركة', project: 'مشروع', vehicle: 'سيارة', candidate: 'مترشّح', permit: 'التصاريح' }[it.kind]))}</div></div>
+        <div><b>${esc(it.name)}</b><div class="small muted">${esc(t(it.what))} · ${esc(t({ employee: 'موظف', company: 'شركة', project: 'مشروع', vehicle: 'سيارة', candidate: 'مترشّح', permit: 'التصاريح', system: 'النظام' }[it.kind]))}</div></div>
         <div style="text-align:end">${datePill(it.date)}<div class="small muted">${esc(daysText(it.days))}</div></div>
       </div>`).join('') : '<div class="empty">لا توجد تنبيهات 🎉</div>'}</div></div>`;
   translateDomText(root);
@@ -980,7 +1018,7 @@ function renderAlertCenterPanel(filter = 'all') {
 }
 function closeSidePanel() { $('#side-root').innerHTML = ''; }
 function updateAlertCount() {
-  const n = trackedAlertItems().filter(i => i.days <= 30).length;
+  const n = trackedAlertItems(90, true).filter(i => i.days <= 30).length;
   const el = $('#alert-count');
   el.hidden = !n; el.textContent = n > 99 ? '99+' : n;
 }
@@ -1057,17 +1095,16 @@ function renderAlertBar() {
     if (stuck) parts.push(`⚠️ ${stuck} ${t('معاملة عليها ملاحظة تعطّل')}`);
     html += `<div class="alertbar no-print" id="alertbar"><b>${t('تنبيه')}:</b> ${parts.join(' · ')} <span class="spacer"></span><u>${t('عرض التفاصيل')}</u></div>`;
   }
-  const days = daysSinceLastBackup();
-  const dismissed = lsGet('mv_backup_reminder_dismiss') === todayISO();
-  if (days > 7 && !dismissed && canAll(BACKUP_PERMS)) {
-    html += `<div class="alertbar backup no-print">💾 ${days === Infinity ? t('لم يتم أخذ نسخة احتياطية من هذا المتصفح بعد') : t('آخر نسخة احتياطية منذ') + ' ' + days + ' ' + t('يوم')}
-      <span class="spacer"></span><button class="btn sm" id="bk-now">${t('نسخ احتياطي الآن')}</button><button class="btn sm ghost" id="bk-dismiss">${t('إخفاء اليوم')}</button></div>`;
+  const bs = STATE.backupStatus;                        // مدير النظام بس — النسخة التلقائية وقفت أو فشلت
+  if (bs && backupStale(bs) && lsGet('mv_backup_reminder_dismiss') !== todayISO()) {
+    html += `<div class="alertbar backup no-print">💾 ${esc(backupStaleText(bs))}
+      <span class="spacer"></span><button class="btn sm" id="bk-now">📂 ${t('النسخ الاحتياطية')}</button><button class="btn sm ghost" id="bk-dismiss">${t('إخفاء اليوم')}</button></div>`;
   }
   return html;
 }
 function bindAlertBar() {
   const ab = $('#alertbar'); if (ab) ab.onclick = () => renderAlertCenterPanel();
-  const b1 = $('#bk-now'); if (b1) b1.onclick = takeBackup;
+  const b1 = $('#bk-now'); if (b1) b1.onclick = openBackupsModal;
   const b2 = $('#bk-dismiss'); if (b2) b2.onclick = () => { lsSet('mv_backup_reminder_dismiss', todayISO()); render(); };
 }
 function render() {
@@ -1092,8 +1129,7 @@ function renderUserMenu() {
   const me = STATE.me;
   const sub = me.isAdmin ? t('مدير النظام') : (me.jobTitle || '');
   m.innerHTML = `<div class="info">${esc(me.displayName || me.username)}${sub ? `<br><span class="small muted">${esc(sub)}</span>` : ''}</div>
-    ${me.isAdmin && canAll(BACKUP_PERMS) ? `<button data-a="backup">💾 ${t('تنزيل نسخة احتياطية')}</button>` : ''}
-    ${me.isAdmin ? `<button data-a="restore">♻️ ${t('استعادة نسخة احتياطية')}</button><button data-a="users">🔑 ${t('المستخدمين والصلاحيات')}</button>
+    ${me.isAdmin ? `<button data-a="backup">💾 ${t('النسخ الاحتياطية')}${backupStale(STATE.backupStatus) ? ' ⚠️' : ''}</button><button data-a="users">🔑 ${t('المستخدمين والصلاحيات')}</button>
       <button data-a="exportpw">🔐 ${t('كلمة سر التصدير')}${STATE.exportPasswordSet ? '' : ' ⚠️'}</button>
       <button data-a="dq">📋 ${t('جودة البيانات')}</button><button data-a="importx">📥 ${t('استيراد بيانات تكميلية')}</button>` : ''}
     <button data-a="viewperms">👁️ ${t('إعدادات العرض')}</button>
@@ -1101,7 +1137,7 @@ function renderUserMenu() {
     <button data-a="logout">🚪 ${t('تسجيل الخروج')}</button>`;
   $$('button', m).forEach(b => b.onclick = () => {
     m.hidden = true;
-    ({ backup: takeBackup, restore: restoreBackup, users: () => openUsersModal(), viewperms: renderViewSettingsModal, exportpw: openExportPasswordModal, dq: openDataQualityModal, importx: () => openImportExtraModal(),
+    ({ backup: openBackupsModal, users: () => openUsersModal(), viewperms: renderViewSettingsModal, exportpw: openExportPasswordModal, dq: openDataQualityModal, importx: () => openImportExtraModal(),
        password: openPasswordModal, logout: () => location.href = '/logout' })[b.dataset.a]();
   });
 }
