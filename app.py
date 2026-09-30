@@ -1713,6 +1713,64 @@ def dump_permits(s, emp_ids, veh_ids):
     }
 
 
+def _permit_values(s, kind, hid, d, pid=None):
+    """بيانات تصريح واحد بعد التحقق (من غير كتابة) ← (القيم، None) أو (None، (الرسالة، الكود، block))."""
+    tp = s.get(M.PermitType, d.get("typeId") or "")
+    if tp is None:
+        return None, ("اختار نوع التصريح", 400, False)
+    if tp.appliesTo and tp.appliesTo != kind:
+        return None, ("نوع التصريح ده مش للموظفين" if kind == "employee" else "نوع التصريح ده مش للسيارات", 400, False)
+    issue, expiry = db.parse_date(d.get("issueDate")), db.parse_date(d.get("expiryDate"))
+    if not expiry:
+        return None, ("تاريخ الانتهاء مطلوب", 400, False)
+    if issue and issue > expiry:
+        return None, ("تاريخ الإصدار بعد تاريخ الانتهاء", 400, False)
+    caps = permit_cap(s, kind, hid)          # التصريح مايعدّيش أقرب تاريخ (الإقامة / العقد / التأمين / الدفتر)
+    if caps and expiry > caps[0][1]:
+        center = ("العقود والمشاريع الحكومية" if "العقد" in caps[0][0]
+                  else "مركز الإقامات والموظفين" if kind == "employee" else "مركز السيارات")
+        return None, (f"مش هينفع: التصريح بينتهي بعد {caps[0][0]} ({caps[0][1].strftime('%d/%m/%Y')}). "
+                      f"لو اتجدد، حدّث تاريخه في {center} الأول.", 400, True)
+    pno = (d.get("permitNo") or "").strip() or None
+    if pno:                                   # رقم التصريح مايتكررش في نفس النوع
+        other = s.scalar(select(M.Permit).where(M.Permit.typeId == tp.id, M.Permit.permitNo == pno, M.Permit.id != (pid or "")))
+        if other is not None:
+            owner = s.get(M.Employee, other.employeeId) if other.employeeId else s.get(M.Vehicle, other.vehicleId)
+            name = (owner.name if other.employeeId else owner.plate) if owner is not None else ""
+            return None, (f"رقم التصريح {pno} ({tp.nameAr}) مسجّل بالفعل لـ {name}", 409, True)
+    proj = d.get("projectId") or None
+    if proj and s.get(M.Project, proj) is None:
+        return None, ("العقد / المشروع غير موجود", 400, False)
+    return {"tp": tp, "pno": pno, "issuer": (d.get("issuer") or "").strip() or None, "proj": proj, "issue": issue,
+            "expiry": expiry, "notes": (d.get("notes") or "").strip() or None,
+            "places": [x for x in dict.fromkeys(d.get("placeIds") or []) if s.get(M.PermitPlace, x) is not None]}, None
+
+
+def _write_permit(s, p, kind, hid, who, v):
+    """كتابة تصريح (جديد لو p = None) من قيم _permit_values + سجل التدقيق وسجل الموظف."""
+    new = p is None
+    if new:
+        p = M.Permit(id=db.new_id("pm"), holderKind=kind, createdAt=db.now(), createdBy=uname())
+        if kind == "employee":
+            p.employeeId = hid
+        else:
+            p.vehicleId = hid
+        s.add(p)
+    p.typeId, p.permitNo, p.issuer = v["tp"].id, v["pno"], v["issuer"]
+    p.projectId, p.issueDate, p.expiryDate, p.notes = v["proj"], v["issue"], v["expiry"], v["notes"]
+    p.updatedAt, p.updatedBy = db.now(), uname()
+    s.flush()
+    s.query(M.PermitPlaceLink).filter(M.PermitPlaceLink.permitId == p.id).delete()
+    for x in v["places"]:
+        s.add(M.PermitPlaceLink(permitId=p.id, placeId=x))
+    label = (f"{'إضافة' if new else 'تعديل'} {v['tp'].nameAr}{' رقم ' + v['pno'] if v['pno'] else ''} لـ {who} — "
+             f"ينتهي {v['expiry'].strftime('%d/%m/%Y')}")
+    db.log_audit(s, "permit_add" if new else "permit_edit", label, uname())
+    if kind == "employee":
+        db.push_timeline(s, hid, "permit", label, uname())
+    return p
+
+
 @app.post("/api/permits")
 @app.put("/api/permits/<pid>")
 @login_required
@@ -1727,53 +1785,42 @@ def save_permit(pid=None):
         who, e = _permit_holder(s, kind, hid, "edit")
         if e:
             return e
-        tp = s.get(M.PermitType, d.get("typeId") or "")
-        if tp is None:
-            return err("اختار نوع التصريح")
-        if tp.appliesTo and tp.appliesTo != kind:
-            return err("نوع التصريح ده مش للموظفين" if kind == "employee" else "نوع التصريح ده مش للسيارات")
-        issue, expiry = db.parse_date(d.get("issueDate")), db.parse_date(d.get("expiryDate"))
-        if not expiry:
-            return err("تاريخ الانتهاء مطلوب")
-        if issue and issue > expiry:
-            return err("تاريخ الإصدار بعد تاريخ الانتهاء")
-        caps = permit_cap(s, kind, hid)          # التصريح مايعدّيش أقرب تاريخ (الإقامة / العقد / التأمين / الدفتر)
-        if caps and expiry > caps[0][1]:
-            center = ("العقود والمشاريع الحكومية" if "العقد" in caps[0][0]
-                      else "مركز الإقامات والموظفين" if kind == "employee" else "مركز السيارات")
-            return err(f"مش هينفع: التصريح بينتهي بعد {caps[0][0]} ({caps[0][1].strftime('%d/%m/%Y')}). "
-                       f"لو اتجدد، حدّث تاريخه في {center} الأول.", 400, block=True)
-        pno = (d.get("permitNo") or "").strip() or None
-        if pno:                                   # رقم التصريح مايتكررش في نفس النوع
-            other = s.scalar(select(M.Permit).where(M.Permit.typeId == tp.id, M.Permit.permitNo == pno, M.Permit.id != (pid or "")))
-            if other is not None:
-                owner = s.get(M.Employee, other.employeeId) if other.employeeId else s.get(M.Vehicle, other.vehicleId)
-                name = (owner.name if other.employeeId else owner.plate) if owner is not None else ""
-                return err(f"رقم التصريح {pno} ({tp.nameAr}) مسجّل بالفعل لـ {name}", 409, block=True)
-        proj = d.get("projectId") or None
-        if proj and s.get(M.Project, proj) is None:
-            return err("العقد / المشروع غير موجود")
-        place_ids = [x for x in dict.fromkeys(d.get("placeIds") or []) if s.get(M.PermitPlace, x) is not None]
-        if p is None:
-            p = M.Permit(id=db.new_id("pm"), holderKind=kind, createdAt=db.now(), createdBy=uname())
-            if kind == "employee":
-                p.employeeId = hid
-            else:
-                p.vehicleId = hid
-            s.add(p)
-        p.typeId, p.permitNo, p.issuer = tp.id, pno, (d.get("issuer") or "").strip() or None
-        p.projectId, p.issueDate, p.expiryDate = proj, issue, expiry
-        p.notes = (d.get("notes") or "").strip() or None
-        p.updatedAt, p.updatedBy = db.now(), uname()
-        s.flush()
-        s.query(M.PermitPlaceLink).filter(M.PermitPlaceLink.permitId == p.id).delete()
-        for x in place_ids:
-            s.add(M.PermitPlaceLink(permitId=p.id, placeId=x))
-        label = f"{'تعديل' if pid else 'إضافة'} {tp.nameAr}{' رقم ' + pno if pno else ''} لـ {who} — ينتهي {expiry.strftime('%d/%m/%Y')}"
-        db.log_audit(s, "permit_edit" if pid else "permit_add", label, uname())
-        if kind == "employee":
-            db.push_timeline(s, hid, "permit", label, uname())
+        v, problem = _permit_values(s, kind, hid, d, pid)
+        if problem:
+            return err(problem[0], problem[1], block=problem[2])
+        p = _write_permit(s, p, kind, hid, who, v)
         return jsonify({"ok": True, "id": p.id})
+
+
+@app.post("/api/permits/batch")
+@login_required
+def save_permits_batch():
+    """كذا تصريح لنفس الموظف / العربية مرة واحدة (كل نوع سجل لوحده): {holderKind, holderId, projectId, placeIds, notes,
+    permits: [{typeId, permitNo, issuer, issueDate, expiryDate}]} ← كلهم بيتحفظوا أو ولا واحد (التحقق كله قبل الكتابة)."""
+    d = body()
+    rows = d.get("permits") or []
+    if not rows:
+        return err("اختار نوع تصريح واحد على الأقل")
+    if len(rows) > 20:
+        return err("الحد الأقصى 20 تصريح في المرة")
+    shared = {k: d.get(k) for k in ("projectId", "placeIds", "notes")}
+    with db.session_scope() as s:
+        kind, hid = d.get("holderKind"), d.get("holderId")
+        who, e = _permit_holder(s, kind, hid, "edit")
+        if e:
+            return e
+        values, seen = [], set()
+        for r in rows:
+            v, problem = _permit_values(s, kind, hid, {**shared, **r})
+            if problem:
+                tp = s.get(M.PermitType, r.get("typeId") or "")
+                return err((f"«{tp.nameAr}»: " if tp is not None else "") + problem[0], problem[1], block=problem[2])
+            if v["pno"] and (v["tp"].id, v["pno"]) in seen:
+                return err(f"رقم التصريح {v['pno']} ({v['tp'].nameAr}) متكرر في نفس الطلب", 409, block=True)
+            seen.add((v["tp"].id, v["pno"]))
+            values.append(v)
+        ids = [_write_permit(s, None, kind, hid, who, v).id for v in values]
+    return jsonify({"ok": True, "ids": ids})
 
 
 @app.delete("/api/permits/<pid>")
