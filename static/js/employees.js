@@ -878,6 +878,18 @@ function openEmployeeCardPrint(e) {
   };
 }
 
+/** نافذة فرعية من بطاقة الموظف (التعديل، الحالة، المرحلة، الخطابات، التوقيع…): لما كل النوافذ تتقفل (بعد الحفظ أو
+    الإلغاء) البطاقة بترجع على نفس التبويب ببياناتها الجديدة — إلا لو اتفتحت تاني أو المستخدم راح لشاشة تانية */
+function returnToCardWhenDone(id, tab) {
+  const root = $('#modal-root'), view = VIEW;
+  const obs = new MutationObserver(() => {
+    if (root.querySelector(`[data-card="${CSS.escape(id)}"]`)) { obs.disconnect(); return; }   // النافذة رجّعتها بنفسها
+    if (root.children.length) return;
+    obs.disconnect();
+    if (VIEW === view && IDX.employee[id]) openProfileCard(id, tab);
+  });
+  obs.observe(root, { childList: true });
+}
 async function openProfileCard(id, tab = 'info') {
   const e = IDX.employee[id];
   if (!e) return toast('الموظف غير موجود', 'err');
@@ -947,7 +959,11 @@ async function openProfileCard(id, tab = 'info') {
     if (b.dataset.tab === 'files') loadDriveFiles(e.id, m.el);
   });
   if (tab === 'files' && can('sensitive.documents')) loadDriveFiles(e.id, m.el);
-  $$('[data-renew]', m.el).forEach(b => b.onclick = () => { m.close(); openQuickRenewModal(e.id, b.dataset.renew); });
+  m.el.dataset.card = e.id;
+  const curTab = () => ($('[data-tab].active', m.el) || {}).dataset?.tab || tab;
+  // التعديل والنوافذ التانية بتفتح مكان البطاقة، ولما تتقفل البطاقة بترجع (مش بتقفل وخلاص)
+  const sub = fn => { const tb = curTab(); m.close(); fn(); returnToCardWhenDone(e.id, tb); };
+  $$('[data-renew]', m.el).forEach(b => b.onclick = () => sub(() => openQuickRenewModal(e.id, b.dataset.renew)));
   const up = $('#emp-upload', m.el); if (up) up.onclick = () => uploadFileForEmployee(e.id, m.el);
   $$('[data-open-permit]', m.el).forEach(c => c.onclick = () => { if (!can('permits.view')) return; m.close(); setView('permits', { focusPermit: c.dataset.openPermit }); });
   // القايمة المفتوحة بتتقفل بالضغط برّاها (وفتح قايمة بيقفل التانية)
@@ -956,16 +972,16 @@ async function openProfileCard(id, tab = 'info') {
     const a = b.dataset.a;
     const dm = b.closest('details');
     if (dm) dm.open = false;
-    if (a === 'edit') { m.close(); openEmployeeModal(e.id); }
-    else if (a === 'stage') { m.close(); openGovStageModal(e.id); }
-    else if (a === 'status') { m.close(); openEmployeeStatusModal(e.id); }
-    else if (a === 'signature') { m.close(); openSignatureModal(e.id, e.name, canAll('employees.edit sensitive.documents')); }
+    if (a === 'edit') sub(() => openEmployeeModal(e.id));
+    else if (a === 'stage') sub(() => openGovStageModal(e.id));
+    else if (a === 'status') sub(() => openEmployeeStatusModal(e.id));
+    else if (a === 'signature') sub(() => openSignatureModal(e.id, e.name, canAll('employees.edit sensitive.documents')));
     else if (a === 'contract') { m.close(); VIEW_ARGS = { emp: e.id }; setView('contract'); }
     else if (a === 'residency') openOfficialFormModal('residency', 'employee', e.id);
     else if (a === 'driving') openOfficialFormModal('driving', 'employee', e.id);
     else if (a === 'kw') openKuwaitiFormsChooser(e.id);
     else if (a === 'clearance') openClearanceModal(e.id);
-    else if (a === 'letters') { m.close(); openLettersModal(e.id); }
+    else if (a === 'letters') sub(() => openLettersModal(e.id));
     else if (a === 'print') openEmployeeCardPrint(e);
     else if (a === 'delete') {
       const np = permitsOf('employee', e.id).length;
