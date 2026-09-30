@@ -325,6 +325,8 @@ function openCandidateContractModal(cid) {
       <div class="form" id="cc-form" style="grid-template-columns:1fr">
         <label>${t('القالب')}<select name="tpl">${STATE.templates.map(x => opt(x.id, (x.isDefault ? '★ ' : '') + x.name, defTpl && x.id === defTpl.id)).join('')}</select></label>
         <label>${t('الشركة (الطرف الأول)')}<input value="${esc(companyName(c.targetCompanyId) || '—')}" disabled></label>
+        <label>${t('المشروع / العقد (إدارة العمل)')}<select name="project">${candidateProjectOptions(c.targetCompanyId, c.targetProjectId)}</select>
+          <span class="small muted" id="cc-office"></span></label>
         <label>${t('المفوّض بالتوقيع')}<select name="sig">${batchSigOptions(c.targetCompanyId)}</select></label>
         <label>${t('تاريخ العقد')}<input type="date" name="date" value="${todayISO()}"></label>
         <label class="check"><input type="checkbox" name="housing" ${c.housingAllowance ? 'checked' : ''}> ${t('إضافة بند بدل السكن (البند الثالث عشر)')}</label>
@@ -342,7 +344,7 @@ function openCandidateContractModal(cid) {
   });
   const form = $('#cc-form', m.el);
   const query = () => {
-    const d = formValues(form), p = new URLSearchParams({ housing: d.housing ? '1' : '0' });
+    const d = formValues(form), p = new URLSearchParams({ housing: d.housing ? '1' : '0', project: d.project || '' });
     ['tpl', 'sig', 'date', 'professionEn', 'nationalityEn'].forEach(k => { if (d[k]) p.set(k, d[k]); });
     if (d.signFirst) p.set('signFirst', '1');
     return p.toString();
@@ -354,6 +356,7 @@ function openCandidateContractModal(cid) {
       const r = await api('GET', base + 'preview?' + q);
       if (q !== query()) return;                     // اتغيّر اختيار والطلب ده قديم
       $('#cc-preview', m.el).innerHTML = r.html;
+      $('#cc-office', m.el).innerHTML = `${t('إدارة العمل')}: <b>${esc(r.fields.labor_office || '—')}</b> · ${t('رقم الملف')}: <b class="num">${esc(r.fields.file_number || '—')}</b>`;
       missing = r.missing || [];
       // المترشّح مالوش خانة للمهنة/الجنسية بالإنجليزي ← تتكتب هنا لو القاموس ماعرفهاش
       $$('[data-en]', form).forEach(l => { if (!r.fields[l.dataset.en]) l.hidden = false; });
@@ -368,6 +371,16 @@ function openCandidateContractModal(cid) {
   const tplSel = $('[name=tpl]', form);
   tplSel.addEventListener('change', () => syncTemplateSigns(form, tplSel.value));   // قبل refresh عشان العلامة المخفية ماتتبعتش
   syncTemplateSigns(form, tplSel.value);
+  // المشروع المختار بيتحفظ على المترشّح (ولما يتحوّل لموظف بيتسجّل عليه) — للي معاه تعديل الاستقدام
+  const prSel = $('[name=project]', form);
+  prSel.addEventListener('change', async () => {
+    if (!can('recruitment.edit') || prSel.value === (c.targetProjectId || '')) return;
+    try {
+      await api('PUT', `/api/candidates/${encodeURIComponent(cid)}/target-project`, { projectId: prSel.value });
+      c.targetProjectId = prSel.value || null;
+      toast(t('اتحفظ المشروع المستهدف للمترشّح'), 'ok');
+    } catch (e) { toast(e.message, 'err'); }
+  });
   form.addEventListener('change', refresh);
   refresh();
   $$('[data-go]', m.el).forEach(b => b.onclick = async () => {

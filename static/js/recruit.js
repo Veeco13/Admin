@@ -158,6 +158,15 @@ function printCandidatesReport(rows) {
     meta: [[t('عدد السجلات'), String(rows.length)]] });
 }
 
+/** مشاريع الشركة المستهدفة بإدارة العمل ورقم الملف — عقد عمل المترشّح بياخدهم من المشروع (زي الموظف)، ومن غيره من الشركة */
+function candidateProjectOptions(companyId, sel) {
+  const co = IDX.company[companyId] || {};
+  const label = (name, office, file) => `${name} — ${office || '—'}${file ? ` · ${t('ملف')} ${file}` : ''}`;
+  return opt('', label(t('بدون مشروع'), co.laborOffice, co.mainFileNumber), !sel)
+    + (companyId ? scopedProjects().filter(p => p.companyId === companyId)
+      .map(p => opt(p.id, label(projectName(p.id), p.laborOffice || co.laborOffice, p.fileNumber || co.mainFileNumber), p.id === sel)).join('') : '');
+}
+
 /* ---------- نموذج المترشّح ---------- */
 function openCandidateModal(id) {
   const isNew = !id;
@@ -180,6 +189,7 @@ function openCandidateModal(id) {
           <button type="button" class="btn sm" data-kwform="social">${t('استمارة العلاوة الاجتماعية')}</button></div></div>
       <label>${t('تاريخ التقديم')}<input type="date" name="appliedDate" value="${v('appliedDate')}"></label>
       <label>${t('الشركة المستهدفة')}<select name="targetCompanyId">${companyOptions(c.targetCompanyId)}</select></label>
+      <label>${t('المشروع المستهدف (إدارة العمل)')}<select name="targetProjectId">${candidateProjectOptions(c.targetCompanyId, c.targetProjectId)}</select></label>
       <label>${t('مركز التكلفة')}<select name="costCenter">${costCenterOptions(c.costCenter)}</select></label>
       <h4>البيانات الشخصية</h4>
       <label><span class="req">${t('الاسم (عربي)')}</span><input name="name" value="${v('name')}"></label>
@@ -246,6 +256,9 @@ function openCandidateModal(id) {
     $('#deadline-box', form).innerHTML = ed ? `${t('آخر موعد لإنهاء الإجراءات')}: ${datePill(addDays(ed, 60))} <span class="muted">${esc(daysText(daysUntil(addDays(ed, 60))))}</span>` : '';
   };
   srcSel.onchange = syncSource;
+  // المشروع المستهدف تبع الشركة المستهدفة ← لو الشركة اتغيّرت القايمة بتتغيّر
+  const coSel = $('[name="targetCompanyId"]', form), prSel = $('[name="targetProjectId"]', form);
+  coSel.addEventListener('change', () => { prSel.innerHTML = candidateProjectOptions(coSel.value, ''); });
   // الجنسية الكويتية ← المصدر «عمالة وطنية» بمراحله، وغيرها ← يرجع «استقدام من الخارج»
   natIn.addEventListener('input', () => {
     const kw = isKuwaitiStaff({ nationality: natIn.value });

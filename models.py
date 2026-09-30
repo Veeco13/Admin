@@ -223,6 +223,8 @@ class Candidate(Base):
     oldSponsorResidencyExp: Mapped[Optional[date]] = col("old_sponsor_residency_exp", Date)
     civilId: Mapped[Optional[str]] = col("civil_id", ID, index=True)
     targetCompanyId: Mapped[Optional[str]] = col("target_company_id", ID, fk("companies.id"))
+    # المشروع / العقد المستهدف (تبع الشركة المستهدفة): إدارة العمل ورقم الملف في عقد العمل، ومشروعه لما يتحوّل لموظف
+    targetProjectId: Mapped[Optional[str]] = col("target_project_id", ID, fk("projects.id"))
     costCenter: Mapped[Optional[str]] = col("cost_center", NAME)
     notes: Mapped[Optional[str]] = col("notes", TEXT)
 

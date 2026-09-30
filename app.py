@@ -1126,14 +1126,17 @@ def delete_company(cid):
         # فك الارتباطات بالترتيب (المفاتيح الأجنبية NO ACTION)
         s.query(M.Vehicle).filter(M.Vehicle.companyId == cid).update({"companyId": None})
         s.query(M.Vehicle).filter(M.Vehicle.ownerCompanyId == cid).update({"ownerCompanyId": None})
-        s.query(M.Candidate).filter(M.Candidate.targetCompanyId == cid).update({"targetCompanyId": None})
+        s.query(M.Candidate).filter(M.Candidate.targetCompanyId == cid).update({"targetCompanyId": None, "targetProjectId": None})
         s.query(M.CostCenter).filter(M.CostCenter.companyId == cid).update({"companyId": None})
         pids = [p.id for p in s.scalars(select(M.Project).where(M.Project.companyId == cid))]
         if pids:
             s.query(M.EmployeeAffiliation).filter(M.EmployeeAffiliation.projectId.in_(pids)) \
                 .update({"projectId": None}, synchronize_session=False)
             s.query(M.Vehicle).filter(M.Vehicle.projectId.in_(pids)).update({"projectId": None}, synchronize_session=False)
-        aids = [a.id for a in s.scalars(select(M.Agency).where(M.Agency.companyId == cid))]
+            s.query(M.Permit).filter(M.Permit.projectId.in_(pids)).update({"projectId": None}, synchronize_session=False)
+            s.query(M.Candidate).filter(M.Candidate.targetProjectId.in_(pids)) \
+                .update({"targetProjectId": None}, synchronize_session=False)
+        aids =[a.id for a in s.scalars(select(M.Agency).where(M.Agency.companyId == cid))]
         if aids:
             s.query(M.Project).filter(M.Project.agencyId.in_(aids)).update({"agencyId": None}, synchronize_session=False)
             s.query(M.AgencyCostCenter).filter(M.AgencyCostCenter.agencyId.in_(aids)).delete(synchronize_session=False)
@@ -1448,6 +1451,7 @@ def delete_project(pid):
         s.query(M.EmployeeAffiliation).filter(M.EmployeeAffiliation.projectId == pid).update({"projectId": None})
         s.query(M.Vehicle).filter(M.Vehicle.projectId == pid).update({"projectId": None})
         s.query(M.Permit).filter(M.Permit.projectId == pid).update({"projectId": None})
+        s.query(M.Candidate).filter(M.Candidate.targetProjectId == pid).update({"targetProjectId": None})
         s.flush()
         p = s.get(M.Project, pid)
         if p:
@@ -2002,6 +2006,14 @@ def save_candidate(cand_id=None):
         cc = d["costCenter"] if "costCenter" in d else (old.costCenter if old else None)
         if not u.record_ok(target, db.cost_center_company(s, cc), cc):
             return forbidden(LEAVES_SCOPE)
+        # المشروع المستهدف لازم يكون تبع الشركة المستهدفة — لو الشركة اتغيّرت المشروع القديم بيتشال
+        proj = (d.get("targetProjectId") or None) if "targetProjectId" in d else (old.targetProjectId if old else None)
+        p = s.get(M.Project, proj) if proj else None
+        if proj and (p is None or p.companyId != target):
+            if d.get("targetProjectId"):
+                return err("المشروع المختار مش تبع الشركة المستهدفة")
+            proj = None
+        d["targetProjectId"] = proj
         x = find_duplicate_civil_id(s, (d.get("civilId") or "").strip(), exclude_cand=cand_id)
         if x:
             return err(f"الرقم المدني مسجّل بالفعل لـ {dup_name(x)}", 409, block=True)
@@ -2082,7 +2094,7 @@ def convert_candidate(cand_id):
             lastUpdated=db.now(), lastUpdatedBy=uname()))
         s.flush()
         if c.targetCompanyId:
-            db.set_affiliations(s, civil, [{"companyId": c.targetCompanyId, "projectId": None}])
+            db.set_affiliations(s, civil, [{"companyId": c.targetCompanyId, "projectId": c.targetProjectId}])
         db.push_timeline(s, civil, "create", "تحويل من مترشّح إلى موظف (قيد الاستكمال) — "
                          + history.current_state_text(s, db.get_affiliations(s, civil), c.costCenter), uname())
         if c.targetCompanyId:
@@ -2553,12 +2565,13 @@ def contract_pdf():
 
 # --- عقد عمل لمترشّح (مرحلة «عقد العمل» في الاستقدام) ---
 CANDIDATE_CONTRACT_STAGE = "employment_contract"
-CANDIDATE_CONTRACT_ARGS = ("tpl", "sig", "date", "housing", "signFirst", "signSecond", "professionEn", "nationalityEn")
+CANDIDATE_CONTRACT_ARGS = ("tpl", "sig", "date", "housing", "signFirst", "signSecond", "professionEn", "nationalityEn", "project")
 
 
 def _candidate_contract(s, cand_id, args, fill=True):
     """(المترشّح، الحقول، ملف Word أو None، النواقص). الطرف الأول = الشركة المستهدفة، والراتب والاسم من بيانات
-    المترشّح نفسه (مفيش تعديل عليهم من هنا). النواقص = أي حقل في القالب فاضي + الحقول الأساسية."""
+    المترشّح نفسه (مفيش تعديل عليهم من هنا). النواقص = أي حقل في القالب فاضي + الحقول الأساسية.
+    إدارة العمل ورقم الملف من المشروع (project في الطلب، وإلا المشروع المستهدف) زي الموظف، ومن غيره من الشركة."""
     c = s.get(M.Candidate, cand_id)
     if not c:
         abort(404, "المترشّح غير موجود")
@@ -2566,14 +2579,38 @@ def _candidate_contract(s, cand_id, args, fill=True):
         abort(403, OUT_OF_SCOPE)
     if c.stage != CANDIDATE_CONTRACT_STAGE:
         abort(400, "عقد العمل بيتطبع لما المترشّح يكون في مرحلة «عقد العمل»")
+    pid = (args["project"] if "project" in args else c.targetProjectId) or None
+    p = s.get(M.Project, pid) if pid else None
+    if pid and (p is None or p.companyId != c.targetCompanyId):
+        abort(400, "المشروع المختار مش تبع الشركة المستهدفة")
     person = {"id": (c.civilId or "").strip(), "name": c.name, "nameEn": c.nameEn, "nationality": c.nationality,
               "profession": c.profession, "salary": c.salary, "housingIncluded": bool(c.housingAllowance),
-              "passportNo": c.passportNo, "affiliations": [{"companyId": c.targetCompanyId, "projectId": None}]}
+              "passportNo": c.passportNo, "affiliations": [{"companyId": c.targetCompanyId, "projectId": pid}]}
     args = {k: v for k, v in args.items() if k in CANDIDATE_CONTRACT_ARGS}
     tpl = _contract_template(s, args.get("tpl"))
     _, ctx, data = _build_contract(s, person, args, fill, tpl)
     fields = contracts.template_fields(os.path.join(TEMPLATE_DOCS, tpl.filename))
     return c, ctx, data, contracts.missing_in_template(ctx, fields)
+
+
+@app.put("/api/candidates/<cand_id>/target-project")
+@require("recruitment.edit")
+def candidate_target_project(cand_id):
+    """المشروع المستهدف من نافذة عقد العمل (بيتحفظ على المترشّح، ولما يتحوّل لموظف بيتسجّل عليه)."""
+    pid = body().get("projectId") or None
+    with db.session_scope() as s:
+        c = s.get(M.Candidate, cand_id)
+        if not c:
+            return err("المترشّح غير موجود", 404)
+        if not me().record_ok(c.targetCompanyId, db.cost_center_company(s, c.costCenter), c.costCenter):
+            return forbidden(OUT_OF_SCOPE)
+        p = s.get(M.Project, pid) if pid else None
+        if pid and (p is None or p.companyId != c.targetCompanyId):
+            return err("المشروع المختار مش تبع الشركة المستهدفة")
+        if c.targetProjectId != pid:
+            c.targetProjectId = pid
+            db.log_audit(s, "candidate_edit", f"المشروع المستهدف للمترشّح {c.name}: {p.nameAr if p else 'بدون مشروع'}", uname())
+    return jsonify({"ok": True})
 
 
 @app.get("/api/candidates/<cand_id>/contract/preview")
