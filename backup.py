@@ -18,7 +18,7 @@ from datetime import date, datetime, timedelta
 
 import db
 
-FILE_DIRS = ("uploads", "templates_docs")
+FILE_DIRS = ("uploads", "templates_docs", "trash")          # trash = ملفات سلة المحذوفات
 SKIP = ("uploads/imports/",)                     # ملفات الاستيراد المؤقتة مالهاش لازمة
 NAME_RE = re.compile(r"^lunx-(auto|manual|pre-restore)-(\d{4}-\d{2}-\d{2})_(\d{6})\.(zip|json)$")
 KEEP_DAYS, KEEP_MONTHS, KEEP_PRE = 14, 12, 10

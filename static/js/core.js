@@ -826,6 +826,48 @@ function backupStaleText(bs) {
   if (bs.lastError && (!bs.lastOk || (bs.lastErrorAt || '') > bs.lastOk)) return `${t('النسخة الاحتياطية التلقائية فشلت')}: ${bs.lastError}`;
   return bs.lastOk ? `${t('آخر نسخة احتياطية تلقائية من')} ${-daysUntil(bs.lastOk.slice(0, 10))} ${t('يوم')}` : t('لسه مفيش نسخة احتياطية تلقائية');
 }
+/* 🗑️ سلة المحذوفات (trash.py): الموظف / المترشّح / العربية / التصريح المحذوف بيفضل 90 يوم وبيترجع زي ما كان */
+const TRASH_ICONS = { employee: '👤', candidate: '🧑‍💼', vehicle: '🚗', permit: '🪪' };
+function trashNote() { return t('هيتنقل لسلة المحذوفات، وتقدر ترجّعه زي ما كان خلال 90 يوم.'); }
+function canTrash() { return ['employees.delete', 'recruitment.delete', 'vehicles.delete', 'permits.delete'].some(k => can(k)); }
+async function openTrashModal() {
+  const F = { q: '', kind: '' };
+  const m = openModal({ title: '🗑️ ' + t('سلة المحذوفات'), size: 'wide', body: '<div id="tr-body" class="muted">…</div>', foot: `<span id="tr-foot"></span><span class="spacer"></span><button class="btn" data-close>${t('إغلاق')}</button>` });
+  let data = null;
+  const load = async () => { try { data = await api('GET', '/api/trash'); draw(); } catch (e) { $('#tr-body', m.el).innerHTML = `<div class="notice err">${esc(e.message)}</div>`; } };
+  const sumText = x => [x.summary.permits ? `${x.summary.permits} ${t('تصريح')}` : '', x.summary.vehicles ? `${x.summary.vehicles} ${t('سيارة مربوطة')}` : '', x.summary.letters ? `${x.summary.letters} ${t('خطاب')}` : ''].filter(Boolean).join(' · ');
+  const draw = () => {
+    const q = norm(F.q);
+    const list = data.items.filter(x => (!F.kind || x.kind === F.kind) && (!q || [x.label, x.recordId, x.deletedBy].some(v => norm(v).includes(q))));
+    $('#tr-body', m.el).innerHTML = `<div class="notice small">${t('المحذوف بيفضل هنا')} ${data.keepDays} ${t('يوم وبعدها بيتحذف نهائي لوحده. «♻️ استرجاع» بيرجّعه زي ما كان ومعاه المرتبط بيه (الشركات، التصاريح ومرفقاتها).')}</div>
+      <div class="filters" style="margin-top:8px"><input type="search" id="tr-q" placeholder="${esc(t('بحث بالاسم أو الرقم أو اللي حذف…'))}" value="${esc(F.q)}">
+        <select id="tr-kind">${opt('', t('— كل الأنواع —'), !F.kind)}${Object.entries(TRASH_ICONS).map(([k, i]) => opt(k, `${i} ${t({ employee: 'موظف', candidate: 'مترشّح', vehicle: 'سيارة', permit: 'تصريح' }[k])}`, k === F.kind)).join('')}</select></div>
+      <div class="table-wrap"><table class="data"><thead><tr><th>${t('النوع')}</th><th>${t('المحذوف')}</th><th>${t('اتحذف')}</th><th>${t('بيتحذف نهائي')}</th><th></th></tr></thead><tbody>
+        ${list.map(x => `<tr><td>${TRASH_ICONS[x.kind] || ''} ${esc(t(x.kindLabel))}</td><td><b>${esc(x.label)}</b>${sumText(x) ? `<div class="small muted">${esc(sumText(x))}</div>` : ''}</td>
+          <td class="small">${fmtDateTime(x.deletedAt)}<br>${esc(x.deletedBy || '')}</td><td>${datePill(x.purgeAt)}</td>
+          <td style="white-space:nowrap"><button class="btn sm primary" data-tr-rs="${x.id}">♻️ ${t('استرجاع')}</button>${data.canPurge ? ` <button class="btn sm danger" data-tr-del="${x.id}" title="${esc(t('حذف نهائي'))}">🗑️</button>` : ''}</td></tr>`).join('')
+          || `<tr><td colspan="5" class="empty">${t('السلة فاضية')}</td></tr>`}</tbody></table></div>`;
+    $('#tr-foot', m.el).innerHTML = data.canPurge && data.items.length ? `<button class="btn danger" id="tr-empty">🗑️ ${t('تفريغ السلة')}</button>` : '';
+    const qi = $('#tr-q', m.el);
+    qi.oninput = debounce(() => { F.q = qi.value; draw(); const i = $('#tr-q', m.el); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 250);
+    $('#tr-kind', m.el).onchange = e => { F.kind = e.target.value; draw(); };
+    $$('[data-tr-rs]', m.el).forEach(b => b.onclick = async () => {
+      b.disabled = true;
+      try { await api('POST', `/api/trash/${b.dataset.trRs}/restore`, {}); toast(t('اترجع زي ما كان'), 'ok'); await reload(); load(); }
+      catch (e) { b.disabled = false; if (e.data && e.data.block) openBlockAlert(e.message); else toast(e.message, 'err'); }
+    });
+    $$('[data-tr-del]', m.el).forEach(b => b.onclick = async () => {
+      const x = data.items.find(y => y.id === b.dataset.trDel);
+      if (!await openConfirm(`${t('حذف نهائي')} «${esc(x.label)}»؟\n${t('مش هيقدر يترجع تاني.')}`, { danger: true, okLabel: t('حذف نهائي') })) return;
+      try { await api('DELETE', '/api/trash/' + x.id); load(); } catch (e) { toast(e.message, 'err'); }
+    });
+    const em = $('#tr-empty', m.el); if (em) em.onclick = async () => {
+      if (!await openConfirm(`${t('تفريغ السلة؟')} (${data.items.length})\n${t('كل اللي فيها هيتحذف نهائي ومش هيقدر يترجع.')}`, { danger: true, okLabel: t('تفريغ السلة') })) return;
+      try { await api('DELETE', '/api/trash'); load(); } catch (e) { toast(e.message, 'err'); }
+    };
+  };
+  load();
+}
 const BACKUP_KIND_ICONS = { auto: '🔁', manual: '✋', 'pre-restore': '🛟' };
 function fmtBytes(n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'; }
 async function openBackupsModal() {
@@ -1132,12 +1174,13 @@ function renderUserMenu() {
     ${me.isAdmin ? `<button data-a="backup">💾 ${t('النسخ الاحتياطية')}${backupStale(STATE.backupStatus) ? ' ⚠️' : ''}</button><button data-a="users">🔑 ${t('المستخدمين والصلاحيات')}</button>
       <button data-a="exportpw">🔐 ${t('كلمة سر التصدير')}${STATE.exportPasswordSet ? '' : ' ⚠️'}</button>
       <button data-a="dq">📋 ${t('جودة البيانات')}</button><button data-a="importx">📥 ${t('استيراد بيانات تكميلية')}</button>` : ''}
+    ${canTrash() ? `<button data-a="trash">🗑️ ${t('سلة المحذوفات')}</button>` : ''}
     <button data-a="viewperms">👁️ ${t('إعدادات العرض')}</button>
     <button data-a="password">🔒 ${t('تغيير كلمة المرور')}</button>
     <button data-a="logout">🚪 ${t('تسجيل الخروج')}</button>`;
   $$('button', m).forEach(b => b.onclick = () => {
     m.hidden = true;
-    ({ backup: openBackupsModal, users: () => openUsersModal(), viewperms: renderViewSettingsModal, exportpw: openExportPasswordModal, dq: openDataQualityModal, importx: () => openImportExtraModal(),
+    ({ backup: openBackupsModal, trash: openTrashModal, users: () => openUsersModal(), viewperms: renderViewSettingsModal, exportpw: openExportPasswordModal, dq: openDataQualityModal, importx: () => openImportExtraModal(),
        password: openPasswordModal, logout: () => location.href = '/logout' })[b.dataset.a]();
   });
 }

@@ -27,6 +27,7 @@ from werkzeug.utils import secure_filename
 
 import db
 import backup
+import trash
 import contracts
 import custody
 import custody_excel
@@ -414,6 +415,15 @@ def api_state():
     except Exception as e:               # النسخ الاحتياطي ما يوقفش النظام
         app.logger.warning("auto backup failed: %s", e)
     try:
+        with db.session_scope() as s:    # السلة: اللي عدّى عليه 90 يوم ← حذف نهائي (مرة في اليوم)
+            if db.get_meta(s, "trash_purged") != datetime.now().date().isoformat():
+                db.set_meta(s, "trash_purged", datetime.now().date().isoformat())
+                n = trash.purge_expired(s)
+                if n:
+                    db.log_audit(s, "trash_purge", f"حذف نهائي تلقائي من سلة المحذوفات (عدّى عليهم {trash.KEEP_DAYS} يوم): {n}", "النظام")
+    except Exception as e:
+        app.logger.warning("trash purge failed: %s", e)
+    try:
         with db.session_scope() as s:
             _finish_notice_periods(s)    # فترة الإنذار خلصت ← مستقيل / إنهاء خدمات
     except Exception as e:
@@ -712,14 +722,9 @@ def delete_employee(emp_id):
             return err("غير موجود", 404)
         if not emp_ok(s, emp_id):
             return forbidden(OUT_OF_SCOPE)
-        s.query(M.EmployeeAffiliation).filter(M.EmployeeAffiliation.employeeId == emp_id).delete()
-        s.query(M.Vehicle).filter(M.Vehicle.driverId == emp_id).update({"driverId": None})
-        s.query(M.HrLetter).filter(M.HrLetter.employeeId == emp_id).update({"employeeId": None})   # الخطابات بتفضل في السجل
-        delete_permits_of(s, employee_id=emp_id)
-        s.flush()
-        db.log_audit(s, "employee_delete", f"حذف موظف: {e.name} ({emp_id})", uname())
-        s.delete(e)
-    return jsonify({"ok": True})
+        db.log_audit(s, "employee_delete", f"حذف موظف: {e.name} ({emp_id}) — اتنقل لسلة المحذوفات", uname())
+        trash.trash_employee(s, e, uname())       # هو وانتماءاته وتصاريحه ← السلة (بيترجع زي ما كان)
+    return jsonify({"ok": True, "trash": True})
 
 
 @app.post("/api/employees/bulk-assign")
@@ -1704,10 +1709,9 @@ def delete_vehicle(vid):
         if v and not opt_company_ok(v.companyId):
             return forbidden(OUT_OF_SCOPE)
         if v:
-            db.log_audit(s, "vehicle_delete", f"حذف سيارة: {v.plate}", uname())
-            delete_permits_of(s, vehicle_id=vid)
-            s.delete(v)
-    return jsonify({"ok": True})
+            db.log_audit(s, "vehicle_delete", f"حذف سيارة: {v.plate} — اتنقلت لسلة المحذوفات", uname())
+            trash.trash_vehicle(s, v, uname())    # هي وتصاريحها ← السلة
+    return jsonify({"ok": True, "trash": True})
 
 
 # ---------------------------------------------------------------------------
@@ -1756,16 +1760,6 @@ def _drop_permit_file(p):
         except OSError:
             pass
     p.filePath = p.fileName = None
-
-
-def delete_permits_of(s, employee_id=None, vehicle_id=None):
-    """حذف موظف أو عربية ← تصاريحه وأماكنها ومرفقاتها."""
-    where = M.Permit.employeeId == employee_id if employee_id else M.Permit.vehicleId == vehicle_id
-    for p in s.scalars(select(M.Permit).where(where)).all():
-        _drop_permit_file(p)
-        s.query(M.PermitPlaceLink).filter(M.PermitPlaceLink.permitId == p.id).delete()
-        s.delete(p)
-    s.flush()
 
 
 def permit_holders(s, u):
@@ -1961,14 +1955,16 @@ def delete_permit(pid):
             return e
         tp = s.get(M.PermitType, p.typeId)
         label = f"حذف {tp.nameAr if tp else 'تصريح'}{' رقم ' + p.permitNo if p.permitNo else ''} من {who}"
-        db.log_audit(s, "permit_delete", label, uname())
+        db.log_audit(s, "permit_delete", label + " — اتنقل لسلة المحذوفات", uname())
         if p.holderKind == "employee":
             db.push_timeline(s, p.employeeId, "permit", label, uname())
-        _drop_permit_file(p)
-        s.query(M.PermitPlaceLink).filter(M.PermitPlaceLink.permitId == pid).delete()
-        s.flush()
-        s.delete(p)
-    return jsonify({"ok": True})
+            aff = s.scalar(select(M.EmployeeAffiliation).where(M.EmployeeAffiliation.employeeId == p.employeeId)
+                           .order_by(M.EmployeeAffiliation.position).limit(1))
+            company = aff.companyId if aff is not None else None
+        else:
+            company = (s.get(M.Vehicle, p.vehicleId) or M.Vehicle()).companyId
+        trash.trash_permit(s, p, f"{tp.nameAr if tp else 'تصريح'}{' ' + p.permitNo if p.permitNo else ''} — {who}", company, uname())
+    return jsonify({"ok": True, "trash": True})
 
 
 @app.post("/api/permits/<pid>/file")
@@ -2231,8 +2227,9 @@ def delete_candidate(cand_id):
         if c and not me().record_ok(c.targetCompanyId, db.cost_center_company(s, c.costCenter), c.costCenter):
             return forbidden(OUT_OF_SCOPE)
         if c:
-            s.delete(c)
-    return jsonify({"ok": True})
+            db.log_audit(s, "candidate_delete", f"حذف مترشّح: {c.name} — اتنقل لسلة المحذوفات", uname())
+            trash.trash_candidate(s, c, uname())
+    return jsonify({"ok": True, "trash": True})
 
 
 @app.post("/api/candidates/<cand_id>/convert")
@@ -3013,6 +3010,60 @@ def _restore_zip(path, source):
         db.log_audit(s, "backup_restore", f"استعادة نسخة احتياطية كاملة ({source}) من {data.get('createdAt', '')} — "
                      f"الحالة اللي قبلها اتحفظت في {pre}", uname())
     return {"counts": counts, "files": backup.restore_files(path), "preRestore": pre}
+
+
+# ---------------------------------------------------------------------------
+# 🗑️ سلة المحذوفات (trash.py) — القسم 28
+# ---------------------------------------------------------------------------
+@app.get("/api/trash")
+@login_required
+def list_trash():
+    u = me()
+    with db.session_scope(commit=False) as s:
+        items = [trash.to_api(t) for t in s.scalars(select(M.Trash).order_by(M.Trash.deletedAt.desc())) if trash.visible(u, t)]
+    return jsonify({"items": items, "keepDays": trash.KEEP_DAYS, "canPurge": u.isAdmin})
+
+
+@app.post("/api/trash/<tid>/restore")
+@login_required
+def restore_trash(tid):
+    with db.session_scope() as s:
+        t = s.get(M.Trash, tid)
+        if t is None:
+            return err("مش موجود في السلة", 404)
+        if not trash.visible(me(), t):
+            return forbidden()
+        kind, label, rid = t.kind, t.label, t.recordId
+        msg = trash.restore(s, t)
+        if msg:
+            return err(msg, 409, block=True)
+        db.log_audit(s, "trash_restore", f"استرجاع {trash.KINDS[kind][0]} من سلة المحذوفات: {label}", uname())
+        if kind == "employee":
+            db.push_timeline(s, rid, "edit", "اترجع من سلة المحذوفات", uname())
+    return jsonify({"ok": True})
+
+
+@app.delete("/api/trash/<tid>")
+@admin_required
+def purge_trash(tid):
+    with db.session_scope() as s:
+        t = s.get(M.Trash, tid)
+        if t is None:
+            return err("مش موجود في السلة", 404)
+        db.log_audit(s, "trash_purge", f"حذف نهائي من سلة المحذوفات: {trash.KINDS[t.kind][0]} {t.label}", uname())
+        trash.purge(s, t)
+    return jsonify({"ok": True})
+
+
+@app.delete("/api/trash")
+@admin_required
+def empty_trash():
+    with db.session_scope() as s:
+        items = list(s.scalars(select(M.Trash)))
+        for t in items:
+            trash.purge(s, t)
+        db.log_audit(s, "trash_purge", f"تفريغ سلة المحذوفات: {len(items)}", uname())
+    return jsonify({"ok": True, "count": len(items)})
 
 
 @app.get("/api/backups")

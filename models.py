@@ -607,6 +607,21 @@ class ImportChange(Base):
     newValue: Mapped[Optional[str]] = col("new_value", TEXT)
 
 
-# النسخ الاحتياطي: العهد والفواتير والوكالات والتصاريح والخطابات ودفعات الاستيراد كمان
+# ---------------------------------------------------------------------------
+# 🗑️ سلة المحذوفات (trash.py): نسخة كاملة من المحذوف والمرتبط بيه ← الاسترجاع (90 يوم)
+# ---------------------------------------------------------------------------
+class Trash(Base):
+    __tablename__ = "trash"
+    id: Mapped[str] = col("id", ID, primary_key=True)
+    kind: Mapped[str] = col("kind", String(20), nullable=False)                 # employee | candidate | vehicle | permit
+    recordId: Mapped[str] = col("record_id", ID, nullable=False)
+    label: Mapped[Optional[str]] = col("label", NAME)
+    companyIds: Mapped[Optional[str]] = col("company_ids", TEXT)                # JSON ← نطاق الشركات لمين يشوفه
+    data: Mapped[Optional[str]] = col("data", TEXT)                             # JSON: {rows, relink, files, summary}
+    deletedBy: Mapped[Optional[str]] = col("deleted_by", NAME)
+    deletedAt: Mapped[Optional[datetime]] = col("deleted_at", DateTime, index=True)
+
+
+# النسخ الاحتياطي: العهد والفواتير والوكالات والتصاريح والخطابات ودفعات الاستيراد والسلة كمان
 ALL_MODELS.extend([FeeItem, Custody, CustodyLine, Invoice, Agency, AgencyCostCenter, PermitType, PermitPlace, Permit, PermitPlaceLink,
-                   HrLetter, ImportBatch, ImportChange])
+                   HrLetter, ImportBatch, ImportChange, Trash])

@@ -374,8 +374,8 @@ function openPermitModal(id, kind0, preset) {
     try { await persist('DELETE', `/api/permits/${p.id}/file`, undefined, 'تم الحذف'); reopen(); } catch (_) { /* */ }
   };
   $('[data-permit-del]', E).onclick = async () => {
-    if (!await openConfirm(`${t('حذف التصريح')} «${esc(permitLabel(p))}${p.permitNo ? ' ' + esc(p.permitNo) : ''}» — ${esc(permitHolderName(p))}؟`, { danger: true, okLabel: t('حذف') })) return;
-    try { m.close(); await persist('DELETE', '/api/permits/' + p.id, undefined, 'تم الحذف'); } catch (_) { /* */ }
+    if (!await openConfirm(`${t('حذف التصريح')} «${esc(permitLabel(p))}${p.permitNo ? ' ' + esc(p.permitNo) : ''}» — ${esc(permitHolderName(p))}؟\n${trashNote()}`, { danger: true, okLabel: t('حذف') })) return;
+    try { m.close(); await persist('DELETE', '/api/permits/' + p.id, undefined, 'اتنقل لسلة المحذوفات'); } catch (_) { /* */ }
   };
 }
 

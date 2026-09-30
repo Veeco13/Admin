@@ -326,6 +326,6 @@ function openCandidateModal(id) {
     openOfficialFormModal('driving', 'candidate', cid);
   };
   const del = $('[data-del]', m.el);
-  if (del) del.onclick = async () => { if (await openConfirm(t('حذف المترشّح؟'), { danger: true })) { m.close(); await persist('DELETE', '/api/candidates/' + id, undefined, 'تم الحذف'); } };
+  if (del) del.onclick = async () => { if (await openConfirm(t('حذف المترشّح؟') + '\n' + trashNote(), { danger: true })) { m.close(); await persist('DELETE', '/api/candidates/' + id, undefined, 'اتنقل لسلة المحذوفات'); } };
 }
 function convertCandidateToEmployee(id) { return api('POST', `/api/candidates/${id}/convert`, {}).then(() => reload()); }

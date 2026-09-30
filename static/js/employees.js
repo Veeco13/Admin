@@ -789,8 +789,8 @@ async function openProfileCard(id, tab = 'info') {
     else if (a === 'print') printHtml(e.name, `<h1>${esc(e.name)}</h1><div class="muted">${esc(e.nameEn || '')} · ${esc(e.id)}</div>` + $('[data-pane="info"]', m.el).innerHTML + $('[data-pane="docs"]', m.el).innerHTML);
     else if (a === 'delete') {
       const np = permitsOf('employee', e.id).length;
-      if (await openConfirm(`${t('حذف الموظف')} «${esc(e.name)}» ${t('نهائيًا؟')}${np ? `\n${t('تصاريحه في قسم التصاريح هتتحذف معاه')} (${np}).` : ''}`, { danger: true, okLabel: t('حذف') })) {
-        m.close(); await persist('DELETE', '/api/employees/' + encodeURIComponent(e.id), undefined, 'تم الحذف');
+      if (await openConfirm(`${t('حذف الموظف')} «${esc(e.name)}»؟${np ? `\n${t('تصاريحه هتتنقل معاه')} (${np}).` : ''}\n${trashNote()}`, { danger: true, okLabel: t('حذف') })) {
+        m.close(); await persist('DELETE', '/api/employees/' + encodeURIComponent(e.id), undefined, 'اتنقل لسلة المحذوفات');
       }
     }
   });

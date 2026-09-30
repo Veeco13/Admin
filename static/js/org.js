@@ -543,7 +543,7 @@ function openVehicleModal(id) {
     try { await persist(id ? 'PUT' : 'POST', id ? '/api/vehicles/' + id : '/api/vehicles', d, 'تم الحفظ'); m.close(); } catch (e) { if (e.data && e.data.block) openBlockAlert(e.message); }
   };
   const del = $('[data-del]', m.el);
-  if (del) del.onclick = async () => { if (await openConfirm(t('حذف السيارة؟') + (permitsOf('vehicle', id).length ? `\n${t('تصاريحها في قسم التصاريح هتتحذف معاها')} (${permitsOf('vehicle', id).length}).` : ''), { danger: true })) { m.close(); await persist('DELETE', '/api/vehicles/' + id, undefined, 'تم الحذف'); } };
+  if (del) del.onclick = async () => { if (await openConfirm(t('حذف السيارة؟') + (permitsOf('vehicle', id).length ? `\n${t('تصاريحها هتتنقل معاها')} (${permitsOf('vehicle', id).length}).` : '') + '\n' + trashNote(), { danger: true })) { m.close(); await persist('DELETE', '/api/vehicles/' + id, undefined, 'اتنقل لسلة المحذوفات'); } };
 }
 
 /* =====================================================================
