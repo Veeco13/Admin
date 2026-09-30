@@ -95,6 +95,8 @@ zahed/
 | `js/org.js` | COMPANIES (الشركات + المشاريع + مراكز التكلفة)، VEHICLES | `renderCompanies`، `renderCompaniesTab`، `companyAlerts`، `openCompanyDetails`، `fillCompanyDetails`، `renderProjectsTab`، `projectsTable`، `renderCostCentersTab`، `openCompanyModal`، `openProjectModal`، `openSignatoryModal`، `openTrafficAuthModal`، `openCivilAffairsAuthModal`، `openCivilIdDocModal`، `renderVehicles`، `openVehicleModal`، `openCostCenterModal` |
 | `js/permits.js` | PERMITS (قسم التصاريح المستقل) | `renderPermits`، `openPermitAddModal`، `openPermitModal`، `holderPermitsHtml`، `holderCardHtml`، `permitsFiltered`، `openPermitsReportModal`، `printPermitsReport`، `openPermitListsModal`، `permitsOf`، `permitHolder` |
 | `js/letters.js` | LETTERS (الخطابات والشهادات من بطاقة الموظف) | `openLettersModal`، `openSalaryCertModal`، `openLeaveRequestModal`، `openReturnModal`، `printFormSheet`، `printLeaveForm`، `printReturnForm`، `openLettersLog`، `reprintLetter`، `setLeaveStatus`، `returnOfLeave`، `lettersOf` |
+| `js/importx.js` | IMPORT EXTRA (📥 استيراد بيانات تكميلية — مدير النظام) | `openImportExtraModal` (رفع ← الشيت والمطابقة والأعمدة ← معاينة وتأكيد الأسماء ← اعتماد، والدفعات السابقة والتراجع) |
+| `import_extra.py` | الاستيراد التكميلي: بيملى الفاضي بس، ودفعات بتتسجّل للتراجع | `read_book`، `describe`، `suggest`، `analyze`، `apply_plan`، `undo_batch`، `parse_value`، `norm_name`، `name_score` |
 | `letters.py` | شهادة الراتب / الاستمرارية (قالب `forms/salary_certificate.xlsx`) وطلب الإجازة والعودة منها | `salary_defaults`، `salary_xlsx`، `leave_snapshot`، `return_snapshot`، `return_of`، `next_number`، `date_en`، `date_ar`، `words_ar`، `words_en`، `bank_names`، `to_api` |
 | `js/contract.js` | CONTRACT GENERATOR، COMPANY LOG / AUDIT LOG | `renderContractView`، `buildContractHtml`، `renderCompanyLog` |
 | `js/recruit.js` | RECRUITMENT، CANDIDATES REPORT + MODAL | `recruitStagesForSource`، `recruitStageInfo`، `migrateRecruitStages`، `renderRecruitFunnelCard`، `renderRecruitment`، `renderCandidatesReportModal`، `printCandidatesReport`، `openCandidateModal`، `convertCandidateToEmployee` |
@@ -416,6 +418,9 @@ fill_docx_template()  ← {{ field }} حتى لو متقسّم على أكتر �
 | POST | `/api/employees/<id>/letters` | خطاب برقم جديد: `{kind: salary\|continuity, toAr, toEn, jobAr, jobEn, bankAr, bankEn}` (`sensitive.salary`) أو `{kind: leave, leaveType, from, to, address, phone, notes}` أو `{kind: return, leaveId \| (leaveType, from, to), actualDate, reason, notes}` (`employees.edit`) |
 | GET | `/api/letters/<id>/pdf` | الشهادة PDF من نسختها المحفوظة (معاينة بس) |
 | PUT | `/api/letters/<id>/status` | طلب الإجازة: `submitted` / `approved` / `rejected` |
+| POST | `/api/import-extra/upload` | الملف ← الشيتات وأول صفوفها واقتراح المطابقة والأعمدة (مدير النظام) — القسم 27 |
+| POST | `/api/import-extra/preview` · `/apply` | `{token, sheet, headerRow, matchCol, matchBy: civil\|code\|name, map: {عمود: خانة}, confirm: {صف: رقم مدني}}` ← المعاينة / الحفظ |
+| GET · POST | `/api/import-extra/batches` · `/batches/<id>/undo` | الدفعات السابقة والتراجع |
 | POST / PUT / DELETE | `/api/agencies[/<id>]` | الوكالات ومراكز التكلفة التابعة ليها (`companies.edit` / `companies.delete`) — القسم 23 |
 | POST | `/api/companies/<id>/docs/<kind>` | مستندات الشركة والشعار (`kind=logo`) |
 | POST | `/api/signatory-docs/<civilId>` | بطاقة المفوّض |
@@ -859,3 +864,15 @@ docker compose exec db pg_dump -U lunx lunx > lunx.sql          # نسخة SQL �
   - عودة واحدة بس لكل طلب إجازة، وطلب الإجازة اللي صاحبه رجع منه مايترفضش (الاعتماد مسموح).
   - النموذج المطبوع بنفس تصميم طلب الإجازة (غلاف مشترك `printFormSheet`): بيانات الموظف، تفاصيل الإجازة (رقم الطلب أو «طلب ورقي»، النوع، التواريخ، العودة المقررة)، بيانات العودة والالتزام بالموعد وسبب التأخير، إقرار الموظف بمباشرة العمل، تأكيد المدير المباشر واستلام عهد الشركة (ومعاها أرقام عربيات الموظف)، خانة الموارد البشرية (أيام التأخير: بعذر / من رصيد الإجازات / بدون راتب — لو فيه تأخير، رصيد الإجازات بعد العودة، تحديث السجلات)، و3 توقيعات. صفحة A4 واحدة.
   - طلب الإجازة في السجل بيبان جنبه «↩️ رجع (التاريخ) · رقم العودة»، والعودة بتبان بحالة التأخير.
+
+## 27. الاستيراد التكميلي (`import_extra.py`، `static/js/importx.js`)
+- **المكان:** قايمة المستخدم ← «📥 استيراد بيانات تكميلية» (مدير النظام بس). الملف بيترفع على السيرفر (`uploads/imports`) ومش بيروح الكود ولا GitHub.
+- **القاعدة الثابتة: بيملى الخانات الفاضية بس** — أي قيمة موجودة مابتتغيّرش، والمختلف بيطلع في قايمة «مختلف — هيفضل اللي في السيستم».
+- **الخطوات:** رفع الملف (xlsx / xls / csv) ← اختيار الشيت (الأكبر افتراضي) وصف العناوين (بيتعرف لوحده ويتغيّر من القايمة) ← المطابقة وعمودها ← الأعمدة اللي تتاخد ← «👁️ معاينة» (مابتحفظش) ← «✅ اعتماد وحفظ».
+- **الخانات المسموحة (`EMP_FIELDS`):** الرقم الوظيفي، المؤهل الدراسي، التخصص، الجامعة / جهة التخرج، الرقم الموحد، تاريخ التعيين، تاريخ دخول الكويت، الهاتف، البريد الإلكتروني. الاقتراح التلقائي من عناوين الأعمدة (زي «Degree / الدرجة» ← المؤهل، «رمز الموظف» ← الرقم الوظيفي، «Mobile» ← الهاتف) — والعمود اللي مش متختار مابيتاخدش منه حاجة.
+- **المطابقة:** بالرقم المدني (الأول لو موجود)، أو بالاسم، أو بالرقم الوظيفي. الاسم: من غير تشكيل ولا نقط، والألف والتاء المربوطة والياء موحّدين، و«عبد ال…» كلمة واحدة (`norm_name`) — المتطابق بالظبط بيتربط، والباقي بيطلع في «أسماء محتاجة تأكيد» بأقرب 3 أسماء في السيستم ونسبة التشابه (`name_score`). **مفيش حاجة بتتربط لوحدها**: بتختار الموظف أو «مش موجود / تجاهل»، والمعاينة بتتحدّث على طول، و«↺ إلغاء تأكيد الأسماء» بيرجّعهم.
+- **القيم:** التواريخ من Excel أو نص، الهاتف أرقام بس (من غير 965)، الإيميل لازم يكون صحيح، الرقم الموحد أرقام. المرفوض بيطلع في «قيم مرفوضة» بالسبب. لو الموظف متكرر في الملف بتتاخد أول قيمة.
+- **المعاينة:** الأعداد (اتطابق، اتأكد يدويًا، مش موجود، محتاج تأكيد، صفوف متكررة)، وجدول لكل خانة (هيتملى / زي ما هو / مختلف / مرفوض)، وقوايم التفاصيل برقم الصف في الملف.
+- **الحفظ:** دفعة واحدة في `import_batches` وكل خانة اتملت في `import_changes` (القديم والجديد)، وسجل الموظف («استيراد تكميلي (الملف): الهاتف، …»)، وسجل التدقيق (`employee_import`).
+- **«📜 الدفعات السابقة» و«↩️ تراجع»:** بيرجّع القيمة القديمة لكل خانة **لسه زي ما الاستيراد سابها**؛ اللي اتعدّل بعد الاستيراد بيفضل وبيتقال عليه. الدفعة مابيتعملهاش تراجع مرتين (`import_undo` في سجل التدقيق).
+- **ملفات أبراج الأولى:** سوبيريور (المؤهل والتخصص بالرقم المدني)، سكومي (الرقم الوظيفي والدرجة والتخصص والجامعة بالاسم)، الرقم الموحد (شيت MANPOWER: الرقم الموحد وتاريخ الدخول وتاريخ التعيين — المختلف بيفضل اللي في السيستم)، الإيميلات والتليفونات.

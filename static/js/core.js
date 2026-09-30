@@ -1095,13 +1095,13 @@ function renderUserMenu() {
     ${me.isAdmin && canAll(BACKUP_PERMS) ? `<button data-a="backup">💾 ${t('تنزيل نسخة احتياطية')}</button>` : ''}
     ${me.isAdmin ? `<button data-a="restore">♻️ ${t('استعادة نسخة احتياطية')}</button><button data-a="users">🔑 ${t('المستخدمين والصلاحيات')}</button>
       <button data-a="exportpw">🔐 ${t('كلمة سر التصدير')}${STATE.exportPasswordSet ? '' : ' ⚠️'}</button>
-      <button data-a="dq">📋 ${t('جودة البيانات')}</button>` : ''}
+      <button data-a="dq">📋 ${t('جودة البيانات')}</button><button data-a="importx">📥 ${t('استيراد بيانات تكميلية')}</button>` : ''}
     <button data-a="viewperms">👁️ ${t('إعدادات العرض')}</button>
     <button data-a="password">🔒 ${t('تغيير كلمة المرور')}</button>
     <button data-a="logout">🚪 ${t('تسجيل الخروج')}</button>`;
   $$('button', m).forEach(b => b.onclick = () => {
     m.hidden = true;
-    ({ backup: takeBackup, restore: restoreBackup, users: () => openUsersModal(), viewperms: renderViewSettingsModal, exportpw: openExportPasswordModal, dq: openDataQualityModal,
+    ({ backup: takeBackup, restore: restoreBackup, users: () => openUsersModal(), viewperms: renderViewSettingsModal, exportpw: openExportPasswordModal, dq: openDataQualityModal, importx: () => openImportExtraModal(),
        password: openPasswordModal, logout: () => location.href = '/logout' })[b.dataset.a]();
   });
 }

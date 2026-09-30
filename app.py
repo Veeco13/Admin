@@ -34,6 +34,7 @@ import letters
 import docx_engine
 import history
 import importer
+import import_extra
 import lunx_restore
 import models as M
 import perms
@@ -865,6 +866,105 @@ def import_employees():
     except Exception as e:
         return err(f"خطأ في قراءة الملف: {e}")
     return jsonify({"ok": True, "mode": mode, "token": token, "fileName": name, "allowAdd": allow_add, **stats})
+
+
+# ---------------------------------------------------------------------------
+# الاستيراد التكميلي (import_extra.py) — القسم 27: بيملى الفاضي بس، ومعاينة قبل الحفظ، وتراجع
+# ---------------------------------------------------------------------------
+def _extra_file(token):
+    path = os.path.join(IMPORTS_DIR, token or "")
+    return path if re.fullmatch(r"[\w-]+\.(xlsx|xls|csv)", token or "") and os.path.exists(path) else None
+
+
+@app.post("/api/import-extra/upload")
+@admin_required
+def import_extra_upload():
+    """الملف ← الشيتات وعناوينها وعينة، واقتراح عمود المطابقة والأعمدة اللي تتاخد."""
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return err("لم يتم اختيار ملف")
+    ext = os.path.splitext(f.filename)[1].lower()
+    if ext not in (".xlsx", ".xls", ".csv"):
+        return err("الصيغ المدعومة: xlsx, xls, csv")
+    os.makedirs(IMPORTS_DIR, exist_ok=True)
+    token = f"{datetime.now():%Y%m%d%H%M%S}_{db.new_id('ix')}{ext}"
+    path = os.path.join(IMPORTS_DIR, token)
+    f.save(path)
+    try:
+        sheets = import_extra.describe(path)
+    except Exception as e:                      # noqa: BLE001 — ملف مش مفهوم
+        return err(f"خطأ في قراءة الملف: {e}")
+    return jsonify({"ok": True, "token": token, "fileName": f.filename, "sheets": sheets,
+                    "fields": {k: v[0] for k, v in import_extra.EMP_FIELDS.items()},
+                    "matchBy": {k: v[0] for k, v in import_extra.MATCH_BY.items()}})
+
+
+def _extra_plan(s, d):
+    path = _extra_file(d.get("token"))
+    if not path:
+        raise ValueError("الملف مش موجود — ارفعه تاني")
+    rows = import_extra.read_book(path).get(d.get("sheet"))
+    if rows is None:
+        raise ValueError("الشيت مش موجود")
+    mc = d.get("matchCol")
+    return import_extra.analyze(s, rows, int(d.get("headerRow") or 0), int(mc) if mc not in (None, "") else None,
+                                d.get("matchBy"), d.get("map"), d.get("confirm"))
+
+
+@app.post("/api/import-extra/preview")
+@admin_required
+def import_extra_preview():
+    """{token, sheet, headerRow, matchCol, matchBy, map: {عمود: خانة}, confirm: {صف: رقم مدني}} ← المعاينة (مابتحفظش)."""
+    d = body()
+    with db.session_scope(commit=False) as s:
+        try:
+            _, res = _extra_plan(s, d)
+        except ValueError as e:
+            return err(str(e))
+    return jsonify({"ok": True, **res})
+
+
+@app.post("/api/import-extra/apply")
+@admin_required
+def import_extra_apply():
+    """نفس المعاينة ← الخانات الفاضية بتتملى في دفعة واحدة متسجّلة (تقدر تعمل لها تراجع)."""
+    d = body()
+    with db.session_scope() as s:
+        try:
+            plan, res = _extra_plan(s, d)
+        except ValueError as e:
+            return err(str(e))
+        if not res["fillTotal"]:
+            return err("مفيش خانات فاضية هتتملى من الملف ده")
+        batch, summary = import_extra.apply_plan(s, plan, d.get("fileName") or d.get("token"), d.get("sheet"), uname(), res)
+        db.log_audit(s, "employee_import", f"استيراد تكميلي: {batch.fileName} ({batch.sheet}) — اتملى {summary['values']} خانة "
+                     f"لـ {summary['employees']} موظف" + (f"، {summary['conflicts']} مختلف اتساب زي ما هو" if summary["conflicts"] else ""), uname())
+        return jsonify({"ok": True, "batchId": batch.id, **summary})
+
+
+@app.get("/api/import-extra/batches")
+@admin_required
+def import_extra_batches():
+    with db.session_scope(commit=False) as s:
+        counts = dict(s.execute(select(M.ImportChange.batchId, func.count()).group_by(M.ImportChange.batchId)).all())
+        return jsonify({"batches": [import_extra.batch_api(b, counts)
+                                    for b in s.scalars(select(M.ImportBatch).order_by(M.ImportBatch.createdAt.desc()))]})
+
+
+@app.post("/api/import-extra/batches/<bid>/undo")
+@admin_required
+def import_extra_undo(bid):
+    """التراجع: القيمة القديمة بترجع للخانات اللي لسه زي ما الاستيراد سابها (اللي اتعدّلت بعده بتفضل)."""
+    with db.session_scope() as s:
+        b = s.get(M.ImportBatch, bid)
+        if b is None:
+            return err("الدفعة غير موجودة", 404)
+        if b.undoneAt:
+            return err("الدفعة دي اتعملها تراجع قبل كده")
+        restored, kept = import_extra.undo_batch(s, b, uname())
+        db.log_audit(s, "import_undo", f"تراجع عن استيراد تكميلي: {b.fileName} ({b.sheet}) — رجّع {restored} خانة"
+                     + (f"، و{len(kept)} خانة اتعدّلت بعد الاستيراد فاتسابت" if kept else ""), uname())
+    return jsonify({"ok": True, "restored": restored, "kept": kept})
 
 
 # النماذج الرسمية (pdf_forms.py): الإقامة ورخصة القيادة — PDF متعبّي والخانات قابلة للتعديل قبل الطباعة.
