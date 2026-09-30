@@ -410,7 +410,8 @@ table.kids input:not([type=checkbox]), table.kids select { width: 100%; min-widt
 
 /* المؤشرات */
 .db-kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
-@media (max-width: 760px) { .db-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.db-kpis > .db-tile:last-child:nth-child(3n+1) { grid-column: 1 / -1; }   /* كارت لوحده في آخر سطر ← بعرض السطر */
+@media (max-width: 760px) { .db-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .db-kpis > .db-tile:last-child:nth-child(3n+1) { grid-column: auto; } .db-kpis > .db-tile:last-child:nth-child(2n+1) { grid-column: 1 / -1; } }
 .db-tile { cursor: pointer; display: flex; flex-direction: column; gap: 2px; padding: 14px 16px; transition: border-color .15s, transform .15s; }
 .db-tile:hover, .db-tile:focus-visible { border-color: var(--primary); transform: translateY(-1px); outline: none; }
 .db-tile-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -493,3 +494,6 @@ table.kids input:not([type=checkbox]), table.kids select { width: 100%; min-widt
 
 /* تقرير جودة البيانات */
 .dq{border:1px solid var(--border);border-radius:8px;margin:6px 0;padding:6px 10px}.dq summary{cursor:pointer;padding:2px 0}.dq table{margin-top:6px}
+/* عهدة التجديد: الانتهاء الجديد (مطلوب قبل التقفيل) */
+.cu-exp input[type=date] { width: 140px; }
+.cu-exp.need input[type=date] { border-color: var(--orange); background: var(--orange-soft); }

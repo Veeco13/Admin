@@ -55,6 +55,9 @@ FLOWS = {
     "kuwaiti": ("kw_forms", "kw_pifss", "kw_work_permit", "kw_labor_support", "all_completed"),
 }
 STATUSES = {"requested": "مطلوبة", "disbursed": "تم الصرف", "closed": "مقفولة", "cancelled": "ملغاة"}
+# بند التجديد بيحدّث تاريخ في بيانات الموظف (fee_items.updates_field) ← الانتهاء الجديد بيتسجّل عليه قبل التقفيل
+EXPIRY_FIELDS = {"residencyExp": "الإقامة", "workPermitExp": "إذن العمل", "healthCardExp": "البطاقة الصحية"}
+RENEWAL_TYPES = ("renewal", "kw_permit_renewal")      # لما كل بنود الموظف تخلص ← مرحلة المعاملة «تم التجديد»
 OPEN = ("requested", "disbursed")
 SETTINGS_KEY = "custody_settings"
 DUP_DAYS = 90                     # نفس الشخص ونفس النوع اتقفل في آخر 90 يوم ← تأكيد قبل الطلب، والتقفيل بيرفضه
@@ -140,6 +143,75 @@ def sync_person(s, kind, pid, stage):
     return n
 
 
+def record_expiry(s, c, ln, new_date, user):
+    """الانتهاء الجديد لبند تجديد ← على البند، وفي بيانات الموظف لو التاريخ اللي عنده أقدم (سجل الموظف وتاريخ الشركة
+    للإقامة). لازم يبقى بعد التاريخ وقت الطلب. بيرجّع رسالة خطأ أو None."""
+    if not ln.updatesField or ln.personKind != "employee":
+        return "البند ده مابيجددش تاريخ"
+    if ln.closedDate:
+        return "البند اتقفل — ألغي التقفيل الأول لو محتاج تعدّله"
+    label = EXPIRY_FIELDS.get(ln.updatesField, ln.updatesField)
+    if not new_date:
+        ln.newExpiry = None
+        return None
+    if ln.oldExpiry and new_date <= ln.oldExpiry:
+        return f"{ln.personName} — {label}: الانتهاء الجديد لازم يبقى بعد القديم ({ln.oldExpiry.strftime('%d/%m/%Y')})"
+    ln.newExpiry = new_date
+    e = s.get(M.Employee, ln.personId)
+    cur = getattr(e, ln.updatesField) if e is not None else None
+    if e is not None and (cur is None or cur < new_date):
+        setattr(e, ln.updatesField, new_date)
+        e.lastUpdated, e.lastUpdatedBy = db.now(), user
+        db.push_timeline(s, e.id, "renew", f"تجديد {label}: {db.ser(cur) or '—'} ← {new_date.isoformat()} (عهدة {custody_no(c)})", user)
+        if ln.updatesField == "residencyExp":
+            aff = db.get_affiliations(s, e.id)
+            if aff and aff[0].get("companyId"):
+                db.log_company_history(s, aff[0]["companyId"], "residency_renewed",
+                                       f"تجديد إقامة {e.name} حتى {new_date.isoformat()} (عهدة {custody_no(c)})", user)
+    return None
+
+
+def mark_renewed(s, c, person_id, user):
+    """عهدة تجديد: كل بنود الموظف «تم» وتواريخها الجديدة متسجّلة ← مرحلة المعاملة «تم التجديد»."""
+    if c.txType not in RENEWAL_TYPES:
+        return False
+    ls = list(s.scalars(select(M.CustodyLine).where(M.CustodyLine.custodyId == c.id, M.CustodyLine.personKind == "employee",
+                                                     M.CustodyLine.personId == person_id)))
+    if not ls or not all(x.done for x in ls) or any(x.updatesField and not x.newExpiry for x in ls):
+        return False
+    e = s.get(M.Employee, person_id)
+    if e is None or e.govStage == "renewed":
+        return False
+    e.govStage, e.govStageNote = "renewed", None
+    e.lastUpdated, e.lastUpdatedBy = db.now(), user
+    db.push_timeline(s, e.id, "gov_stage", f"مرحلة المعاملة: تم التجديد (عهدة {custody_no(c)})", user)
+    return True
+
+
+def fill_open_expiry(s, employee_id, field, new_date):
+    """الموظف اتجدد من برّه العهدة («تجديد سريع») ← بنود التجديد المفتوحة لنفس التاريخ بتاخد الانتهاء الجديد."""
+    q = select(M.CustodyLine).join(M.Custody, M.Custody.id == M.CustodyLine.custodyId).where(
+        M.Custody.status.in_(OPEN), M.CustodyLine.personKind == "employee", M.CustodyLine.personId == employee_id,
+        M.CustodyLine.updatesField == field, M.CustodyLine.newExpiry.is_(None), M.CustodyLine.closedDate.is_(None))
+    n = 0
+    for ln in s.scalars(q):
+        if not ln.oldExpiry or new_date > ln.oldExpiry:
+            ln.newExpiry = new_date
+            n += 1
+    return n
+
+
+def renewing(s):
+    """للتنبيهات: الموظفين اللي عليهم بند تجديد مفتوح لسه تاريخه الجديد ماتسجلش ← {الرقم المدني: {التاريخ: رقم العهدة}}."""
+    out = {}
+    q = select(M.CustodyLine, M.Custody).join(M.Custody, M.Custody.id == M.CustodyLine.custodyId).where(
+        M.Custody.status.in_(OPEN), M.CustodyLine.personKind == "employee", M.CustodyLine.updatesField.isnot(None),
+        M.CustodyLine.newExpiry.is_(None), M.CustodyLine.closedDate.is_(None))
+    for ln, c in s.execute(q):
+        out.setdefault(ln.personId, {})[ln.updatesField] = custody_no(c)
+    return out
+
+
 def candidate_to_employee(s, cand_id, civil):
     """المترشّح اتحوّل لموظف (خلّص كل المراحل): بنوده المفتوحة «تم»، وبنود كل عهده بقت على الموظف."""
     sync_person(s, "candidate", cand_id, "all_completed")
@@ -170,6 +242,7 @@ def build_lines(s, tx, persons, ctx):
                 return None, f"الموظف {e.name} برّه نطاقك"
             name, civil, cc, kw = e.name, e.id, e.costCenter, pdf_forms.is_kuwaiti(e.nationality)
             co = next((a["companyId"] for a in affs if a.get("companyId")), None)
+            person = e
         else:
             c = s.get(M.Candidate, pid)
             if not c:
@@ -178,6 +251,7 @@ def build_lines(s, tx, persons, ctx):
                 return None, f"المترشّح {c.name} برّه نطاقك"
             name, civil, cc, co = c.name, c.civilId, c.costCenter, c.targetCompanyId
             kw = c.source == "kuwaiti" or pdf_forms.is_kuwaiti(c.nationality)
+            person = None
         if kuwaiti is True and not kw:
             return None, f"{name}: النوع ده للعمالة الوطنية بس (الكويتيين ومعاملة كويتية)"
         if kuwaiti is False and kw:
@@ -188,10 +262,12 @@ def build_lines(s, tx, persons, ctx):
             f = fees.get(fid)
             if f is None:
                 continue
+            upd = f.updatesField if person is not None and f.updatesField in EXPIRY_FIELDS else None
             lines.append(M.CustodyLine(personKind=kind, personId=pid, personName=name, civilId=civil, costCenter=cc,
                                        companyId=co, feeItemId=f.id, itemName=f.name, itemNameEn=f.nameEn,
                                        authority=f.authority, stage=f.stage,
-                                       position=f.position, planned=num(value), done=False))
+                                       position=f.position, planned=num(value), done=False,
+                                       updatesField=upd, oldExpiry=getattr(person, upd) if upd else None))
     if not lines:
         return None, "اختار موظف واحد على الأقل وبند واحد على الأقل"
     return lines, None
@@ -419,6 +495,10 @@ def close_lines(s, c, line_ids, fee, when, user):
     lines = [ready[str(i)] for i in dict.fromkeys(line_ids or []) if str(i) in ready]
     if not lines:
         return None, None, "مفيش إجراءات جاهزة للتقفيل (الإجراء لازم يكون «تم» ولسه ماتقفلش)"
+    missing = [f"{ln.personName} ({EXPIRY_FIELDS.get(ln.updatesField, ln.updatesField)})" for ln in lines
+               if ln.updatesField and ln.personKind == "employee" and not ln.newExpiry]
+    if missing:                      # تقفيل التجديد بيحدّث بيانات الموظف ← التاريخ الجديد مطلوب
+        return None, None, "سجّل تاريخ الانتهاء الجديد الأول: " + "، ".join(missing)
     if s.scalar(select(func.count()).select_from(M.Invoice).where(M.Invoice.custodyId == c.id, M.Invoice.closingDate == when)):
         return None, None, "فيه تقفيل بنفس التاريخ للعهدة دي — اختار تاريخ تاني أو ألغي التقفيل القديم"
     last = s.scalar(select(func.max(M.CustodyLine.closedDate)).where(M.CustodyLine.custodyId == c.id))

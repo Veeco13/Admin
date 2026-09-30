@@ -21,6 +21,12 @@ const CUSTODY_TYPES = {
   passport_transfer: { label: 'نقل بيانات الجواز',             kind: 'employee',  flow: 'gov',      kuwaiti: false, doc: 'passportExp' },
 };
 const INVOICE_STATUS = { pending: ['بانتظار الحسابات', 'orange'], approved: ['اعتمدتها الحسابات', 'green'] };
+// بند التجديد بيحدّث تاريخ في بيانات الموظف (نفس custody.EXPIRY_FIELDS) ← الانتهاء الجديد بيتسجّل عليه قبل التقفيل
+const CUSTODY_EXPIRY_FIELDS = { residencyExp: 'الإقامة', workPermitExp: 'إذن العمل', healthCardExp: 'البطاقة الصحية' };
+function isoLocal(dt) { return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`; }
+function addYearsISO(iso, n) { const [y, m, d] = String(iso).split('-').map(Number); return isoLocal(new Date(y + n, m - 1, d)); }
+/** الأساس لـ «+1 سنة»: التاريخ وقت الطلب، وإلا اللي في بيانات الموظف دلوقتي */
+function custodyExpiryBase(l) { return l.oldExpiry || ((IDX.employee[l.personId] || {})[l.updatesField]) || ''; }
 function invoiceStatusChip(inv) {
   const [l, col] = INVOICE_STATUS[inv.status] || [inv.status, 'grey'];
   return `<span class="chip" style="background:var(--${col}-soft);color:var(--${col})">${esc(t(l))}${inv.status === 'approved' && inv.approvedDate ? ' · ' + fmtDate(inv.approvedDate) : ''}</span>`;
@@ -115,6 +121,7 @@ function renderCustody() {
     <div class="actions">${custodySeeAll() ? `<select id="cu-owner" title="${esc(t('عهد مين'))}">${opt('me', '👤 ' + t('عهدي أنا'), U.owner === 'me')}${opt('all', '👥 ' + t('كل المستخدمين'), U.owner === 'all')}
         ${owners.filter(u => String(u.id) !== String(STATE.me.id)).map(u => opt(String(u.id), `${u.name}${u.code ? ' · ' + u.code : ''}`, String(U.owner) === String(u.id))).join('')}</select>` : ''}
       <button class="btn primary write-only" data-p="custody.edit" id="cu-add">➕ ${t('طلب عهدة')}</button>
+      <button class="btn" id="cu-plan">📅 ${t('خطة التجديدات')}</button>
       <button class="btn" data-p="custody.fees" id="cu-fees">⚙️ ${t('جدول الرسوم')}</button>
       <button class="btn" data-p="custody.fees" id="cu-set">🧾 ${t('إعدادات الفواتير')}</button></div></div>
     <div class="cu-kpis">${kpi.map(([v, l, c]) => `<div class="card cu-kpi"${c ? ` style="border-top:3px solid var(--${c})"` : ''}><b class="num">${esc(v)}</b><span>${esc(t(l))}</span></div>`).join('')}</div>
@@ -123,6 +130,7 @@ function renderCustody() {
   const upd = p => { Object.assign(UI.custody, p); saveUiStateToLocalStorage(); render(); };
   $$('[data-cutab]').forEach(b => b.onclick = () => upd({ tab: b.dataset.cutab }));
   const add = $('#cu-add'); if (add) add.onclick = () => openCustodyRequestModal();
+  $('#cu-plan').onclick = () => openRenewalPlanModal();
   const fees = $('#cu-fees'); if (fees) fees.onclick = () => openFeeItemsModal();
   const set = $('#cu-set'); if (set) set.onclick = () => openCustodySettingsModal();
   const own = $('#cu-owner'); if (own) own.onchange = e => upd({ owner: e.target.value, custodian: '' });
@@ -260,11 +268,12 @@ function openCustodySettingsModal() {
 }
 
 /* ---------- طلب عهدة (جديد أو تعديل قبل الصرف) ---------- */
-function openCustodyRequestModal(id = null) {
+function openCustodyRequestModal(id = null, preset = null) {
   const old = id ? (STATE.custodies || []).find(c => c.id === id) : null;
-  const S = { tx: old ? old.txType : 'renewal', persons: new Map(), quick: '' };    // id ← {items: {رقم البند: المبلغ}}
+  const S = { tx: old ? old.txType : (preset && preset.tx) || 'renewal', persons: new Map(), quick: '' };    // id ← {items: {رقم البند: المبلغ}}
   const snap = {};                                                                  // بيانات الشخص من العهدة القديمة
   if (old) custodyPersons(old).forEach(p => { snap[p.id] = p; S.persons.set(p.id, { items: Object.fromEntries(p.lines.map(l => [l.feeItemId, l.planned])) }); });
+  if (!old && preset) (preset.persons || []).forEach(p => S.persons.set(p.id, { items: { ...p.items } }));   // من خطة التجديدات
   const fees = () => (STATE.feeItems || []).filter(f => f.txType === S.tx && f.active);
   const defaults = () => Object.fromEntries(fees().map(f => [f.id, f.amount ?? null]));
   const m = openModal({
@@ -395,6 +404,116 @@ function openCustodyRequestModal(id = null) {
   });
 }
 
+/* ---------- 📅 خطة التجديدات الشهرية ← طلب عهدة ----------
+   مين محتاج تجديد في الفترة: غير الكويتيين ← الإقامة («تجديد إقامة» — معاها إذن العمل)، والعمالة الوطنية ← إذن العمل
+   («تجديد إذن عمل — عمالة وطنية»). الخليجي مالوش إقامة. بنود كل واحد من جدول الرسوم (بمبالغها الافتراضية)، وبند
+   البطاقة الصحية بس لو بطاقته بتنتهي لحد آخر الفترة. الميزانية = الرسوم + الدعم الإداري (إلا مراكز الشركة نفسها). */
+const RENEWAL_PERIODS = { this: 'الشهر ده', next: 'الشهر الجاي', after: 'الشهر اللي بعده', overdue: 'المتأخرين (انتهى ومش في عهدة)' };
+function renewalPeriodRange(period) {
+  if (period === 'overdue') return ['0000-01-01', addDays(todayISO(), -1)];
+  const off = { this: 0, next: 1, after: 2 }[period] ?? 1, d = new Date();
+  return [isoLocal(new Date(d.getFullYear(), d.getMonth() + off, 1)), isoLocal(new Date(d.getFullYear(), d.getMonth() + off + 1, 0))];
+}
+function renewalPeriodText(period) {
+  const [from, to] = renewalPeriodRange(period);
+  return period === 'overdue' ? t('انتهى قبل النهارده ومش في عهدة مفتوحة') : `${t('من')} ${fmtDate(from)} ${t('لحد')} ${fmtDate(to)}`;
+}
+function renewalPlan(period) {
+  const [from, to] = renewalPeriodRange(period), st = custodySettings(), fees = STATE.feeItems || [], busy = STATE.custodyBusy || [];
+  const rows = [];
+  for (const e of scopedEmployees()) {
+    if (empEnded(e)) continue;
+    const kw = isKuwaitiStaff(e);
+    if (!kw && !empNeedsResidency(e)) continue;
+    const tx = kw ? 'kw_permit_renewal' : 'renewal', field = kw ? 'workPermitExp' : 'residencyExp', exp = e[field];
+    if (!exp || exp < from || exp > to) continue;
+    const find = state => busy.find(b => b.txType === tx && b.kind === 'employee' && b.personId === e.id && b.state === state);
+    const busyOpen = find('open');
+    if (period === 'overdue' && busyOpen) continue;
+    const items = {};
+    let health = false;
+    fees.filter(f => f.txType === tx && f.active).forEach(f => {
+      if (f.updatesField === 'healthCardExp') {
+        if (!(e.healthCardExp && e.healthCardExp <= to)) return;
+        health = true;
+      }
+      items[f.id] = f.amount ?? null;
+    });
+    rows.push({ e, tx, field, exp, items, health, busyOpen, busyRecent: find('recent'),
+      fees: sum(Object.values(items).map(v => Number(v) || 0)), support: custodyNoSupport(e.costCenter) ? 0 : Number(st.supportFee) || 0 });
+  }
+  return rows.sort((a, b) => a.exp.localeCompare(b.exp) || empName(a.e).localeCompare(empName(b.e), 'ar'));
+}
+function openRenewalPlanModal(period = 'next') {
+  let P = period;
+  const off = new Set();                         // اللي اتشالت علامته (الباقي متعلّم)
+  const m = openModal({ title: '📅 ' + t('خطة التجديدات'), size: 'wide', body: '<div id="rp"></div>',
+    foot: '<div id="rp-f" class="row" style="width:100%;gap:8px;flex-wrap:wrap"></div>' });
+  const E = m.el;
+  const stageLabel = s => t((GOV_STAGES.find(g => g.id === s) || {}).label || '');
+  const draw = () => {
+    const rows = renewalPlan(P), ok = r => !r.busyOpen && !off.has(r.e.id), picked = rows.filter(ok);
+    const groups = new Map();
+    rows.forEach(r => { const co = empCompanyId(r.e) || '', cc = r.e.costCenter || '', k = `${co}|${cc}`; if (!groups.has(k)) groups.set(k, { k, co, cc, rows: [] }); groups.get(k).rows.push(r); });
+    const G = [...groups.values()].sort((a, b) => (companyName(a.co) || '').localeCompare(companyName(b.co) || '', 'ar') || a.cc.localeCompare(b.cc, 'ar'));
+    const money = rs => sum(rs.map(r => r.fees)), sup = rs => sum(rs.map(r => r.support));
+    const byType = tx => picked.filter(r => r.tx === tx);
+    const tile = (v, l, col) => `<div class="card cu-kpi"${col ? ` style="border-top:3px solid var(--${col})"` : ''}><b class="num">${esc(String(v))}</b><span>${esc(t(l))}</span></div>`;
+    $('#rp', E).innerHTML = `<div class="row" style="gap:10px;flex-wrap:wrap;margin-bottom:10px">
+        <label class="row" style="gap:6px">${t('الفترة')} <select id="rp-p">${Object.entries(RENEWAL_PERIODS).map(([k, l]) => opt(k, t(l), k === P)).join('')}</select></label>
+        <span class="small muted">${esc(renewalPeriodText(P))}</span></div>
+      <div class="cu-kpis">${tile(rows.length, 'محتاج تجديد', 'orange')}${tile(picked.length, 'متحدد للطلب', 'blue')}${tile(fmtMoney(money(picked)), 'الرسوم المتوقعة')}
+        ${tile(fmtMoney(sup(picked)), 'الدعم الإداري')}${tile(fmtMoney(money(picked) + sup(picked)), 'إجمالي الفواتير المتوقعة', 'green')}</div>
+      <div class="small muted" style="margin:8px 0">${t('الرسوم من جدول الرسوم (المبلغ المفتوح بيتحسب صفر لحد ما يتكتب)، وبند البطاقة الصحية بس للي بطاقته بتنتهي في الفترة. اللي في عهدة مفتوحة مايتختارش.')}</div>
+      ${rows.length ? `<div class="table-wrap"><table class="data"><thead><tr><th style="width:30px"><input type="checkbox" id="rp-all" ${picked.length && picked.length === rows.filter(r => !r.busyOpen).length ? 'checked' : ''}></th>
+        <th>${t('الموظف')}</th><th>${t('المعاملة')}</th><th>${t('تاريخ الانتهاء')}</th><th>${t('البنود')}</th><th>${t('الرسوم')}</th><th>${t('الحالة')}</th></tr></thead><tbody>
+        ${G.map(g => { const gp = g.rows.filter(ok); return `<tr class="cu-person"><td><input type="checkbox" data-rpg="${esc(g.k)}" ${gp.length && gp.length === g.rows.filter(r => !r.busyOpen).length ? 'checked' : ''}></td>
+          <td colspan="6">🏢 <b>${esc(companyName(g.co) || t('بدون شركة'))}</b> · ${esc(ccLabel(g.cc) || t('بدون مركز تكلفة'))} <span class="small muted">(${g.rows.length} — ${fmtMoney(money(gp) + sup(gp))})</span></td></tr>
+          ${g.rows.map(r => `<tr class="${r.busyOpen ? 'muted' : ''}"><td><input type="checkbox" data-rp="${esc(r.e.id)}" ${ok(r) ? 'checked' : ''} ${r.busyOpen ? 'disabled' : ''}></td>
+            <td><b>${esc(empName(r.e))}</b><div class="small muted num">${esc(r.e.id)}${r.e.fileNo ? ' · ' + esc(r.e.fileNo) : ''}</div></td>
+            <td class="small">${esc(custodyTypeLabel(r.tx))}</td>
+            <td>${datePill(r.exp)}<div class="small muted">${esc(daysText(daysUntil(r.exp)))}</div></td>
+            <td class="small">${Object.keys(r.items).length} ${t('بند')}${r.health ? ` · 🩺 ${t('البطاقة الصحية')}` : ''}</td>
+            <td class="num">${fmtMoney(r.fees)}${r.support ? `<div class="small muted">+ ${fmtMoney(r.support)} ${t('دعم')}</div>` : ''}</td>
+            <td class="small">${r.busyOpen ? `<span class="chip" style="background:var(--red-soft);color:var(--red)">🔒 ${t('في عهدة')} ${esc(r.busyOpen.number)}</span>` : ''}
+              ${r.busyRecent ? `<span class="chip" style="background:var(--orange-soft);color:var(--orange)">↩️ ${t('اتقفل في')} ${esc(r.busyRecent.number)} · ${fmtDate(r.busyRecent.closedDate)}</span>` : ''}
+              ${r.e.govStage ? `<div>⏳ ${esc(stageLabel(r.e.govStage))}</div>` : ''}</td></tr>`).join('')}`; }).join('')}</tbody></table></div>`
+        : `<div class="empty">${t('مفيش تجديدات في الفترة دي')} 🎉</div>`}`;
+    $('#rp-f', E).innerHTML = `<button class="btn" data-a="print" ${picked.length ? '' : 'disabled'}>🖨️ ${t('طباعة الخطة')}</button>
+      ${['renewal', 'kw_permit_renewal'].map(tx => byType(tx).length ? `<button class="btn primary write-only" data-p="custody.edit" data-req="${tx}">💰 ${t('طلب عهدة')} — ${esc(custodyTypeLabel(tx))} (${byType(tx).length})</button>` : '').join('')}
+      <span class="spacer"></span><button class="btn" data-close>${t('إغلاق')}</button>`;
+    translateDomText(E);
+    $('#rp-p', E).onchange = ev => { P = ev.target.value; off.clear(); draw(); };
+    $$('[data-rp]', E).forEach(cb => cb.onchange = () => { if (cb.checked) off.delete(cb.dataset.rp); else off.add(cb.dataset.rp); draw(); });
+    $$('[data-rpg]', E).forEach(cb => cb.onchange = () => { groups.get(cb.dataset.rpg).rows.forEach(r => { if (cb.checked) off.delete(r.e.id); else off.add(r.e.id); }); draw(); });
+    const all = $('#rp-all', E); if (all) all.onchange = () => { rows.forEach(r => { if (all.checked) off.delete(r.e.id); else off.add(r.e.id); }); draw(); };
+    $('[data-close]', $('#rp-f', E)).onclick = () => m.close();
+    $$('[data-req]', E).forEach(b => b.onclick = () => {
+      const tx = b.dataset.req;
+      m.close();
+      openCustodyRequestModal(null, { tx, persons: byType(tx).map(r => ({ id: r.e.id, items: r.items })) });
+    });
+    const pr = $('[data-a="print"]', E); if (pr) pr.onclick = () => printRenewalPlan(P, picked, G.map(g => ({ ...g, rows: g.rows.filter(ok) })).filter(g => g.rows.length));
+  };
+  draw();
+}
+function printRenewalPlan(period, picked, groups) {
+  const money = rs => sum(rs.map(r => r.fees)), sup = rs => sum(rs.map(r => r.support));
+  let n = 0;
+  const body = `<table class="rpt"><thead><tr><th>#</th><th class="txt">${t('الموظف')}</th><th>${t('الرقم المدني')}</th><th class="txt">${t('المعاملة')}</th><th>${t('تاريخ الانتهاء')}</th>
+      <th>${t('المتبقي')}</th><th>${t('البنود')}</th><th>${t('الرسوم')}</th><th>${t('الدعم الإداري')}</th><th>${t('الإجمالي')}</th></tr></thead><tbody>
+    ${groups.map(g => `<tr class="grp"><td colspan="10">${esc(companyName(g.co) || t('بدون شركة'))} · ${esc(ccLabel(g.cc) || t('بدون مركز تكلفة'))}<small>${g.rows.length} ${t('موظف')} — ${fmtMoney(money(g.rows) + sup(g.rows))}</small></td></tr>
+      ${g.rows.map((r, i) => `<tr class="${i % 2 ? 'z' : ''}"><td class="idx">${++n}</td><td class="txt">${esc(empName(r.e))}</td><td class="num">${esc(r.e.id)}</td><td class="txt">${esc(custodyTypeLabel(r.tx))}</td>
+        <td class="num"><span class="pill ${(TIERS[tierOf(r.exp)] || {}).cls || ''}">${fmtDate(r.exp)}</span></td><td class="num">${esc(daysText(daysUntil(r.exp)))}</td>
+        <td class="num">${Object.keys(r.items).length}${r.health ? ' 🩺' : ''}</td><td class="num">${rptNum(r.fees)}</td><td class="num">${rptNum(r.support)}</td><td class="num"><b>${rptNum(r.fees + r.support)}</b></td></tr>`).join('')}`).join('')}</tbody>
+    <tfoot><tr><td colspan="7">${t('الإجمالي')} (${picked.length} ${t('موظف')})</td><td class="num">${rptNum(money(picked))}</td><td class="num">${rptNum(sup(picked))}</td><td class="num">${rptNum(money(picked) + sup(picked))}</td></tr></tfoot></table>
+    <div class="small" style="margin-top:4px;color:#66736f">${t('الرسوم من جدول الرسوم — المبلغ المفتوح (زي التصديقات) مش محسوب. 🩺 = معاه تجديد البطاقة الصحية.')}</div>`;
+  openReportWindow({ title: t('خطة التجديدات'), subtitle: `${t(RENEWAL_PERIODS[period])} — ${renewalPeriodText(period)}`, landscape: true,
+    summary: [[picked.length, t('موظف')], [fmtMoney(money(picked)), t('الرسوم المتوقعة')], [fmtMoney(sup(picked)), t('الدعم الإداري')], [fmtMoney(money(picked) + sup(picked)), t('إجمالي الفواتير المتوقعة')]],
+    body, sign: true });
+  printLog(`${t('خطة التجديدات')} — ${t(RENEWAL_PERIODS[period])}`, 'custody');
+}
+
 /* ---------- تفاصيل العهدة: الصرف والبنود ---------- */
 function openCustodyDetails(id) {
   const m = openModal({ title: '💰', size: 'wide', body: '<div id="cu-d"></div>', foot: '<div id="cu-df" class="row" style="width:100%;gap:8px;flex-wrap:wrap"></div>' });
@@ -403,6 +522,17 @@ function openCustodyDetails(id) {
     const c = (STATE.custodies || []).find(x => x.id === id);
     if (!c) { m.close(); return; }
     const tt = custodyTotals(c), open = ['requested', 'disbursed'].includes(c.status), edit = open && can('custody.edit');
+    // بند التجديد: الانتهاء الجديد (بيحدّث بيانات الموظف) — مطلوب قبل التقفيل
+    const hasExp = (c.lines || []).some(l => l.updatesField);
+    const expCell = (l, ed) => {
+      if (!l.updatesField) return '<td></td>';
+      const lbl = esc(t(CUSTODY_EXPIRY_FIELDS[l.updatesField] || '')), need = l.done && !l.newExpiry, base = custodyExpiryBase(l);
+      const info = `${need ? `<span style="color:var(--orange)">⚠️ ${t('سجّل التاريخ الجديد')}</span> · ` : ''}${lbl}${l.oldExpiry ? ` · ${t('كان')} ${fmtDate(l.oldExpiry)}` : ''}`;
+      if (!ed) return `<td class="small">${l.newExpiry ? `<b class="num">${fmtDate(l.newExpiry)}</b>` : '<span class="muted">—</span>'}<div class="muted">${info}</div></td>`;
+      return `<td class="cu-exp${need ? ' need' : ''}"><div class="row" style="gap:4px;flex-wrap:nowrap"><input type="date" data-newexp="${l.id}" value="${esc(l.newExpiry || '')}">
+          ${base ? `<button type="button" class="btn sm ghost" data-plus="${l.id}|1" title="${esc(t('سنة من التاريخ القديم'))}">+1</button><button type="button" class="btn sm ghost" data-plus="${l.id}|2" title="${esc(t('سنتين من التاريخ القديم'))}">+2</button>` : ''}</div>
+        <div class="small muted">${info}</div></td>`;
+    };
     $('.modal-head h2', E).innerHTML = `💰 ${t('عهدة')} ${esc(custodyNo(c))} — ${esc(custodyTypeLabel(c.txType))}`;
     const kv = (l, v) => `<div><span>${esc(t(l))}</span>${v || '<span class="muted">—</span>'}</div>`;
     const chip = (l, v, col) => `<span class="chip" style="font-size:13px;padding:4px 10px${col ? `;background:var(--${col}-soft);color:var(--${col})` : ''}">${esc(t(l))}: <b class="num">${v}</b></span>`;
@@ -413,16 +543,16 @@ function openCustodyDetails(id) {
         ${chip('اتنفّذ', fmtMoney(tt.spent))}${tt.received ? chip('الرصيد مع المستلم', fmtMoney(tt.remaining), tt.remaining < 0 ? 'red' : 'purple') : ''}${chip('جاهز للتقفيل', `${tt.ready} ${t('إجراء')}`, 'green')}${tt.itemsClosed ? chip('اتقفل', `${tt.itemsClosed}/${tt.items} ${t('إجراء')}`) : ''}</div>
       ${c.status === 'requested' ? `<div class="notice small">${t('اطبع الطلب واعتمده من المسؤول والإدارة المالية، وبعد الصرف اضغط «💵 تم الصرف» وسجّل المبلغ.')}</div>` : ''}
       <div class="small muted" style="margin:6px 0">${t('البند بيتعلّم «تم» لوحده لما مرحلة الشخص تعدّيه، وتقدر تعلّمه وتعدّل المبلغ الفعلي ورقم الإيصال بإيدك.')}</div>
-      <div class="table-wrap"><table class="data cu-lines"><thead><tr><th style="width:34px">✓</th><th>${t('البند')}</th><th>${t('الجهة')}</th><th>${t('المحدد')}</th><th>${t('الفعلي')}</th><th>${t('رقم الإيصال')}</th><th>${t('تاريخ التنفيذ')}</th></tr></thead><tbody>
+      <div class="table-wrap"><table class="data cu-lines"><thead><tr><th style="width:34px">✓</th><th>${t('البند')}</th><th>${t('الجهة')}</th><th>${t('المحدد')}</th><th>${t('الفعلي')}</th><th>${t('رقم الإيصال')}</th><th>${t('تاريخ التنفيذ')}</th>${hasExp ? `<th>${t('الانتهاء الجديد')}</th>` : ''}</tr></thead><tbody>
       ${custodyPersons(c).map(p => { const done = p.lines.every(l => l.done), allClosed = p.lines.every(l => l.closedDate), someClosed = p.lines.some(l => l.closedDate);
-          const closedOn = allClosed && uniq(p.lines.map(l => l.closedDate)).sort().pop(); return `<tr class="cu-person ${allClosed ? 'cu-closed' : ''}"><td colspan="7">${allClosed ? '🔒' : done ? '✅' : '⏳'} ${esc(p.name)}
+          const closedOn = allClosed && uniq(p.lines.map(l => l.closedDate)).sort().pop(); return `<tr class="cu-person ${allClosed ? 'cu-closed' : ''}"><td colspan="${hasExp ? 8 : 7}">${allClosed ? '🔒' : done ? '✅' : '⏳'} ${esc(p.name)}
           ${allClosed ? `<span class="chip" style="background:var(--green-soft);color:var(--green)">${t('اتقفل')} ${fmtDate(closedOn)}</span>` : someClosed ? `<span class="chip">🔒 ${t('اتقفل جزء')} (${p.lines.filter(l => l.closedDate).length}/${p.lines.length})</span>` : ''}
           <span class="small muted">${esc(p.civilId || '')}${p.costCenter ? ' · ' + esc(p.costCenter) : ''}${p.companyId ? ' · ' + esc(companyName(p.companyId)) : ''}</span>
           <span class="small" style="float:inline-end">${p.lines.filter(l => l.done).length}/${p.lines.length} · ${fmtMoney(sum(p.lines.map(l => (l.done ? custodyLineAmount(l) : l.planned || 0))))}</span></td></tr>
         ${p.lines.map(l => { const ed = edit && !l.closedDate; return `<tr><td><input type="checkbox" data-done="${l.id}" ${l.done ? 'checked' : ''} ${ed ? '' : 'disabled'}></td><td>${esc(l.itemName)}${l.closedDate ? ` <span class="small" style="color:var(--green)" title="${esc(t('اتقفل'))}">🔒 ${fmtDate(l.closedDate)}</span>` : ''}</td><td class="small muted">${esc(l.authority || '')}</td>
           <td class="num">${l.planned == null ? '<span class="muted">—</span>' : rptNum(l.planned)}</td>
           <td>${ed ? `<input type="number" step="0.001" min="0" data-actual="${l.id}" value="${l.actual ?? ''}" placeholder="${l.planned ?? ''}">` : (l.actual == null ? '—' : rptNum(l.actual))}</td>
-          <td>${ed ? `<input class="cu-receipt" data-receipt="${l.id}" value="${esc(l.receiptNo || '')}">` : esc(l.receiptNo || '')}</td><td class="small num">${fmtDate(l.doneDate)}</td></tr>`; }).join('')}`; }).join('')}
+          <td>${ed ? `<input class="cu-receipt" data-receipt="${l.id}" value="${esc(l.receiptNo || '')}">` : esc(l.receiptNo || '')}</td><td class="small num">${fmtDate(l.doneDate)}</td>${hasExp ? expCell(l, ed) : ''}</tr>`; }).join('')}`; }).join('')}
       </tbody></table></div>
       ${custodyClosingsHtml(c)}`;
     const f = $('#cu-df', E);
@@ -457,10 +587,22 @@ function openCustodyDetails(id) {
     translateDomText(E);
   };
   // تعديل البنود: كل تغيير بيتحفظ على طول، وبعدين الأرقام بتتحدّث
-  const saveLine = async (lid, body) => { try { await persist('PUT', `/api/custodies/${id}/lines/${lid}`, body); } catch (e) { /* ظاهر */ } draw(); };
+  const saveLine = async (lid, body) => { try { await persist('PUT', `/api/custodies/${id}/lines/${lid}`, body); } catch (e) { if (e.data && e.data.block) openBlockAlert(e.message); } draw(); };
+  E.addEventListener('click', ev => {                                     // «+1» / «+2» سنة من التاريخ القديم
+    const b = ev.target.closest('[data-plus]');
+    if (!b) return;
+    const [lid, n] = b.dataset.plus.split('|');
+    const c = (STATE.custodies || []).find(x => x.id === id), l = c && (c.lines || []).find(x => String(x.id) === lid);
+    const base = l && custodyExpiryBase(l);
+    if (base) saveLine(lid, { newExpiry: addYearsISO(base, Number(n)) });
+  });
   E.addEventListener('change', ev => {
     const el = ev.target;
-    if (el.dataset.done) saveLine(el.dataset.done, { done: el.checked });
+    if (el.dataset.newexp) saveLine(el.dataset.newexp, { newExpiry: el.value || null });
+    else if (el.dataset.done) saveLine(el.dataset.done, { done: el.checked }).then(() => {       // بند تجديد اتعلّم «تم» ← خانة التاريخ الجديد
+      const i = $(`[data-newexp="${el.dataset.done}"]`, E);
+      if (el.checked && i && !i.value) i.focus();
+    });
     else if (el.dataset.actual) saveLine(el.dataset.actual, { actual: el.value === '' ? null : Number(el.value) });
     else if (el.dataset.receipt) saveLine(el.dataset.receipt, { receiptNo: el.value });
   });
@@ -522,17 +664,18 @@ function openFeeItemsModal(tx = 'renewal') {
   const collect = () => $$('tr[data-i]', E).forEach(tr => {
     const r = rows[tr.dataset.i], g = k => $(`[data-f="${k}"]`, tr);
     Object.assign(r, { name: g('name').value, nameEn: g('nameEn').value, authority: g('authority').value, amount: g('amount').value === '' ? null : Number(g('amount').value),
-      options: g('options').value, stage: g('stage').value, active: g('active').checked });
+      options: g('options').value, stage: g('stage').value, active: g('active').checked, updatesField: g('updatesField') ? g('updatesField').value : null });
   });
   const draw = () => {
-    const stages = custodyFlowStages(CUSTODY_TYPES[cur].flow);
+    const stages = custodyFlowStages(CUSTODY_TYPES[cur].flow), emp = CUSTODY_TYPES[cur].kind === 'employee';
     $('#fee-body', E).innerHTML = `<div class="tabs">${Object.entries(CUSTODY_TYPES).map(([k, v]) => `<button data-fee-tx="${k}" class="${k === cur ? 'active' : ''}">${esc(t(v.label))}</button>`).join('')}</div>
       <div class="notice small" style="margin:8px 0">${t('المبلغ الفاضي = مبلغ مفتوح بيتكتب لكل شخص (زي التصديقات). الاختيارات = مبالغ بيتختار منها (زي إذن العمل 60، 260، 360، 460). المرحلة = لما الشخص يعدّيها البند بيتعلّم «تم» لوحده. التعديل مابيأثرش على العهد القديمة.')}</div>
-      <div class="table-wrap"><table class="data fee-tbl"><thead><tr><th>${t('البند')}</th><th>${t('البند بالإنجليزي')}</th><th>${t('الجهة')}</th><th>${t('المبلغ (د.ك)')}</th><th>${t('الاختيارات')}</th><th>${t('المرحلة')}</th><th>${t('مفعّل')}</th><th></th></tr></thead>
+      <div class="table-wrap"><table class="data fee-tbl"><thead><tr><th>${t('البند')}</th><th>${t('البند بالإنجليزي')}</th><th>${t('الجهة')}</th><th>${t('المبلغ (د.ك)')}</th><th>${t('الاختيارات')}</th><th>${t('المرحلة')}</th>${emp ? `<th title="${esc(t('التاريخ اللي البند بيجدده في بيانات الموظف — بيتسجّل عليه الانتهاء الجديد قبل التقفيل'))}">${t('بيحدّث')}</th>` : ''}<th>${t('مفعّل')}</th><th></th></tr></thead>
       <tbody>${rows.map((r, i) => `<tr data-i="${i}"><td><input data-f="name" value="${esc(r.name || '')}"></td><td><input data-f="nameEn" value="${esc(r.nameEn || '')}" dir="ltr"></td><td><input data-f="authority" value="${esc(r.authority || '')}"></td>
         <td><input type="number" step="0.001" min="0" data-f="amount" value="${r.amount ?? ''}" placeholder="${esc(t('مفتوح'))}"></td>
         <td><input data-f="options" value="${esc(r.options || '')}" placeholder="60,260" dir="ltr"></td>
         <td><select data-f="stage">${opt('', '—', !r.stage)}${stages.map(s => opt(s.id, t(s.label), s.id === r.stage)).join('')}</select></td>
+        ${emp ? `<td><select data-f="updatesField">${opt('', '—', !r.updatesField)}${Object.entries(CUSTODY_EXPIRY_FIELDS).map(([k, l]) => opt(k, t(l), k === r.updatesField)).join('')}</select></td>` : ''}
         <td><input type="checkbox" data-f="active" ${r.active !== false ? 'checked' : ''}></td><td><button type="button" class="btn sm danger" data-del="${i}">✕</button></td></tr>`).join('')}</tbody></table></div>
       <div class="row" style="margin-top:8px"><button type="button" class="btn sm" id="fee-add">➕ ${t('بند')}</button><span class="spacer"></span>
         <span class="small muted">${t('الإجمالي الافتراضي')}: <b>${rptNum(sum(rows.filter(r => r.active !== false).map(r => r.amount)))}</b> ${t('د.ك')}</span></div>`;
@@ -542,7 +685,7 @@ function openFeeItemsModal(tx = 'renewal') {
       if (dirty && !await openConfirm(t('فيه تعديلات ماتحفظتش في الجدول ده. تسيبها وتفتح التاني؟'))) return;
       cur = b.dataset.feeTx; load();
     });
-    $('#fee-add', E).onclick = () => { collect(); rows.push({ name: '', nameEn: '', authority: '', amount: null, options: '', stage: '', active: true }); dirty = true; draw(); };
+    $('#fee-add', E).onclick = () => { collect(); rows.push({ name: '', nameEn: '', authority: '', amount: null, options: '', stage: '', active: true, updatesField: null }); dirty = true; draw(); };
     $$('[data-del]', E).forEach(b => b.onclick = () => { collect(); rows.splice(Number(b.dataset.del), 1); dirty = true; draw(); });
     $('#fee-body', E).addEventListener('input', () => { dirty = true; }, { once: true });
   };
@@ -615,11 +758,36 @@ function openCustodyCloseModal(c, after) {
             ? `<tr><td><input type="checkbox" data-cl="${l.id}" data-person="${esc(p.key)}" data-item="${esc(l.itemName)}" checked></td><td>${esc(l.itemName)}</td><td class="small muted">${esc(l.authority || '')}</td><td class="num">${fmtMoney(custodyLineAmount(l))}</td></tr>`
             : `<tr class="muted"><td></td><td>${esc(l.itemName)}</td><td class="small">${l.closedDate ? `🔒 ${t('اتقفل')} ${fmtDate(l.closedDate)}` : `⏳ ${t('لسه ماخلصش')}`}</td><td></td></tr>`).join('')}`).join('')}`).join('')}
       </tbody></table></div>
-      <div class="row cu-cl-sum" id="cl-sum"></div>`,
+      <div class="row cu-cl-sum" id="cl-sum"></div>
+      <div id="cl-exp" style="margin-top:10px"></div>`,
     foot: `<button class="btn primary" data-go>🔒 ${t('تقفيل ومعاينة الفواتير')}</button><span class="spacer"></span><button class="btn" data-close>${t('إلغاء')}</button>`,
   });
   const E = m.el;
   const lineById = new Map(persons.flatMap(p => p.lines.map(l => [String(l.id), l])));
+  // بنود التجديد المتحددة للتقفيل ومالهاش انتهاء جديد ← خانة لكل واحد (مطلوبة) + «نفس التاريخ للكل». الاقتراح: التاريخ
+  // اللي في بيانات الموظف لو اتجدد من برّه العهدة
+  const expVals = {};
+  let expSig = null;
+  const drawExp = () => {
+    const ids = new Set(chosen().map(String));
+    const need = persons.flatMap(p => p.lines.filter(l => ids.has(String(l.id)) && l.updatesField && !l.newExpiry && p.kind === 'employee').map(l => ({ l, p })));
+    const sig = need.map(x => x.l.id).join(',');
+    if (sig === expSig) return;
+    expSig = sig;
+    const box = $('#cl-exp', E);
+    if (!need.length) { box.innerHTML = ''; return; }
+    box.innerHTML = `<h4 class="cu-h">📅 ${t('تواريخ الانتهاء الجديدة')} (${need.length})</h4>
+      <div class="small muted" style="margin-bottom:6px">${t('التقفيل بيحدّث بيانات الموظف — التاريخ الجديد مطلوب لكل بند تجديد.')}</div>
+      <div class="row" style="gap:6px;margin-bottom:6px"><span class="small">${t('نفس التاريخ للكل')}</span><input type="date" id="cl-exp-all"><button type="button" class="btn sm" id="cl-exp-apply">${t('تطبيق')}</button></div>
+      <div class="table-wrap"><table class="data"><thead><tr><th>${t('الموظف')}</th><th>${t('البند')}</th><th>${t('كان')}</th><th><span class="req">${t('الانتهاء الجديد')}</span></th></tr></thead><tbody>
+      ${need.map(({ l, p }) => {
+        const cur = (IDX.employee[p.id] || {})[l.updatesField];
+        if (expVals[l.id] === undefined) expVals[l.id] = cur && (!l.oldExpiry || cur > l.oldExpiry) ? cur : '';
+        return `<tr><td><b>${esc(p.name)}</b></td><td>${esc(l.itemName)} <span class="small muted">(${esc(t(CUSTODY_EXPIRY_FIELDS[l.updatesField] || ''))})</span></td>
+          <td class="num">${fmtDate(l.oldExpiry) || '—'}</td><td><input type="date" data-clexp="${l.id}" value="${esc(expVals[l.id])}"></td></tr>`;
+      }).join('')}</tbody></table></div>`;
+    $('#cl-exp-apply', E).onclick = () => { const v = $('#cl-exp-all', E).value; if (!v) return; $$('[data-clexp]', E).forEach(i => { i.value = v; expVals[i.dataset.clexp] = v; }); };
+  };
   const boxes = () => $$('[data-cl]', E);
   const chosen = () => boxes().filter(x => x.checked).map(x => lineById.get(x.dataset.cl).id);
   const sumUp = () => {
@@ -630,6 +798,7 @@ function openCustodyCloseModal(c, after) {
     const sup = fee * ps.filter(p => charged(p) && !custodyNoSupport(p.costCenter)).length;
     $$('[data-clp]', E).forEach(b => { const mine = boxes().filter(x => x.dataset.person === b.dataset.clp); b.checked = mine.every(x => x.checked); b.indeterminate = !b.checked && mine.some(x => x.checked); });
     $('#cl-all', E).checked = boxes().every(x => x.checked);
+    drawExp();
     $('#cl-sum', E).innerHTML = `<span class="chip">${t('الإجراءات')}: <b>${ls.length}</b></span><span class="chip">${t('الأشخاص')}: <b>${ps.length}</b></span>
       <span class="chip">${t('الفواتير')}: <b>${uniq(ps.map(p => p.costCenter || '')).length}</b></span>
       <span class="chip">${t('الرسوم الحكومية')}: <b>${fmtMoney(g)}</b></span>
@@ -643,15 +812,21 @@ function openCustodyCloseModal(c, after) {
     sumUp();
   };
   E.addEventListener('change', sumUp);
-  E.addEventListener('input', sumUp);
+  E.addEventListener('input', ev => { if (ev.target.dataset.clexp) { expVals[ev.target.dataset.clexp] = ev.target.value; return; } sumUp(); });
   sumUp();
   $('[data-go]', E).onclick = async () => {
     const d = formValues($('#cl-form', E)), lines = chosen();
     if (!lines.length) return openBlockAlert(t('اختار إجراء واحد على الأقل'));
     if (!d.date) return openBlockAlert(t('اختار تاريخ التقفيل'));
     if (lastClosed && d.date < lastClosed) return openBlockAlert(`${t('تاريخ التقفيل لازم يكون بعد آخر تقفيل للعهدة دي')} (${fmtDate(lastClosed)})`);
+    const exps = $$('[data-clexp]', E);
+    const miss = exps.filter(i => !i.value);
+    if (miss.length) return openBlockAlert(`${t('سجّل تاريخ الانتهاء الجديد لكل بنود التجديد')} (${miss.length})`);
+    const back = exps.find(i => { const l = lineById.get(i.dataset.clexp); return l.oldExpiry && i.value <= l.oldExpiry; });
+    if (back) { const l = lineById.get(back.dataset.clexp); return openBlockAlert(`${esc(l.personName)}: ${t('الانتهاء الجديد لازم يبقى بعد القديم')} (${fmtDate(l.oldExpiry)})`); }
+    const expiries = Object.fromEntries(exps.map(i => [i.dataset.clexp, i.value]));
     try {
-      const r = await persist('POST', `/api/custodies/${c.id}/close`, { lines, adminFee: d.adminFee, date: d.date }, 'تم التقفيل');
+      const r = await persist('POST', `/api/custodies/${c.id}/close`, { lines, adminFee: d.adminFee, date: d.date, expiries }, 'تم التقفيل');
       m.close();
       await custodyPreview(`/api/custodies/${c.id}/closing.pdf?date=${r.date}${d.layout ? '&layout=' + d.layout : ''}`);
       if (after) after();

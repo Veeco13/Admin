@@ -439,6 +439,8 @@ def api_state():
         state["exportPasswordSet"] = bool(u.isAdmin and db.get_meta(s, EXPORT_KEY))
         state["backupStatus"] = backup.status(s) if u.isAdmin else None      # تنبيه لو النسخة التلقائية وقفت
         state["approvals"] = approvals.visible(s, u, emp_ok)                # طلبات الموافقة (المستني + اللي اتقرر قريب)
+        seen = {e["id"] for e in state.get("employees") or []}
+        state["renewing"] = {k: v for k, v in custody.renewing(s).items() if k in seen}   # «🔄 قيد التجديد» في التنبيهات
         links = {}
         for r in s.scalars(select(M.AgencyCostCenter)):
             links.setdefault(r.agencyId, []).append(r.costCenterId)
@@ -823,6 +825,7 @@ def renew_employees():
             old = db.ser(getattr(e, field))
             setattr(e, field, new_date)
             e.lastUpdated, e.lastUpdatedBy = db.now(), user
+            custody.fill_open_expiry(s, eid, field, new_date)      # بند التجديد المفتوح ياخد التاريخ الجديد
             if d.get("setRenewedStage"):
                 e.govStage, e.govStageNote = "renewed", None
                 custody.sync_person(s, "employee", eid, "renewed")
@@ -2574,7 +2577,8 @@ def disburse_custody(cid):
 @app.put("/api/custodies/<cid>/lines/<int:lid>")
 @require("custody.edit")
 def update_custody_line(cid, lid):
-    """بند: {done, actual, receiptNo}. «تم» من غير مبلغ فعلي ← المبلغ المحدد."""
+    """بند: {done, actual, receiptNo, newExpiry}. «تم» من غير مبلغ فعلي ← المبلغ المحدد. newExpiry (بند التجديد) ←
+    بيتسجّل على البند وبيحدّث بيانات الموظف (custody.record_expiry)، ولما كل بنوده تخلص ← «تم التجديد»."""
     d = body()
     with db.session_scope() as s:
         c = _custody_or_404(s, cid)
@@ -2592,6 +2596,18 @@ def update_custody_line(cid, lid):
             ln.actual = custody.num(d["actual"])
         if "receiptNo" in d:
             ln.receiptNo = (d.get("receiptNo") or "").strip() or None
+        if "newExpiry" in d:
+            new = db.parse_date(d.get("newExpiry"))
+            if d.get("newExpiry") and not new:
+                return err("التاريخ مش صحيح")
+            msg = custody.record_expiry(s, c, ln, new, uname())
+            if msg:
+                s.rollback()
+                return err(msg, 400, block=True)
+            db.log_audit(s, "custody_edit", f"عهدة {custody.custody_no(c)}: {ln.personName} — {ln.itemName}: "
+                         + (f"الانتهاء الجديد {new.isoformat()}" if new else "مسح الانتهاء الجديد"), uname())
+        if ln.personKind == "employee" and ("done" in d or "newExpiry" in d):
+            custody.mark_renewed(s, c, ln.personId, uname())
     return jsonify({"ok": True})
 
 
@@ -2608,13 +2624,26 @@ def close_custody(cid):
         c = _custody_or_404(s, cid)
         if c.status != "disbursed":
             return err("التقفيل بيكون للعهدة اللي اتصرفت")
+        # تواريخ الانتهاء الجديدة لبنود التجديد (من نافذة التقفيل) ← قبل التقفيل، وكله بيترجع لو فيه خطأ
+        for lid, val in (d.get("expiries") or {}).items():
+            ln = s.get(M.CustodyLine, int(lid)) if str(lid).isdigit() else None
+            new = db.parse_date(val)
+            if ln is None or ln.custodyId != c.id or not new:
+                continue
+            msg = custody.record_expiry(s, c, ln, new, uname())
+            if msg:
+                s.rollback()
+                return err(msg, 400, block=True)
         if "lines" in d:
             lines, invoices, msg = custody.close_lines(s, c, d.get("lines"), fee, when, uname())
         else:
             lines, invoices, msg = custody.close_people(s, c, d.get("persons"), fee, when, uname())
         if msg:
-            return err(msg)
+            s.rollback()
+            return err(msg, 400, block=True)
         n = len({ln.personId for ln in lines})
+        for pid in {ln.personId for ln in lines if ln.personKind == "employee"}:
+            custody.mark_renewed(s, c, pid, uname())
         db.log_audit(s, "custody_close",
                      f"تقفيل عهدة {custody.custody_no(c)}: {len(lines)} إجراء لـ {n} شخص — {len(invoices)} فاتورة: "
                      + "، ".join(f"{custody.invoice_no(i)} ({i.costCenter or '—'}) {i.total:g} د.ك" for i in invoices)
@@ -2819,6 +2848,8 @@ def save_fee_items(tx):
             f.options = ",".join(f"{x:g}" for x in opts if x is not None) or None
             f.stage = it.get("stage") if it.get("stage") in stages else None
             f.active = bool(it.get("active", True))
+            f.updatesField = it.get("updatesField") if it.get("updatesField") in custody.EXPIRY_FIELDS \
+                and custody.TX_TYPES[tx]["kind"] == "employee" else None
             keep.add(f.id)
         for fid, f in existing.items():
             if fid not in keep:

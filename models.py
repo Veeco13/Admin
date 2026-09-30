@@ -408,6 +408,8 @@ class FeeItem(Base):
     options: Mapped[Optional[str]] = col("options", SHORT)                        # «60,260,360,460»
     stage: Mapped[Optional[str]] = col("stage", String(60))                       # المرحلة اللي بتعلّم البند «تم»
     active: Mapped[bool] = col("active", Boolean, nullable=False, default=True)
+    # البند بيجدد تاريخ في بيانات الموظف (residencyExp | workPermitExp | healthCardExp) ← الانتهاء الجديد بيتسجّل عليه
+    updatesField: Mapped[Optional[str]] = col("updates_field", String(30))
 
 
 class Custody(Base):
@@ -456,6 +458,10 @@ class CustodyLine(Base):
     receiptNo: Mapped[Optional[str]] = col("receipt_no", SHORT)
     closedDate: Mapped[Optional[date]] = col("closed_date", Date)                 # اتقفل في كشف التقفيل بتاريخ ده
     dupOk: Mapped[bool] = col("dup_ok", Boolean, nullable=False, default=False)   # اتطلب تاني خلال 90 يوم بتأكيد
+    # بند التجديد: التاريخ اللي بيجدده (نسخة من البند وقت الطلب)، وقيمته وقت الطلب، والانتهاء الجديد اللي اتسجّل
+    updatesField: Mapped[Optional[str]] = col("updates_field", String(30))
+    oldExpiry: Mapped[Optional[date]] = col("old_expiry", Date)
+    newExpiry: Mapped[Optional[date]] = col("new_expiry", Date)
 
 
 class Invoice(Base):

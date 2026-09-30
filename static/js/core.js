@@ -975,14 +975,15 @@ function trackedAlertItems(maxDays = 90, system = false) {
     const d = daysUntil(o.date);
     if (d === null || d > maxDays) return;
     const key = `${o.kind}|${o.refId}|${o.name}|${o.date}`;
-    if (byKey[key]) { byKey[key].what += ' + ' + t(o.what); return; }
+    if (byKey[key]) { byKey[key].what += ' + ' + t(o.what); byKey[key].renew = byKey[key].renew || o.renew; return; }
     items.push(byKey[key] = { ...o, what: t(o.what), days: d, tier: tierOf(o.date) });
   };
   for (const e of scopedEmployees()) {
     if (empEnded(e)) continue;
+    const rn = (STATE.renewing || {})[e.id] || {};     // عليه بند تجديد مفتوح لسه تاريخه الجديد ماتسجلش
     for (const f of EMP_DATE_FIELDS) {
       if (f.driverOnly && !e.isDriver) continue;
-      push({ kind: 'employee', refId: e.id, name: empName(e), what: f.label, date: e[f.key] });
+      push({ kind: 'employee', refId: e.id, name: empName(e), what: f.label, date: e[f.key], renew: rn[f.key] });
     }
   }
   for (const c of scopedCompanies()) {
@@ -1035,6 +1036,7 @@ function trackedAlertItems(maxDays = 90, system = false) {
       push({ kind: 'system', refId: 'approvals', name: r.employeeName, what: `${t(r.kindLabel)}: ${t(APPROVAL_STATUS[r.status][0])}${r.decisionNote ? ' — ' + r.decisionNote : ''}`, date: r.decidedAt.slice(0, 10) });
     }
   }
+  items.forEach(it => { if (it.renew) it.what += ` — 🔄 ${t('قيد التجديد')} (${it.renew})`; });   // مرة واحدة للسطر المدمج
   return items.sort((a, b) => a.days - b.days);
 }
 function openAlertTarget(it) {

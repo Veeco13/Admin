@@ -92,6 +92,10 @@ function renderDashboard() {
     can('companies.view') && { ico: '🏢', l: 'الشركات', v: scopedCompanies().length, sub: `${STATE.projects.filter(p => companyInScope(p.companyId)).length} ${t('مشروع')}`, go: () => setView('companies') },
     viewAllowed('vehicles') && { ico: '🚗', l: 'السيارات', v: STATE.vehicles.length, sub: vehDue ? `${vehDue} ${t('مستند بينتهي خلال 30 يوم')}` : t('كل مستنداتها سارية'), go: () => setView('vehicles') },
     can('sensitive.salary') && { ico: '💰', l: 'إجمالي الرواتب الشهرية', v: fmtMoney(payroll), sub: paid ? `${t('متوسط الراتب')} ${fmtMoney(Math.round(payroll / paid))}` : '', go: () => goEmployees({}) },
+    can('custody.view') && (() => {                // خطة التجديدات: اللي هينتهي الشهر الجاي ومش في عهدة، وميزانيته
+      const rp = renewalPlan('next').filter(r => !r.busyOpen);
+      return { ico: '📅', l: 'تجديدات الشهر الجاي', v: rp.length, sub: `${t('الميزانية المتوقعة')} ${fmtMoney(sum(rp.map(r => r.fees + r.support)))}`, go: () => openRenewalPlanModal('next') };
+    })(),
   ].filter(Boolean);
   const kpis = `<div class="db-kpis db-span-8">${tiles.map((k, i) => `<div class="card db-tile" data-k="${i}" tabindex="0" role="button">
       <div class="db-tile-h"><span class="db-tile-l">${esc(t(k.l))}</span><span class="db-ico">${k.ico}</span></div>
