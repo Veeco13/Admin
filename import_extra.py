@@ -558,14 +558,18 @@ def undo_batch(s, batch, user):
     """بيرجّع القيمة القديمة لكل خانة لسه زي ما الاستيراد سابها (اللي اتعدّلت بعده بتفضل). العربيات اللي اتضافت
     بتتشال، إلا لو اتضاف لها تصاريح أو بيانات مابيحطهاش الاستيراد (التأمين، الدفتر، العقد، الملاحظات)."""
     restored, kept, per_emp = 0, [], {}
-    for ch in s.scalars(select(M.ImportChange).where(M.ImportChange.batchId == batch.id)):
+    changes = list(s.scalars(select(M.ImportChange).where(M.ImportChange.batchId == batch.id)))
+    own = {(ch.recordId, ch.field): ch.newValue for ch in changes}      # اللي الدفعة نفسها حطته مش «بيانات اتضافت بعدها»
+    for ch in changes:
         if ch.entity == "vehicle":
             v = s.get(M.Vehicle, ch.recordId)
             if v is None:
                 continue
             if ch.field == "__created":
                 used = s.scalar(select(M.Permit.id).where(M.Permit.vehicleId == v.id).limit(1))
-                if used or v.insuranceExpiry or v.govLicenseExpiry or v.projectId or v.notes:
+                later = [f for f in ("insuranceExpiry", "govLicenseExpiry", "projectId", "notes")
+                         if getattr(v, f) and str(db.ser(getattr(v, f))) != own.get((v.id, f))]
+                if used or later:
                     kept.append({"id": v.id, "name": v.plate, "field": ch.field, "label": "العربية اتضاف لها بيانات أو تصاريح"})
                     continue
                 s.delete(v)

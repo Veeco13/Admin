@@ -1014,6 +1014,13 @@ def import_extra_undo(bid):
             return err("الدفعة غير موجودة", 404)
         if b.undoneAt:
             return err("الدفعة دي اتعملها تراجع قبل كده")
+        # دفعة أحدث (لسه متطبّقة) عدّلت نفس السجلات ← تترجع هي الأول، وإلا القيم بتتلخبط
+        mine = select(M.ImportChange.recordId).where(M.ImportChange.batchId == b.id)
+        later = s.scalar(select(M.ImportBatch).where(M.ImportBatch.createdAt > b.createdAt, M.ImportBatch.undoneAt.is_(None),
+                                                     M.ImportBatch.id.in_(select(M.ImportChange.batchId).where(M.ImportChange.recordId.in_(mine))))
+                         .order_by(M.ImportBatch.createdAt.desc()).limit(1))
+        if later is not None:
+            return err(f"فيه دفعة أحدث عدّلت نفس السجلات («{later.fileName}») — اعمل لها تراجع الأول", 409, block=True)
         restored, kept = import_extra.undo_batch(s, b, uname())
         what = "استيراد الموظفين" if b.target == import_extra.FILE_TARGET else "استيراد تكميلي"
         db.log_audit(s, "import_undo", f"تراجع عن {what}: {b.fileName} ({b.sheet}) — رجّع {restored} خانة"
