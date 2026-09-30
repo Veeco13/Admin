@@ -896,13 +896,17 @@ def import_employees():
             u = me()                                             # من غير صلاحية الموافقة ← الحساس بيتحوّل لطلبات
             hold = None if u.can(approvals.PERM) else (lambda s2, e, data: approvals.hold(s2, e, data, u, f"استيراد ملف {name}"))
             stats = importer.import_file(s, path, uname(), allow_add=allow_add, hold=hold)
+            batch = stats.pop("_batch", [])
+            if mode == "apply" and batch:           # كل خانة اتغيّرت بقيمتها القديمة ← «↩️ تراجع» عن الدفعة كلها
+                stats["batchId"] = import_extra.record_file_import(s, name, stats, batch, uname())
             if mode == "apply":
                 miss, added = stats["notRegistered"], stats["addedList"]
                 db.log_audit(s, "employee_add" if added else "employee_edit",
                              f"استيراد ملف {name}: {stats['updated']} تحديث"
                              + (f"، إضافة {len(added)} موظف جديد (بصلاحية مدير النظام — {uname()})" if added else "")
                              + (f"، تخطّي {len(miss)} رقم مدني مش مسجّل ({'، '.join(x['id'] for x in miss[:20])}"
-                                + ("…" if len(miss) > 20 else "") + ")" if miss else ""), uname())
+                                + ("…" if len(miss) > 20 else "") + ")" if miss else "")
+                             + (f"، {len(stats['guarded'])} قيمة إنجليزي ماكتبتش على الخانات العربي" if stats["guarded"] else ""), uname())
     except Exception as e:
         return err(f"خطأ في قراءة الملف: {e}")
     return jsonify({"ok": True, "mode": mode, "token": token, "fileName": name, "allowAdd": allow_add, **stats})
@@ -1011,7 +1015,8 @@ def import_extra_undo(bid):
         if b.undoneAt:
             return err("الدفعة دي اتعملها تراجع قبل كده")
         restored, kept = import_extra.undo_batch(s, b, uname())
-        db.log_audit(s, "import_undo", f"تراجع عن استيراد تكميلي: {b.fileName} ({b.sheet}) — رجّع {restored} خانة"
+        what = "استيراد الموظفين" if b.target == import_extra.FILE_TARGET else "استيراد تكميلي"
+        db.log_audit(s, "import_undo", f"تراجع عن {what}: {b.fileName} ({b.sheet}) — رجّع {restored} خانة"
                      + (f"، و{len(kept)} خانة اتعدّلت بعد الاستيراد فاتسابت" if kept else ""), uname())
     return jsonify({"ok": True, "restored": restored, "kept": kept})
 

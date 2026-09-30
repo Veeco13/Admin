@@ -207,8 +207,8 @@ function openImportExtraModal(tab) {
       ${list.map(b => { const sm = b.summary || {}; return `<tr><td class="small">${fmtDateTime(b.createdAt)}</td><td>${esc(b.fileName || '')}<div class="small muted">${esc(b.sheet || '')}</div></td>
         <td>${b.target === 'vehicles'
           ? `🚗 <b class="num">${sm.added ?? 0}</b> ${t('عربية اتضافت')}${sm.updated ? ` · <b class="num">${sm.updated}</b> ${t('اتكمّلت')}` : ''}${sm.skipped ? `<div class="small muted">${sm.skipped} ${t('سطر متخطّى')}</div>` : ''}`
-          : `<b class="num">${sm.values ?? b.changes}</b> ${t('خانة')} · <b class="num">${sm.employees ?? ''}</b> ${t('موظف')}
-          <div class="small muted">${Object.entries(sm.fields || {}).map(([f, n]) => `${esc(t(fl[f] || IMPORTX_FIELD_LABELS[f] || f))} ${n}`).join(' · ')}</div>`}</td>
+          : `${b.target === 'employees_file' ? `<span class="chip">📥 ${t('استيراد الموظفين')}</span> ` : ''}<b class="num">${sm.values ?? b.changes}</b> ${t('خانة')} · <b class="num">${sm.employees ?? ''}</b> ${t('موظف')}
+          <div class="small muted">${Object.entries(sm.fields || {}).map(([f, n]) => `${esc(t((sm.labels || {})[f] || fl[f] || IMPORTX_FIELD_LABELS[f] || f))} ${n}`).join(' · ')}</div>`}</td>
         <td class="small">${esc(b.createdBy || '')}</td>
         <td>${b.undoneAt ? `<span class="chip">↩️ ${t('اترجعت')} ${fmtDateTime(b.undoneAt)}</span>` : `<span class="chip" style="color:var(--green)">${t('متطبّقة')}</span>`}</td>
         <td>${b.undoneAt ? '' : `<button class="btn sm danger" data-undo="${b.id}">↩️ ${t('تراجع')}</button>`}</td></tr>`; }).join('') || `<tr><td colspan="6" class="empty">${t('مفيش دفعات لسه')}</td></tr>`}</tbody></table></div>`;

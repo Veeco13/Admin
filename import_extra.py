@@ -517,6 +517,43 @@ def apply_vehicles(s, plan, file_name, sheet, user, res, company_id):
     return batch, summary
 
 
+FILE_TARGET = "employees_file"      # دفعة «استيراد الموظفين» الأساسي (importer.py) — أي خانة في الموظف
+
+
+def record_file_import(s, file_name, stats, changes, user):
+    """دفعة «استيراد الموظفين»: [(الرقم المدني، الخانة، القديم، الجديد)] («__created» = الموظف اتضاف) ← رقم الدفعة."""
+    fields = {}
+    for _, f, _, _ in changes:
+        if f != "__created":
+            fields[f] = fields.get(f, 0) + 1
+    summary = {"employees": len({c[0] for c in changes}), "values": sum(fields.values()), "added": len(stats.get("addedList") or []),
+               "fields": fields, "labels": {f: importer.FIELD_LABELS.get(f, f) for f in fields},
+               "guarded": len(stats.get("guarded") or []), "held": len(stats.get("held") or [])}
+    batch = M.ImportBatch(id=db.new_id("ib"), target=FILE_TARGET, fileName=file_name, sheet="، ".join(stats.get("sheets") or [])[:120],
+                          summary=json.dumps(summary, ensure_ascii=False), createdBy=user, createdAt=db.now())
+    s.add(batch)
+    s.flush()
+    for eid, f, old, new in changes:
+        s.add(M.ImportChange(batchId=batch.id, entity="employee", recordId=eid, field=f, oldValue=old, newValue=new))
+    return batch.id
+
+
+def _undo_file_change(e, ch, kept, per_emp):
+    """تراجع خانة من «استيراد الموظفين»: بترجع بس لو لسه زي ما الاستيراد سابها. الموظف اللي اتضاف مابيتشالش
+    لوحده (ممكن يكون اتسجّل له حاجات) — بيظهر في «اتسابت» عشان يتحذف يدوي (بيروح السلة)."""
+    label = importer.FIELD_LABELS.get(ch.field, ch.field)
+    if ch.field == "__created":
+        kept.append({"id": e.id, "name": e.name, "field": ch.field, "label": "موظف اتضاف من الاستيراد — لو مش محتاجه احذفه (بيروح السلة)"})
+        return 0
+    cur = db.ser(getattr(e, ch.field, None))
+    if ("" if cur is None else str(cur)) != (ch.newValue or ""):
+        kept.append({"id": e.id, "name": e.name, "field": ch.field, "label": label})
+        return 0
+    db.apply(e, {ch.field: ch.oldValue})
+    per_emp.setdefault(e.id, []).append(label)
+    return 1
+
+
 def undo_batch(s, batch, user):
     """بيرجّع القيمة القديمة لكل خانة لسه زي ما الاستيراد سابها (اللي اتعدّلت بعده بتفضل). العربيات اللي اتضافت
     بتتشال، إلا لو اتضاف لها تصاريح أو بيانات مابيحطهاش الاستيراد (التأمين، الدفتر، العقد، الملاحظات)."""
@@ -545,6 +582,9 @@ def undo_batch(s, batch, user):
         e = s.get(M.Employee, ch.recordId)
         if e is None:
             continue
+        if batch.target == FILE_TARGET:
+            restored += _undo_file_change(e, ch, kept, per_emp)
+            continue
         kind = EMP_FIELDS.get(ch.field, ("", "text"))[1]
         if not _same(kind, current(e, ch.field), ch.newValue):
             kept.append({"id": e.id, "name": e.name, "field": ch.field, "label": EMP_FIELDS.get(ch.field, (ch.field,))[0]})
@@ -555,7 +595,8 @@ def undo_batch(s, batch, user):
     for eid, labels in per_emp.items():
         e = s.get(M.Employee, eid)
         e.lastUpdated, e.lastUpdatedBy = db.now(), user
-        db.push_timeline(s, eid, "import_update", f"تراجع عن استيراد تكميلي ({batch.fileName}): " + "، ".join(labels), user)
+        what = "استيراد" if batch.target == FILE_TARGET else "استيراد تكميلي"
+        db.push_timeline(s, eid, "import_update", f"تراجع عن {what} ({batch.fileName}): " + "، ".join(labels), user)
     batch.undoneAt, batch.undoneBy = db.now(), user
     return restored, kept
 

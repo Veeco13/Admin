@@ -160,11 +160,35 @@ def _affiliation_for_file(s, file_no):
 
 # اسم الحقل للعرض في المعاينة والسجل: أول عنوان عربي في HEADER_MAP، والباقي من هنا
 FIELD_LABELS = {"transferNote": "حالة التحويل", "isDriver": "سائق", "employmentStatus": "الحالة الوظيفية",
-                "fileNo": "رقم الملف", "residencyExp": "انتهاء الإقامة"}
+                "fileNo": "رقم الملف", "residencyExp": "انتهاء الإقامة", "nameEn": "الاسم (إنجليزي)",
+                "nationalityEn": "الجنسية (إنجليزي)", "professionEn": "المهنة (إنجليزي)"}
 for _k, _f in HEADER_MAP.items():
     if re.search(r"[\u0600-\u06FF]", _k):
         FIELD_LABELS.setdefault(_f, _k)
 _NO_DIFF = {"id", "lastUpdated", "lastUpdatedBy"}
+
+# حماية الخانات العربي: ملف أساميه إنجليزي تحت عنوان «الاسم» مسح الأسامي العربي (30/09/2026). القيمة اللي
+# حروفها إنجليزي بس مابتكتبش على خانة فيها عربي — بتروح للخانة الإنجليزي لو فاضية، وإلا بتتجاهل (stats["guarded"])
+AR_GUARD = {"name": "nameEn", "nationality": "nationalityEn", "profession": "professionEn"}
+_ARABIC = re.compile(r"[\u0600-\u06FF]")
+
+
+def _latin_only(v):
+    v = str(v or "")
+    return bool(re.search(r"[A-Za-z]", v)) and not _ARABIC.search(v)
+
+
+def guard_arabic(e, data, stats):
+    for f, en in AR_GUARD.items():
+        v = data.get(f)
+        if not v or not _latin_only(v) or not _ARABIC.search(str(getattr(e, f) or "")):
+            continue
+        data.pop(f)
+        moved = not data.get(en) and not getattr(e, en)
+        if moved:
+            data[en] = v
+        stats.setdefault("guarded", []).append({"id": e.id, "name": e.name, "field": FIELD_LABELS.get(f, f), "value": str(v),
+                                 "to": FIELD_LABELS.get(en, en) if moved else None})
 
 
 def _show(field, v):
@@ -187,7 +211,8 @@ def _changes(e, data):
         old, new = db.ser(getattr(e, k)), db.ser(db.coerce(cols[k].columns[0].type, v))
         if new is None or old == new:          # الخانة الفاضية مابتمسحش (والفاضي أصلًا مابيتبعتش)
             continue
-        out.append({"field": k, "label": FIELD_LABELS.get(k, k), "old": _show(k, old), "new": _show(k, new)})
+        out.append({"field": k, "label": FIELD_LABELS.get(k, k), "old": _show(k, old), "new": _show(k, new),
+                    "_old": old, "_new": new})          # الخام للتراجع (بيتشال قبل ما يترجع للواجهة)
     return out
 
 
@@ -220,14 +245,19 @@ def upsert_employee(s, rec, user, stats, company_cache, allow_add=True):
     old_affs, old_cc = (db.get_affiliations(s, emp_id), e.costCenter) if e else ([], None)
     changed = []
     if e:
+        guard_arabic(e, data, stats)            # الاسم / الجنسية / المهنة العربي مابيتمسحوش بقيمة إنجليزي
         if stats.get("_hold"):                  # المرتب / البنك / إنهاء الخدمة ← طلب موافقة بدل ما يتطبّق
             stats["held"] += [{"id": emp_id, "name": e.name, "what": w} for w in stats["_hold"](s, e, data)]
         changed = _changes(e, data)
+        for c in changed:                       # كل خانة اتغيّرت بقيمتها القديمة ← «↩️ تراجع» عن الدفعة
+            old, new = c.pop("_old"), c.pop("_new")
+            stats.setdefault("_batch", []).append((emp_id, c["field"], None if old is None else str(old), None if new is None else str(new)))
         if changed:                             # من غير تغيير فعلي ← الموظف مابيتلمسش (ولا «آخر تعديل» ولا سجل)
             db.apply(e, data)
     else:
         data.setdefault("employmentStatus", "active")
         s.add(db.build(M.Employee, data))
+        stats.setdefault("_batch", []).append((emp_id, "__created", None, None))
     s.flush()
     # الانتماء
     if not db.get_affiliations(s, emp_id):
@@ -316,7 +346,7 @@ def import_file(s, path, user, allow_add=True, hold=None):
     hold(s, e, data) ← التعديلات الحساسة (المرتب، البنك، إنهاء الخدمة) بتتشال من الصف وبتتحوّل لطلبات موافقة
     (approvals.hold) للمستخدم اللي مالوش صلاحية الموافقة."""
     stats = {"added": 0, "updated": 0, "unchanged": 0, "skipped": 0, "sheets": [], "notRegistered": [],
-             "changes": [], "addedList": [], "held": [], "_hold": hold}
+             "changes": [], "addedList": [], "held": [], "guarded": [], "_hold": hold, "_batch": []}
     cache = {}
     if path.lower().endswith(".csv"):
         frames = {"csv": pd.read_csv(path, header=None, dtype=object, encoding="utf-8-sig")}

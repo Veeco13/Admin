@@ -650,11 +650,14 @@ async function handleImportCsv() {
 }
 /** نتيجة المعاينة (preview = true) أو التطبيق: الأعداد، التغييرات حقل حقل، الجدد، واللي اتخطّى */
 function importResultHtml(r, preview) {
-  const miss = r.notRegistered || [], added = r.addedList || [], changes = r.changes || [];
+  const miss = r.notRegistered || [], added = r.addedList || [], changes = r.changes || [], guarded = r.guarded || [];
   const w = (p, d) => t(preview ? p : d);
   const val = v => v === null || v === undefined ? '<span class="muted">—</span>' : esc(v);
   return `${preview ? `<div class="notice">🔍 ${t('معاينة: لسه مفيش حاجة اتحفظت. راجع التغييرات وبعدين اضغط «تطبيق».')}</div>`
-      : `<div class="notice">✅ ${t('تم التطبيق')}</div>`}
+      : `<div class="notice">✅ ${t('تم التطبيق')}${r.batchId ? ` — ${t('وتقدر تتراجع عن الدفعة دي كلها بعدين')}` : ''}
+          ${r.batchId && can('admin') ? `<button class="btn sm danger" data-imp-undo="${esc(r.batchId)}" style="margin-inline-start:8px">↩️ ${t('تراجع عن الاستيراد ده')}</button>` : ''}</div>`}
+    ${guarded.length ? `<div class="notice warn" style="margin-top:8px">🛡️ <b>${guarded.length}</b> ${t('قيمة مكتوبة إنجليزي في الملف ماكتبتش على خانات عربي (الاسم / الجنسية / المهنة) — العربي فضل زي ما هو')}:
+      <ul class="imp-miss">${guarded.map(g => `<li><b>${esc(g.name)}</b> <span class="num small muted">${esc(g.id)}</span> — ${esc(t(g.field))}: «<span dir="ltr">${esc(g.value)}</span>» ${g.to ? `← ${t('اتحطت في')} «${esc(t(g.to))}»` : `<span class="muted">(${t('اتجاهلت — الخانة الإنجليزي فيها قيمة')})</span>`}</li>`).join('')}</ul></div>` : ''}
     <div class="row" style="gap:6px;margin:8px 0;flex-wrap:wrap">
       <span class="chip on">✏️ ${w('هيتحدّث', 'اتحدّث')}: <b>${r.updated}</b></span>
       ${r.allowAdd ? `<span class="chip on">➕ ${w('هيتضاف', 'اتضاف')}: <b>${r.added}</b></span>` : ''}
@@ -675,6 +678,18 @@ function importResultHtml(r, preview) {
 }
 function bindImportResult(m, r) {
   const miss = r.notRegistered || [];
+  const undo = $('[data-imp-undo]', m.el);
+  if (undo) undo.onclick = async () => {
+    if (!await openConfirm(t('ترجّع الاستيراد ده؟ كل خانة غيّرها هترجع زي ما كانت، إلا اللي اتعدّل بعد الاستيراد.'), { danger: true, okLabel: t('تراجع') })) return;
+    undo.disabled = true;
+    try {
+      const x = await api('POST', `/api/import-extra/batches/${undo.dataset.impUndo}/undo`, {});
+      await reload();
+      undo.remove();
+      if (x.kept && x.kept.length) openBlockAlert(`${t('رجعت')} ${x.restored} ${t('خانة')}. ${t('اتسابت')}: ${x.kept.map(k => `${k.name} (${t(k.label)})`).join('، ')}`);
+      else toast(`${t('رجعت')} ${x.restored} ${t('خانة')}`, 'ok');
+    } catch (e) { toast(e.message, 'err'); undo.disabled = false; }
+  };
   const csv = $('[data-imp-csv]', m.el);
   if (csv) csv.onclick = () => exportGuard(t('قائمة الاستيراد'), () => downloadBlob(toCsv([[t('الرقم المدني'), t('الاسم'), t('ملاحظة')],
     ...miss.map(x => [x.id, x.name, x.candidate ? t('موجود كمترشّح في «تسجيل موظف جديد»') : ''])]), `import-not-registered-${todayISO()}.csv`, 'text/csv;charset=utf-8'));
