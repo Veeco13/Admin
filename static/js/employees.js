@@ -701,6 +701,7 @@ async function openProfileCard(id, tab = 'info') {
         <div class="row small">${statusPill(e.employmentStatus)} ${govStagePill(e.govStage)} <span class="muted">${t('آخر تعديل')}: ${fmtDateTime(e.lastUpdated)} ${esc(e.lastUpdatedBy || '')}</span></div></div>
         <div style="width:150px"><div class="small muted">${t('اكتمال المستندات')} ${comp.pct}%</div><div class="progress"><i style="width:${comp.pct}%"></i></div></div></div>
       ${empEndNotice(e)}
+      ${approvalsBannerHtml(e.id)}
       ${e.govStageNote ? `<div class="notice warn" style="margin-top:10px">⚠️ ${esc(e.govStageNote)}</div>` : ''}
       ${e.transferNote ? `<div class="notice" style="margin-top:10px">ℹ️ ${esc(e.transferNote)}</div>` : ''}
       <div class="tabs" style="margin-top:12px">
@@ -789,11 +790,18 @@ async function openProfileCard(id, tab = 'info') {
     else if (a === 'print') printHtml(e.name, `<h1>${esc(e.name)}</h1><div class="muted">${esc(e.nameEn || '')} · ${esc(e.id)}</div>` + $('[data-pane="info"]', m.el).innerHTML + $('[data-pane="docs"]', m.el).innerHTML);
     else if (a === 'delete') {
       const np = permitsOf('employee', e.id).length;
+      if (!canApprove()) {                      // من غير صلاحية الموافقة ← طلب حذف بسبب
+        const reason = await askText(`🗑️ ${t('طلب حذف موظف')} — ${e.name}`, `${t('سبب الحذف')} — ${t('الطلب بيروح للموافقة، والموظف بيفضل لحد ما يتوافق عليه.')}`, { okLabel: 'إرسال الطلب', danger: true });
+        if (reason === null) return;
+        try { m.close(); showPending(await persist('DELETE', '/api/employees/' + encodeURIComponent(e.id), { reason })); } catch (_) { /* ظاهر */ }
+        return;
+      }
       if (await openConfirm(`${t('حذف الموظف')} «${esc(e.name)}»؟${np ? `\n${t('تصاريحه هتتنقل معاه')} (${np}).` : ''}\n${trashNote()}`, { danger: true, okLabel: t('حذف') })) {
         m.close(); await persist('DELETE', '/api/employees/' + encodeURIComponent(e.id), undefined, 'اتنقل لسلة المحذوفات');
       }
     }
   });
+  bindApprovalActions(m.el, () => { m.close(); openProfileCard(e.id); });
 }
 
 /* ---------- النماذج الرسمية: الإقامة + رخصة القيادة (pdf_forms.py على السيرفر) ----------
@@ -994,7 +1002,7 @@ function openEmployeeStatusModal(id) {
   $('[data-save]', E).onclick = async () => {
     const d = formValues($('#st-form', E));
     if ((d.status === 'warning' || EMP_ENDED.includes(d.status)) && !d.date) return openBlockAlert(t('آخر يوم عمل مطلوب'));
-    try { await persist('POST', `/api/employees/${encodeURIComponent(id)}/status`, d, 'تم الحفظ'); m.close(); openProfileCard(id); } catch (err) { /* ظاهر */ }
+    try { showPending(await persist('POST', `/api/employees/${encodeURIComponent(id)}/status`, d, 'تم الحفظ')); m.close(); openProfileCard(id); } catch (err) { /* ظاهر */ }
   };
 }
 
@@ -1285,7 +1293,7 @@ async function saveEmployee(origId, data, modal) {
     data.force = true;
   }
   try {
-    await persist(origId ? 'PUT' : 'POST', origId ? '/api/employees/' + encodeURIComponent(origId) : '/api/employees', data, 'تم الحفظ');
+    showPending(await persist(origId ? 'PUT' : 'POST', origId ? '/api/employees/' + encodeURIComponent(origId) : '/api/employees', data, 'تم الحفظ'));
     if (!origId) clearDraft('employee');
     modal.close();
   } catch (e) {

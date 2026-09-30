@@ -26,6 +26,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 
 import db
+import approvals
 import backup
 import trash
 import contracts
@@ -436,6 +437,7 @@ def api_state():
         state["valueTranslations"] = value_i18n.merged(s)       # الجنسيات والمهن للتقارير الإنجليزية
         state["exportPasswordSet"] = bool(u.isAdmin and db.get_meta(s, EXPORT_KEY))
         state["backupStatus"] = backup.status(s) if u.isAdmin else None      # تنبيه لو النسخة التلقائية وقفت
+        state["approvals"] = approvals.visible(s, u, emp_ok)                # طلبات الموافقة (المستني + اللي اتقرر قريب)
         links = {}
         for r in s.scalars(select(M.AgencyCostCenter)):
             links.setdefault(r.agencyId, []).append(r.costCenterId)
@@ -578,6 +580,12 @@ def save_employee(orig_id):
                     return err(f"يوجد موظف بنفس الاسم والجنسية: {dup_name(d)}"
                                + (f" ({d['id']})" if u.allCompanies else ""), 409, warn=True, **dup_extra(d))
             affs = data.pop("affiliations", None)
+            # المرتب / البنك / إنهاء الخدمة من غير صلاحية الموافقة ← بيتشالوا من الحفظ وبيتحوّلوا لطلبات (قبل أي كتابة)
+            held = {}
+            if orig_id and not u.can(approvals.PERM):
+                held, msg = approvals.split(old_e, data)
+                if msg:
+                    return err(msg)
             if "children" in data:
                 data["children"] = db.children_json(data["children"])
             data["lastUpdated"] = db.now()
@@ -613,6 +621,8 @@ def save_employee(orig_id):
                         cid = (affs[0].get("companyId") if affs else None)
                         if k == "residencyExp" and cid:
                             db.log_company_history(s, cid, "residency_renewed", f"تجديد إقامة {e.name} حتى {new[k]}", user)
+                for kind, ch in held.items():
+                    approvals.request(s, e, kind, ch, u, "بطاقة الموظف")
             else:
                 data.setdefault("employmentStatus", "active")
                 s.add(db.build(M.Employee, data))
@@ -627,7 +637,8 @@ def save_employee(orig_id):
                         db.log_company_history(s, a["companyId"], "employee_joined",
                                                f"انضمام الموظف {data.get('name')} ({new_id}) — موظف جديد", user)
             s.flush()
-            return jsonify({"ok": True, "employee": u.strip("employee", db.employee_full(s, new_id))})
+            return jsonify({"ok": True, "employee": u.strip("employee", db.employee_full(s, new_id)),
+                            "pending": [f"{approvals.KINDS[k]}: {approvals.describe(k, ch)}" for k, ch in held.items()]})
     except IntegrityError as e:
         return err(f"تعارض في البيانات: {e.orig}", 409)
 
@@ -706,6 +717,15 @@ def set_employee_status(emp_id):
             return err("الموظف غير موجود", 404)
         if not emp_ok(s, emp_id):
             return forbidden(OUT_OF_SCOPE)
+        if not me().can(approvals.PERM):           # إنهاء الخدمة ← طلب موافقة (الرجوع للخدمة من غير إنهاء بيتطبّق عادي)
+            if d.get("status") not in EMP_STATUSES:
+                return err("الحالة غير معروفة")
+            ch, msg = approvals.status_changes(e, d.get("status"), db.parse_date(d.get("date")), d.get("endType"), d.get("reason"))
+            if msg:
+                return err(msg)
+            if ch and (set(ch) - {"employmentStatus"} or {d.get("status"), e.employmentStatus} & set(approvals.END_STATES)):
+                approvals.request(s, e, "service_end", ch, me(), "الحالة الوظيفية", d.get("note"))
+                return jsonify({"ok": True, "pending": [f"{approvals.KINDS['service_end']}: {approvals.describe('service_end', ch)}"]})
         msg = _set_employment_status(s, e, d.get("status"), db.parse_date(d.get("date")), d.get("endType"),
                                      d.get("reason"), d.get("note"), uname())
         if msg:
@@ -722,9 +742,19 @@ def delete_employee(emp_id):
             return err("غير موجود", 404)
         if not emp_ok(s, emp_id):
             return forbidden(OUT_OF_SCOPE)
-        db.log_audit(s, "employee_delete", f"حذف موظف: {e.name} ({emp_id}) — اتنقل لسلة المحذوفات", uname())
-        trash.trash_employee(s, e, uname())       # هو وانتماءاته وتصاريحه ← السلة (بيترجع زي ما كان)
+        if not me().can(approvals.PERM):           # من غير صلاحية الموافقة ← طلب حذف بسبب
+            reason = (body().get("reason") or "").strip()
+            if not reason:
+                return err("اكتب سبب الحذف — الطلب بيروح للموافقة")
+            approvals.request(s, e, "delete", {}, me(), "بطاقة الموظف", reason)
+            return jsonify({"ok": True, "pending": [approvals.KINDS["delete"]]})
+        _trash_employee(s, e, uname())
     return jsonify({"ok": True, "trash": True})
+
+
+def _trash_employee(s, e, user):
+    db.log_audit(s, "employee_delete", f"حذف موظف: {e.name} ({e.id}) — اتنقل لسلة المحذوفات", user)
+    trash.trash_employee(s, e, user)               # هو وانتماءاته وتصاريحه ← السلة (بيترجع زي ما كان)
 
 
 @app.post("/api/employees/bulk-assign")
@@ -862,7 +892,9 @@ def import_employees():
         f.save(path)
     try:
         with db.session_scope(commit=mode == "apply") as s:        # المعاينة مابتتحفظش (rollback)
-            stats = importer.import_file(s, path, uname(), allow_add=allow_add)
+            u = me()                                             # من غير صلاحية الموافقة ← الحساس بيتحوّل لطلبات
+            hold = None if u.can(approvals.PERM) else (lambda s2, e, data: approvals.hold(s2, e, data, u, f"استيراد ملف {name}"))
+            stats = importer.import_file(s, path, uname(), allow_add=allow_add, hold=hold)
             if mode == "apply":
                 miss, added = stats["notRegistered"], stats["addedList"]
                 db.log_audit(s, "employee_add" if added else "employee_edit",
@@ -1050,8 +1082,13 @@ def employee_official_form(emp_id, form):
         end = db.parse_date(emp.get("serviceEndDate"))
         if form == "pifss103" and out[2] == "إنهاء خدمة" and _truthy(body().get("setStatus")) and end and me().can("employees.edit"):
             reason = body().get("endReason")
-            _set_employment_status(s, s.get(M.Employee, emp_id), "warning", end, end_type_for_reason(reason), reason,
-                                   user=uname(), source="استمارة 103")
+            e_obj = s.get(M.Employee, emp_id)
+            if me().can(approvals.PERM):
+                _set_employment_status(s, e_obj, "warning", end, end_type_for_reason(reason), reason, user=uname(), source="استمارة 103")
+            else:                                  # من غير صلاحية الموافقة ← طلب إنهاء خدمة
+                ch, msg = approvals.status_changes(e_obj, "warning", end, end_type_for_reason(reason), reason)
+                if ch and not msg:
+                    approvals.request(s, e_obj, "service_end", ch, me(), "استمارة 103")
     return _send_pdf(out[0], out[1])
 
 
@@ -3010,6 +3047,59 @@ def _restore_zip(path, source):
         db.log_audit(s, "backup_restore", f"استعادة نسخة احتياطية كاملة ({source}) من {data.get('createdAt', '')} — "
                      f"الحالة اللي قبلها اتحفظت في {pre}", uname())
     return {"counts": counts, "files": backup.restore_files(path), "preRestore": pre}
+
+
+# ---------------------------------------------------------------------------
+# ✋ طلبات الموافقة على التعديلات الحساسة (approvals.py) — القسم 28
+# ---------------------------------------------------------------------------
+def _approval(s, rid):
+    r = s.get(M.ApprovalRequest, rid)
+    if r is None:
+        abort(404, "الطلب غير موجود")
+    if s.get(M.Employee, r.employeeId) is not None and not emp_ok(s, r.employeeId):
+        abort(403, OUT_OF_SCOPE)
+    return r
+
+
+@app.post("/api/approvals/<rid>/approve")
+@require(approvals.PERM)
+def approve_request(rid):
+    with db.session_scope() as s:
+        r = _approval(s, rid)
+        msg = approvals.decide(s, r, True, uname(), body().get("note"), _set_employment_status, _trash_employee)
+        if msg:
+            s.rollback()
+            return err(msg, 409, block=True)
+    return jsonify({"ok": True})
+
+
+@app.post("/api/approvals/<rid>/reject")
+@require(approvals.PERM)
+def reject_request(rid):
+    note = (body().get("note") or "").strip()
+    if not note:
+        return err("اكتب سبب الرفض")
+    with db.session_scope() as s:
+        msg = approvals.decide(s, _approval(s, rid), False, uname(), note)
+        if msg:
+            return err(msg)
+    return jsonify({"ok": True})
+
+
+@app.post("/api/approvals/<rid>/cancel")
+@login_required
+def cancel_request(rid):
+    """صاحب الطلب (أو اللي معاه الصلاحية) بيلغيه قبل ما يتقرر."""
+    u = me()
+    with db.session_scope() as s:
+        r = _approval(s, rid)
+        if not approvals.is_owner(r, u) and not u.can(approvals.PERM):
+            return forbidden()
+        if r.status != "pending":
+            return err("الطلب ده اتقرر قبل كده")
+        r.status, r.decidedBy, r.decidedAt, r.decisionNote = "cancelled", u.display, db.now(), "اتلغى من صاحبه"
+        db.log_audit(s, "approval_decision", f"{r.employeeName} ({r.employeeId}): اتلغى طلب {approvals.KINDS[r.kind]}", u.display)
+    return jsonify({"ok": True})
 
 
 # ---------------------------------------------------------------------------

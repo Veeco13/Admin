@@ -220,6 +220,8 @@ def upsert_employee(s, rec, user, stats, company_cache, allow_add=True):
     old_affs, old_cc = (db.get_affiliations(s, emp_id), e.costCenter) if e else ([], None)
     changed = []
     if e:
+        if stats.get("_hold"):                  # المرتب / البنك / إنهاء الخدمة ← طلب موافقة بدل ما يتطبّق
+            stats["held"] += [{"id": emp_id, "name": e.name, "what": w} for w in stats["_hold"](s, e, data)]
         changed = _changes(e, data)
         if changed:                             # من غير تغيير فعلي ← الموظف مابيتلمسش (ولا «آخر تعديل» ولا سجل)
             db.apply(e, data)
@@ -309,10 +311,12 @@ def import_manpower_headerless(s, df, user, stats, cache, allow_add=True):
     return True
 
 
-def import_file(s, path, user, allow_add=True):
-    """allow_add=False ← تحديث الموجودين بس (الشاشة). seed_import بيضيف عادي (أول تشغيل)."""
+def import_file(s, path, user, allow_add=True, hold=None):
+    """allow_add=False ← تحديث الموجودين بس (الشاشة). seed_import بيضيف عادي (أول تشغيل).
+    hold(s, e, data) ← التعديلات الحساسة (المرتب، البنك، إنهاء الخدمة) بتتشال من الصف وبتتحوّل لطلبات موافقة
+    (approvals.hold) للمستخدم اللي مالوش صلاحية الموافقة."""
     stats = {"added": 0, "updated": 0, "unchanged": 0, "skipped": 0, "sheets": [], "notRegistered": [],
-             "changes": [], "addedList": []}
+             "changes": [], "addedList": [], "held": [], "_hold": hold}
     cache = {}
     if path.lower().endswith(".csv"):
         frames = {"csv": pd.read_csv(path, header=None, dtype=object, encoding="utf-8-sig")}
@@ -331,4 +335,5 @@ def import_file(s, path, user, allow_add=True):
             ok = import_manpower_headerless(s, raw, user, stats, cache, allow_add)
         if ok:
             stats["sheets"].append(name)
+    stats.pop("_hold", None)
     return stats

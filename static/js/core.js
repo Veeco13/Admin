@@ -1025,6 +1025,15 @@ function trackedAlertItems(maxDays = 90, system = false) {
   // النسخة الاحتياطية التلقائية وقفت أو فشلت (مدير النظام) ← بتفتح شاشة النسخ
   const bs = STATE.backupStatus;
   if (system && bs && backupStale(bs)) push({ kind: 'system', refId: 'backup', name: t('النسخ الاحتياطية'), what: backupStaleText(bs), date: (bs.lastOk || '').slice(0, 10) || todayISO() });
+  // طلبات الموافقة: اللي معاه الصلاحية ← المستني، وصاحب الطلب ← القرار (آخر 7 أيام)
+  if (system && typeof pendingApprovals === 'function') {
+    const n = canApprove() ? pendingApprovals().length : 0;
+    if (n) push({ kind: 'system', refId: 'approvals', name: t('طلبات الموافقة'), what: `${n} ${t('طلب مستني موافقتك')}`, date: todayISO() });
+    for (const r of STATE.approvals || []) {
+      if (!isMyRequest(r) || !['approved', 'rejected'].includes(r.status) || !r.decidedAt || daysUntil(r.decidedAt.slice(0, 10)) < -7) continue;
+      push({ kind: 'system', refId: 'approvals', name: r.employeeName, what: `${t(r.kindLabel)}: ${t(APPROVAL_STATUS[r.status][0])}${r.decisionNote ? ' — ' + r.decisionNote : ''}`, date: r.decidedAt.slice(0, 10) });
+    }
+  }
   return items.sort((a, b) => a.days - b.days);
 }
 function openAlertTarget(it) {
@@ -1035,6 +1044,7 @@ function openAlertTarget(it) {
   else if (it.kind === 'vehicle') { setView('vehicles'); setTimeout(() => openVehicleModal(it.refId), 50); }
   else if (it.kind === 'candidate') { setView('recruitment'); setTimeout(() => openCandidateModal(it.refId), 50); }
   else if (it.kind === 'system' && it.refId === 'backup') openBackupsModal();
+  else if (it.kind === 'system' && it.refId === 'approvals') openApprovalsModal();
 }
 function renderAlertCenterPanel(filter = 'all') {
   if (filter !== 'all') filter = tierFilterValue(filter) || 'all';        // «منتهي» من لوحة المعلومات ← خلال 30 يوم
@@ -1174,13 +1184,14 @@ function renderUserMenu() {
     ${me.isAdmin ? `<button data-a="backup">💾 ${t('النسخ الاحتياطية')}${backupStale(STATE.backupStatus) ? ' ⚠️' : ''}</button><button data-a="users">🔑 ${t('المستخدمين والصلاحيات')}</button>
       <button data-a="exportpw">🔐 ${t('كلمة سر التصدير')}${STATE.exportPasswordSet ? '' : ' ⚠️'}</button>
       <button data-a="dq">📋 ${t('جودة البيانات')}</button><button data-a="importx">📥 ${t('استيراد بيانات تكميلية')}</button>` : ''}
+    ${canApprove() || (STATE.approvals || []).length ? `<button data-a="approvals">✋ ${t('طلبات الموافقة')}${pendingApprovals().length ? ` (${pendingApprovals().length})` : ''}</button>` : ''}
     ${canTrash() ? `<button data-a="trash">🗑️ ${t('سلة المحذوفات')}</button>` : ''}
     <button data-a="viewperms">👁️ ${t('إعدادات العرض')}</button>
     <button data-a="password">🔒 ${t('تغيير كلمة المرور')}</button>
     <button data-a="logout">🚪 ${t('تسجيل الخروج')}</button>`;
   $$('button', m).forEach(b => b.onclick = () => {
     m.hidden = true;
-    ({ backup: openBackupsModal, trash: openTrashModal, users: () => openUsersModal(), viewperms: renderViewSettingsModal, exportpw: openExportPasswordModal, dq: openDataQualityModal, importx: () => openImportExtraModal(),
+    ({ backup: openBackupsModal, trash: openTrashModal, approvals: openApprovalsModal, users: () => openUsersModal(), viewperms: renderViewSettingsModal, exportpw: openExportPasswordModal, dq: openDataQualityModal, importx: () => openImportExtraModal(),
        password: openPasswordModal, logout: () => location.href = '/logout' })[b.dataset.a]();
   });
 }

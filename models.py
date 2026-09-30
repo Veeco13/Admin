@@ -622,6 +622,27 @@ class Trash(Base):
     deletedAt: Mapped[Optional[datetime]] = col("deleted_at", DateTime, index=True)
 
 
-# النسخ الاحتياطي: العهد والفواتير والوكالات والتصاريح والخطابات ودفعات الاستيراد والسلة كمان
+# ---------------------------------------------------------------------------
+# ✋ الموافقة على التعديلات الحساسة (approvals.py)
+# ---------------------------------------------------------------------------
+class ApprovalRequest(Base):
+    __tablename__ = "approval_requests"
+    id: Mapped[str] = col("id", ID, primary_key=True)
+    employeeId: Mapped[str] = col("employee_id", ID, nullable=False, index=True)   # مش FK: طلب الحذف بيفضل بعد الحذف
+    employeeName: Mapped[Optional[str]] = col("employee_name", NAME)
+    kind: Mapped[str] = col("kind", String(20), nullable=False)                 # salary | bank | service_end | delete
+    changes: Mapped[Optional[str]] = col("changes", TEXT)                       # JSON {الخانة: [القديم، الجديد]}
+    note: Mapped[Optional[str]] = col("note", TEXT)                             # ملاحظة / سبب من صاحب الطلب
+    source: Mapped[Optional[str]] = col("source", NAME)                         # منين (بطاقة الموظف، الاستيراد، استمارة 103…)
+    status: Mapped[str] = col("status", String(20), nullable=False, index=True)  # pending | approved | rejected | cancelled
+    requestedBy: Mapped[Optional[str]] = col("requested_by", NAME)
+    requestedById: Mapped[Optional[str]] = col("requested_by_id", ID)
+    requestedAt: Mapped[Optional[datetime]] = col("requested_at", DateTime)
+    decidedBy: Mapped[Optional[str]] = col("decided_by", NAME)
+    decidedAt: Mapped[Optional[datetime]] = col("decided_at", DateTime)
+    decisionNote: Mapped[Optional[str]] = col("decision_note", TEXT)
+
+
+# النسخ الاحتياطي: العهد والفواتير والوكالات والتصاريح والخطابات ودفعات الاستيراد والسلة والطلبات كمان
 ALL_MODELS.extend([FeeItem, Custody, CustodyLine, Invoice, Agency, AgencyCostCenter, PermitType, PermitPlace, Permit, PermitPlaceLink,
-                   HrLetter, ImportBatch, ImportChange, Trash])
+                   HrLetter, ImportBatch, ImportChange, Trash, ApprovalRequest])
