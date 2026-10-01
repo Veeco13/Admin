@@ -493,6 +493,7 @@ let toastTimer;
 function toast(msg, kind = '') {
   const el = $('#toast');
   el.textContent = t(msg);
+  el.insertAdjacentHTML('afterbegin', icon(kind === 'ok' ? 'check-circle' : kind === 'err' ? 'alert' : 'info'));
   el.className = 'show ' + kind;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { el.className = ''; }, 3200);
@@ -504,7 +505,7 @@ function openModal({ title, body, foot = '', size = '', onClose }) {
   const ov = document.createElement('div');
   ov.className = 'overlay';
   ov.innerHTML = `<div class="modal ${size}" role="dialog">
-    <div class="modal-head"><h2>${title}</h2><button class="btn ghost" data-close>✕</button></div>
+    <div class="modal-head"><h2>${title}</h2><button class="btn ghost" data-close aria-label="${esc(t('إغلاق'))}" title="${esc(t('إغلاق'))}">✕</button></div>
     <div class="modal-body">${body}</div>
     ${foot ? `<div class="modal-foot">${foot}</div>` : ''}</div>`;
   root.appendChild(ov);
@@ -749,23 +750,23 @@ const REPORT_CSS = `
   .toolbar button.primary{background:#fff;color:#0b4650;font-weight:600} .toolbar .sp{flex:1} .toolbar small{opacity:.75}
   .sheet{background:#fff;margin:14px auto;padding:12mm 10mm;box-shadow:0 2px 14px rgba(0,0,0,.14)}
   .sheet.land{width:297mm} .sheet.port{width:210mm}
-  .rpt-head{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:14px;padding-bottom:10px;border-bottom:2px solid var(--head)}
+  .rpt-head{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:16px;padding-bottom:9px;border-bottom:2.5px solid var(--head);box-shadow:0 2.5px 0 #fff,0 3.5px 0 var(--line)}
   .rpt-brand{display:flex;align-items:center;gap:10px;min-width:0}
   .rpt-brand img{height:54px;max-width:130px;object-fit:contain}
   .rpt-brand .mark{width:46px;height:46px;border-radius:8px;background:var(--head);color:#fff;display:grid;place-items:center;font-weight:800;font-size:20px}
   .rpt-brand .ar{font-size:14px;font-weight:700;line-height:1.3} .rpt-brand .en{font-size:9.5px;color:var(--muted);direction:ltr;unicode-bidi:plaintext}
-  .rpt-title{text-align:center} .rpt-title h1{margin:0;font-size:18px} .rpt-title .sub{color:var(--muted);font-size:11px;margin-top:3px}
-  .rpt-meta{justify-self:end;border-collapse:collapse;font-size:9.5px}
+  .rpt-title{text-align:center} .rpt-title h1{margin:0;font-size:18px;line-height:1.35} .rpt-title .sub{color:var(--head);font-size:11px;font-weight:600;margin-top:2px}
+  .rpt-meta{justify-self:end;border-collapse:collapse;font-size:9.5px;border-inline-start:2px solid var(--line);margin-inline-start:6px} .rpt-meta th{padding-inline-start:10px!important}
   .rpt-meta th{color:var(--muted);font-weight:500;text-align:start;padding:1px 0;padding-inline-end:10px;white-space:nowrap} .rpt-meta td{font-weight:600;padding:1px 0;white-space:nowrap}
   .rpt-criteria{margin:9px 0 8px;padding:6px 10px;background:var(--band);border-inline-start:3px solid var(--head);font-size:9.5px;line-height:1.6}
   .rpt-criteria b{color:var(--head)}
-  .rpt-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:8px;margin:0 0 10px}
-  .rpt-summary div{border:1px solid var(--line);border-top:3px solid var(--head);border-radius:3px;padding:5px 9px}
-  .rpt-summary b{display:block;font-size:15px;line-height:1.3} .rpt-summary span{color:var(--muted);font-size:9px}
+  .rpt-summary{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:8px;margin:0 0 10px}
+  .rpt-summary div{border:1px solid var(--line);border-top:3px solid var(--head);border-radius:3px;padding:6px 9px;min-height:42px;display:flex;flex-direction:column;justify-content:center}
+  .rpt-summary b{display:block;font-size:15px;line-height:1.3;font-variant-numeric:tabular-nums} .rpt-summary span{color:var(--muted);font-size:9px}
   .ic{display:inline-block;width:1.15em;height:1.15em;vertical-align:-.2em;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
   .ic-kw{width:1.5em;height:1em;vertical-align:-.12em;stroke:none} .ic-t-ok{color:#1a7f4b} .ic-t-warn{color:#b26a00} .ic-t-bad{color:#b3261e} .toolbar .ic{color:inherit}
   table.rpt{width:100%;border-collapse:collapse;font-size:9.8px}
-  table.rpt thead th{background:var(--head);color:#fff;font-weight:600;text-align:center;padding:6px 5px;border:1px solid var(--head);vertical-align:middle}
+  table.rpt thead th{background:var(--band);color:var(--ink);font-weight:700;text-align:center;padding:6px 5px;border:1px solid var(--line);border-top:2px solid var(--head);border-bottom:1.5px solid var(--head);vertical-align:middle}
   table.rpt td{padding:4px 5px;border:1px solid var(--line);vertical-align:middle;text-align:center}
   table.rpt tr{break-inside:avoid} table.rpt tr.z td{background:var(--zebra)}
   table.rpt td.num,table.rpt th.num{text-align:center;font-variant-numeric:tabular-nums;white-space:nowrap} table.rpt td.idx{color:var(--muted);width:28px}
@@ -775,7 +776,7 @@ const REPORT_CSS = `
   table.rpt tr.grp small{color:var(--muted);font-weight:500;font-size:9.5px;float:left;margin-inline-start:12px;unicode-bidi:isolate}
   [dir=ltr] table.rpt tr.grp small{float:right}
   table.rpt tr.sub td{font-weight:600;background:#fbfcfb;border-bottom:1.5px solid var(--line)}
-  table.rpt tfoot td{font-weight:700;background:var(--band);border-top:2px solid var(--head);padding:6px 5px}
+  table.rpt tfoot td{font-weight:700;background:var(--band);border-top:2px solid var(--head);border-bottom:2px solid var(--head);padding:6px 5px}
   .pill{display:inline-block;padding:0 5px;border-radius:3px;white-space:nowrap}
   .t-expired{background:#fbe7e5;color:#b3261e}.t-d30{background:#fdeede;color:#b35c00}.t-d60{background:#fbf3d6;color:#7a5d00}.t-d90{background:#e2f3e9;color:#1e6b43}.t-ok,.t-none{background:none;color:inherit}
   .rpt-sign{display:grid;grid-template-columns:repeat(3,1fr);gap:28px;margin-top:30px;break-inside:avoid}

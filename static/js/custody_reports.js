@@ -19,7 +19,7 @@ const cuIssuer = () => IDX.company[custodySettings().issuerCompanyId] || null;
 const cuAr = (a, b) => String(a || '').localeCompare(String(b || ''), 'ar');
 const cuMoney = v => rptNum(Math.round((Number(v) || 0) * 1000) / 1000);
 /** الرصيد: السالب (مستحق للمستلم) بالأحمر */
-const cuBal = v => (v < -0.0005 ? `<span style="color:#b3261e">${cuMoney(v)}</span>` : cuMoney(v));
+const cuBal = v => (v < -0.0005 ? `<span dir="ltr" style="color:#b3261e;unicode-bidi:isolate">${cuMoney(v)}</span>` : cuMoney(v));
 const cuPeriod = (from, to) => (from || to ? `${from ? fmtDate(from) : '…'} — ${to ? fmtDate(to) : '…'}` : t('كل الفترات'));
 /** العهد اللي فيها فلوس اتحركت: اتصرفت أو اتقفلت (مش الملغاة ولا الطلبات اللي لسه ماتصرفتش) */
 function cuLive() { return custodiesInView().filter(c => c.status !== 'cancelled' && c.status !== 'requested'); }

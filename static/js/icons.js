@@ -85,6 +85,8 @@ const ICONS = {
   cap: '<path d="M22 9L12 4 2 9l10 5 10-5z"/><path d="M6 11.5V16c0 1.5 2.7 3 6 3s6-1.5 6-3v-4.5"/><line x1="22" y1="9" x2="22" y2="15"/>',
   star: '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
   dot: '<circle cx="12" cy="12" r="6" fill="currentColor" stroke="none"/>',
+  info: '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>',
+  inbox: '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
 };
 
 // الإيموجي ← [الأيقونة، اللون (ok أخضر / warn برتقالي / bad أحمر / accent / وألوان النقط)] — اللون مابيتطبقش جوه الأزرار والشارات
@@ -136,6 +138,10 @@ function iconize(root) {
   const nodes = [];
   while (walker.nextNode()) nodes.push(walker.currentNode);
   nodes.forEach(iconizeText);
+  // الحالة الفاضية («لا توجد بيانات»…): أيقونة فوق السطر
+  (root.matches('.empty') ? [root] : []).concat([...root.querySelectorAll('.empty')]).forEach(el => {
+    if (el.textContent.trim() && !el.querySelector('.ic-empty')) el.insertAdjacentHTML('afterbegin', `<span class="ic-empty" aria-hidden="true">${icon('inbox')}</span>`);
+  });
 }
 function iconizeText(n) {
   if (!n || n.nodeType !== 3) return;
