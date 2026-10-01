@@ -714,13 +714,18 @@ def _closing_summary(ws, s, c, rows, issuer, when, user, first=None):
     n = len(headers)
     _widths(ws, [5, 20, 26, 28, 13, 11, 14, 13, 15])
     number = custody.custody_no(c)
+    carrier = s.get(M.Custody, c.carryToId) if c.direct and c.carryToId else None      # الطلب اللي مبلغ التقفيل المباشر اتضاف عليه
     row = _header(ws, n, issuer, ("CUSTODY CLOSING SUMMARY", "ملخص تقفيل العهدة"))
     row, box = _info(ws, row, n, [
         (("Custody / Closing", "العهدة / التقفيل"), f"{number}   ·   {first.closingRef if first is not None and first.closingRef else '—'}"),
         (("Request For", "نوع المعاملة"), _tx(ws, c)),
         (("Custodian", "المستلم"), c.custodian),
         (("Closed By", "أُقفلت بواسطة"), _closed_by(first) if first is not None else user),
-        (("Disbursed", "تاريخ الصرف"), f"{_fmt(c.disbursedDate)}   ·   {c.disbursedAmount or 0:,.3f} {_L(ws, 'KWD', 'د.ك', ' ')}"),
+        ((("Funding", "التمويل"), _L(ws, f"Direct closing — added to request {custody.custody_no(carrier)}",
+                                      f"تقفيل مباشر — مبلغه مضاف على طلب {custody.custody_no(carrier)}", " · ") if carrier is not None
+          else _L(ws, "Direct closing — to be added to the custodian's next request",
+                  "تقفيل مباشر — مبلغه بيتضاف على أقرب طلب عهدة للمستلم", " · ")) if c.direct
+         else (("Disbursed", "تاريخ الصرف"), f"{_fmt(c.disbursedDate)}   ·   {c.disbursedAmount or 0:,.3f} {_L(ws, 'KWD', 'د.ك', ' ')}")),
         (("Closing Date", "تاريخ التقفيل"), _fmt(when)),
     ], ("TOTAL INVOICED (KWD)", "إجمالي الفواتير"), _count(ws, len(rows), "Invoices", "فاتورة"))
     head = row
@@ -744,11 +749,17 @@ def _closing_summary(ws, s, c, rows, issuer, when, user, first=None):
     # تسوية العهدة مع المستلم (العهدة كلها، مش التقفيل ده بس) — الدعم الإداري على مراكز التكلفة، مش من فلوس العهدة
     lines = s.scalars(select(M.CustodyLine).where(M.CustodyLine.custodyId == c.id)).all()
     spent = sum(_amount(ln) for ln in lines if ln.done)
-    got = float(c.disbursedAmount or 0)
+    dues = sum(a for _, a in custody.carried(s, c))            # مستحقات تقفيل مباشر مضافة على الطلب ده ← مش من رصيد العهدة دي
+    if c.direct:                                              # اتنفّذ من فلوس عهدة تانية ← مستحق للمستلم لحد ما الطلب يتصرف
+        got = spent if carrier is not None and carrier.status in custody.FUNDED else 0.0
+    else:
+        got = float(c.disbursedAmount or 0) - dues
     r = tot + 2
     _put(ws, r, 1, _L(ws, "CUSTODY SETTLEMENT", "تسوية العهدة مع المستلم", " · "), to_col=n, bold=True, size=10, color="FFFFFF",
          fill=PRIMARY, h="left")
-    for i, (label, val, col) in enumerate(((("Amount disbursed to custodian", "المصروف للمستلم"), got, INK),
+    for i, (label, val, col) in enumerate(((("Amount disbursed to custodian (net of direct-closing dues)",
+                                             "المصروف للمستلم (بعد مستحقات التقفيل المباشر)") if dues
+                                            else ("Amount disbursed to custodian", "المصروف للمستلم"), got, INK),
                                            (("Government charges executed (whole custody)", "المنفّذ من العهدة"), spent, INK),
                                            (("Balance with custodian", "الرصيد مع المستلم") if got >= spent
                                             else ("Due to custodian", "مستحق للمستلم"), got - spent,
@@ -812,8 +823,10 @@ def request_workbook(s, c, user, lang="both"):
             ws.cell(row=r, column=7).font = Font(name=FONT, size=10, bold=True, color=RED)
     last = head + len(people)
     tot = last + 1
+    dues = custody.carried(s, c)                      # تقفيلات مباشرة لنفس المستلم ← مبلغها مضاف على الطلب
+    due_total = round(sum(a for _, a in dues), 3)
     box.value = "=" + _total_row(ws, tot, n, f"{_L(ws, 'GRAND TOTAL', 'الإجمالي العام')}  ({len(people)})", head + 1, last,
-                                  money_from, money_from - 1)
+                                  money_from, money_from - 1) + (f"+{due_total}" if due_total else "")
     # ملخص المطلوب لكل مركز تكلفة
     r = tot + 2
     _put(ws, r, 1, _L(ws, "SUMMARY PER COST CENTER", "ملخص المطلوب لكل مركز تكلفة", " · "), to_col=n, bold=True, size=10,
@@ -826,7 +839,15 @@ def request_workbook(s, c, user, lang="both"):
         _put(ws, r + 1 + i, 5, _count(ws, len(ps), "Employees", "موظف"), to_col=max(5, n - 1), size=10, border=GRID,
              fill=ZEBRA if i % 2 else None)
         _put(ws, r + 1 + i, n, amt, size=10, fmt=KWD, border=GRID, fill=ZEBRA if i % 2 else None)
-    row = _words_row(ws, r + 2 + len(groups), n, sum(_amount(ln, actual=False) for ln in lines))
+    r2 = r + 1 + len(groups)
+    for j, (dc, amt) in enumerate(dues):              # «مستحقات تقفيل مباشر»: اتصرفت قبل كده من فلوس عهدة تانية
+        no = custody.custody_no(dc)
+        _put(ws, r2 + j, 1, len(groups) + j + 1, size=10, color=MUTED, border=GRID)
+        _put(ws, r2 + j, 2, _L(ws, f"Direct closing {no} — paid earlier ({_fmt(dc.requestDate)})",
+                               f"مستحقات تقفيل مباشر {no} — اتصرفت قبل كده ({_fmt(dc.requestDate)})", " · "),
+             to_col=max(2, n - 1), size=10, h="left", border=GRID)
+        _put(ws, r2 + j, n, amt, size=10, fmt=KWD, border=GRID)
+    row = _words_row(ws, r + 2 + len(groups) + len(dues), n, sum(_amount(ln, actual=False) for ln in lines) + due_total)
     row = _note(ws, row + 1, n)
     _signatures(ws, row, n, [("Custodian", "المستلم"), ("Manager", "المسؤول"), ("Finance", "الإدارة المالية")], None)
     ws.freeze_panes = ws.cell(row=head + 1, column=3)

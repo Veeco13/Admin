@@ -322,6 +322,7 @@ table.cu-matrix th, table.cu-matrix td { white-space: nowrap; }
 table.cu-matrix .cu-cell input[type=checkbox] { margin-inline-end: 4px; vertical-align: middle; }
 table.cu-matrix .cu-cell input[type=number], table.cu-matrix .cu-cell select { width: 72px; }
 table.cu-matrix .cu-cell.off { opacity: .45; }
+table.cu-matrix .cu-cell input.cu-receipt { width: 96px; margin-top: 3px; font-size: 12px; }
 table.cu-lines tr.cu-person td { background: var(--surface-2); font-weight: 600; }
 table.cu-lines input[type=number] { width: 84px; }
 table.cu-lines input.cu-receipt { width: 110px; }

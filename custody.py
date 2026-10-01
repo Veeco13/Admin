@@ -338,6 +338,63 @@ def user_names(s):
 # ---------------------------------------------------------------------------
 # منع التكرار (على عهد كل المستخدمين)
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# التقفيل المباشر: مبلغه «مستحق» بيتضاف على أقرب طلب عهدة لنفس المستلم
+# ---------------------------------------------------------------------------
+FUNDED = ("disbursed", "closed")
+
+
+def due_amount(s, c):
+    """مبلغ التقفيل المباشر (اللي اتنفّذ فعلًا)."""
+    return round(sum(amount(ln) for ln in s.scalars(select(M.CustodyLine).where(M.CustodyLine.custodyId == c.id)) if ln.done), 3)
+
+
+def carried(s, c):
+    """التقفيلات المباشرة المضافة على الطلب ده ← [(العهدة، المبلغ)]."""
+    return [(x, due_amount(s, x)) for x in s.scalars(select(M.Custody).where(M.Custody.carryToId == c.id, M.Custody.direct.is_(True),
+                                                                       M.Custody.status != "cancelled").order_by(M.Custody.no))]
+
+
+def link_dues(s, c, ids, ctx):
+    """ids = التقفيلات المباشرة اللي تتضاف على الطلب ده (None = سيب المربوط زي ما هو). لازم تكون لنفس المستلم، مقفولة،
+    ومش مضافة على طلب تاني. اللي اتشال من القايمة بيتفك. بيرجّع (إجمالي المستحقات، رسالة خطأ)."""
+    who = (c.custodian or "").strip()
+    for x, _ in carried(s, c):                        # المستلم في الطلب اتغيّر ← مستحقات المستلم القديم بتتفك
+        if (x.custodian or "").strip() != who:
+            x.carryToId = None
+    if ids is not None:
+        want = set(str(i) for i in ids)
+        for x, _ in carried(s, c):
+            if x.id not in want:
+                x.carryToId = None
+        for i in want:
+            x = s.get(M.Custody, i)
+            if x is None or not x.direct or not can_see(ctx, x):
+                return 0, "التقفيل المباشر غير موجود"
+            if x.carryToId == c.id:
+                continue
+            if x.status != "closed":
+                return 0, f"{custody_no(x)}: التقفيل المباشر لازم يكون مقفول علشان يتضاف على طلب"
+            if x.carryToId:
+                return 0, f"{custody_no(x)} اتضاف على طلب تاني بالفعل"
+            if (x.custodian or "").strip() != who:
+                return 0, f"{custody_no(x)} بتاع مستلم تاني ({x.custodian})"
+            x.carryToId = c.id
+    s.flush()
+    return round(sum(a for _, a in carried(s, c)), 3), None
+
+
+def sync_carrier(s, c):
+    """مبلغ التقفيل المباشر اتغيّر (إلغاء تقفيل / تعديل بند / إلغاء) ← «المطلوب» في الطلب اللي اتضاف عليه بيتحسب تاني
+    (لو لسه ماتصرفش — بعد الصرف الرصيد بيتحسب من المبالغ الفعلية)."""
+    carrier = s.get(M.Custody, c.carryToId) if c.direct and c.carryToId else None
+    if carrier is None or carrier.status != "requested":
+        return
+    s.flush()
+    planned = sum(ln.planned or 0 for ln in s.scalars(select(M.CustodyLine).where(M.CustodyLine.custodyId == carrier.id)))
+    carrier.requestedAmount = round(planned + sum(a for _, a in carried(s, carrier)), 3)
+
+
 def duplicates(s, tx, person_ids, exclude=None):
     """الأشخاص دول في عهد تانية من نفس النوع ← (مفتوحة، اتقفلت خلال DUP_DAYS يوم) — {رقم الشخص: (الاسم، رقم العهدة، صاحبها أو تاريخ التقفيل)}."""
     ids = [x for x in dict.fromkeys(str(p or "").strip() for p in person_ids) if x]
@@ -601,11 +658,21 @@ def expenses(s, ctx):
         c = custs.get(ln.custodyId)
         lines.append({"closingDate": db.ser(ln.closedDate), "costCenter": ln.costCenter, "companyId": cc_co.get(ln.costCenter) or ln.companyId,
                       "authority": ln.authority, "item": ln.itemName, "amount": amount(ln), "txType": c.txType if c else None, "status": st})
-    held = 0.0                                   # اتصرف للمستلمين ولسه ماتنفّذش (العهد المفتوحة اللي فيها حد من نطاقه)
+    held, carried_by = 0.0, {}                   # اتصرف للمستلمين ولسه ماتنفّذش (العهد المفتوحة اللي فيها حد من نطاقه)
+    spent = lambda c: sum(amount(x) for x in by_custody.get(c.id, []) if x.done)   # noqa: E731
+    for c in custs.values():
+        if c.direct and c.carryToId and c.status != "cancelled":
+            carried_by[c.carryToId] = carried_by.get(c.carryToId, 0) + spent(c)
     for c in custs.values():
         ls = by_custody.get(c.id, [])
-        if c.status == "disbursed" and any(ok(x.companyId, x.costCenter) for x in ls):
-            held += (c.disbursedAmount or 0) - sum(amount(x) for x in ls if x.done)
+        if not any(ok(x.companyId, x.costCenter) for x in ls):
+            continue
+        if c.direct:                             # اتصرف عليه من فلوس عهدة تانية ← بينقّص لحد ما الطلب اللي اتضاف عليه يتصرف
+            carrier = custs.get(c.carryToId)
+            if c.status in FUNDED and not (carrier is not None and carrier.status in FUNDED):
+                held -= spent(c)
+        elif c.status == "disbursed":
+            held += (c.disbursedAmount or 0) - carried_by.get(c.id, 0) - spent(c)
     return {"invoices": invoices, "lines": lines, "held": round(held, 3)}
 
 
@@ -618,7 +685,15 @@ def dump(s, ctx):
                                                        M.CustodyLine.personId, M.CustodyLine.position)):
         lines.setdefault(ln.custodyId, []).append(db.to_dict(ln))
     out, visible = [], set()
-    for c in s.scalars(select(M.Custody).order_by(M.Custody.no.desc())):
+    every = list(s.scalars(select(M.Custody).order_by(M.Custody.no.desc())))
+    by_id = {c.id: c for c in every}
+    amt = lambda x: float((x["actual"] if x["actual"] is not None else x["planned"]) or 0)   # noqa: E731
+    due = {c.id: round(sum(amt(x) for x in lines.get(c.id, []) if x["done"]), 3) for c in every if c.direct}
+    carried_list = {}                                 # الطلب ← التقفيلات المباشرة المضافة عليه
+    for c in every:
+        if c.direct and c.carryToId and c.status != "cancelled":
+            carried_list.setdefault(c.carryToId, []).append({"id": c.id, "number": custody_no(c), "amount": due[c.id]})
+    for c in every:
         ls = lines.get(c.id, [])
         if not can_see(ctx, c):
             continue
@@ -627,6 +702,12 @@ def dump(s, ctx):
             continue
         d = db.to_dict(c)
         d["lines"], d["number"], d["ownerName"] = ls, custody_no(c), names.get(c.ownerId, "")
+        carrier = by_id.get(c.carryToId) if c.carryToId else None
+        d["dueAmount"] = due.get(c.id) if c.direct else None                 # مبلغ التقفيل المباشر
+        d["carryToNumber"] = custody_no(carrier) if carrier is not None else ""
+        d["carryFunded"] = bool(carrier is not None and carrier.status in FUNDED)    # الطلب اللي اتضاف عليه اتصرف
+        d["carried"] = carried_list.get(c.id, [])                               # التقفيلات المباشرة المضافة على الطلب ده
+        d["carriedAmount"] = round(sum(x["amount"] for x in d["carried"]), 3)
         out.append(d)
         visible.add(c.id)
     invoices = []

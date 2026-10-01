@@ -2807,16 +2807,93 @@ def save_custody(cid=None):
             s.add(c)
         c.txType, c.custodian, c.companyId, c.notes = tx, who, co, (d.get("notes") or "").strip() or None
         c.requestDate = db.parse_date(d.get("requestDate")) or datetime.now().date()
-        c.requestedAmount = round(sum(x.planned or 0 for x in lines), 3)
         s.flush()
         for x in lines:
             x.custodyId = c.id
             s.add(x)
+        # التقفيلات المباشرة لنفس المستلم ← مبلغها بيتضاف على الطلب (dues مش مبعوتة = المربوط زي ما هو)
+        dues, msg = custody.link_dues(s, c, d.get("dues") if "dues" in d else None, me())
+        if msg:
+            s.rollback()
+            return err(msg)
+        c.requestedAmount = round(sum(x.planned or 0 for x in lines) + dues, 3)
         n = len({x.personId for x in lines})
         db.log_audit(s, "custody_edit" if cid else "custody_add",
                      f"{'تعديل طلب' if cid else 'طلب'} عهدة {custody.custody_no(c)} ({custody.TX_TYPES[tx]['label']}) — المستلم: {who} — "
-                     f"{n} شخص — {c.requestedAmount:g} د.ك", uname())
+                     f"{n} شخص — {c.requestedAmount:g} د.ك" + (f" (منها {dues:g} مستحقات تقفيل مباشر)" if dues else ""), uname())
         return jsonify({"ok": True, "id": c.id, "no": c.no, "number": custody.custody_no(c)})
+
+
+@app.post("/api/custodies/direct")
+@require("custody.edit", "custody.direct")
+def direct_custody():
+    """تقفيل عهدة مباشر — إجراء اتصرف عليه من فلوس عهدة لشخص مش في أي طلب: {txType, custodian, date, adminFee, notes,
+    persons: [{id, items: {بند: المبلغ الفعلي}, receipts: {بند: رقم الإيصال}, expiries: {بند: الانتهاء الجديد}}], force}.
+    بيتسجّل ويتقفل في خطوة واحدة (فاتورة لكل مركز تكلفة) من غير صرف — ومبلغه بيتضاف على أقرب طلب عهدة لنفس المستلم."""
+    d = body()
+    tx, today = d.get("txType"), datetime.now().date()
+    if tx not in custody.TX_TYPES:
+        return err("نوع المعاملة غير معروف")
+    who = (d.get("custodian") or "").strip()
+    if not who:
+        return err("اسم المستلم مطلوب")
+    when = db.parse_date(d.get("date")) or today
+    if when > today:
+        return err("تاريخ التقفيل لسه ماجاش")
+    persons = d.get("persons") or []
+    by_person = {str(p.get("id") or "").strip(): p for p in persons}
+    fee = custody.num(d.get("adminFee"))
+    with db.session_scope() as s:
+        fee = custody.settings(s)["supportFee"] if fee is None or fee < 0 else fee
+        open_, recent = custody.duplicates(s, tx, list(by_person))
+        if open_:
+            return err("موجودين في عهد مفتوحة من نفس النوع — قفّل الإجراء من العهدة نفسها: " + "، ".join(
+                f"{n} ({no}{' — ' + o if o else ''})" for n, no, o in open_.values()), 409, block=True)
+        if recent and not d.get("force"):
+            return err(f"اتقفل لهم نفس النوع خلال آخر {custody.DUP_DAYS} يوم: " + "، ".join(
+                f"{n} ({no} — {dt.strftime('%d/%m/%Y')})" for n, no, dt in recent.values()) + " — متأكد إنه إجراء جديد؟",
+                       409, warn=True)
+        lines, msg = custody.build_lines(s, tx, persons, me())
+        if msg:
+            return err(msg)
+        if any(x.planned is None for x in lines):
+            return err("اكتب المبلغ الفعلي لكل إجراء اتعمل")
+        c = M.Custody(id=db.new_id("cus"), no=custody.next_no(s), status="disbursed", direct=True, createdBy=uname(), createdAt=db.now())
+        custody.assign_owner(s, c, me().id)
+        c.txType, c.custodian, c.notes, c.requestDate = tx, who, (d.get("notes") or "").strip() or None, when
+        c.requestedAmount = round(sum(x.planned or 0 for x in lines), 3)
+        s.add(c)
+        s.flush()
+        for x in lines:
+            p = by_person.get(x.personId) or {}
+            x.custodyId, x.dupOk = c.id, x.personId in recent
+            x.done, x.doneDate, x.actual = True, when, x.planned
+            x.receiptNo = str((p.get("receipts") or {}).get(x.feeItemId) or "").strip() or None
+            s.add(x)
+        s.flush()
+        for x in lines:                               # بند التجديد بيحدّث بيانات الموظف ← الانتهاء الجديد لازم
+            if not (x.updatesField and x.personKind == "employee"):
+                continue
+            new = db.parse_date(((by_person.get(x.personId) or {}).get("expiries") or {}).get(x.feeItemId))
+            if new and x.oldExpiry and new == x.oldExpiry:        # بياناته اتحدّثت قبل التقفيل (تجديد سريع) ← نفس التاريخ مقبول
+                x.oldExpiry = None
+            msg = custody.record_expiry(s, c, x, new, uname()) if new else f"سجّل تاريخ الانتهاء الجديد: {x.personName} — {x.itemName}"
+            if msg:
+                s.rollback()
+                return err(msg, 400, block=True)
+        closed, invoices, msg = custody.close_lines(s, c, [x.id for x in lines], fee, when, uname())
+        if msg:
+            s.rollback()
+            return err(msg, 400, block=True)
+        for pid in {x.personId for x in lines if x.personKind == "employee"}:
+            custody.mark_renewed(s, c, pid, uname())
+        n = len({x.personId for x in lines})
+        db.log_audit(s, "custody_close",
+                     f"تقفيل مباشر {custody.custody_no(c)} ({custody.TX_TYPES[tx]['label']}) — المستلم: {who} — {len(lines)} إجراء لـ {n} شخص — "
+                     f"{c.requestedAmount:g} د.ك (هيتضاف على أقرب طلب عهدة) — الفواتير: "
+                     + "، ".join(f"{custody.invoice_no(i)} ({i.costCenter or '—'}) {i.total:g} د.ك" for i in invoices), uname())
+        return jsonify({"ok": True, "id": c.id, "number": custody.custody_no(c), "date": when.isoformat(), "due": c.requestedAmount,
+                        "invoices": [custody.invoice_no(i) for i in invoices]})
 
 
 @app.post("/api/custodies/<cid>/disburse")
@@ -2829,6 +2906,8 @@ def disburse_custody(cid):
         return err("المبلغ اللي اتصرف وتاريخه مطلوبين")
     with db.session_scope() as s:
         c = _custody_or_404(s, cid)
+        if c.direct:
+            return err("ده تقفيل مباشر — مابيتصرفلوش، مبلغه بيتضاف على أقرب طلب عهدة")
         if c.status not in custody.OPEN:
             return err("العهدة مقفولة أو ملغاة")
         first = c.status == "requested"
@@ -2872,6 +2951,7 @@ def update_custody_line(cid, lid):
                          + (f"الانتهاء الجديد {new.isoformat()}" if new else "مسح الانتهاء الجديد"), uname())
         if ln.personKind == "employee" and ("done" in d or "newExpiry" in d):
             custody.mark_renewed(s, c, ln.personId, uname())
+        custody.sync_carrier(s, c)
     return jsonify({"ok": True})
 
 
@@ -2932,6 +3012,7 @@ def reopen_custody(cid):
             return err(msg)
         if not n:
             return err("مفيش تقفيل بالتاريخ ده")
+        custody.sync_carrier(s, c)
         db.log_audit(s, "custody_edit", f"إلغاء تقفيل عهدة {custody.custody_no(c)} بتاريخ {when.isoformat()} ({n} بند)"
                                         + (f" — اتمسحت الفواتير: {'، '.join(numbers)}" if numbers else ""), uname())
     return jsonify({"ok": True})
@@ -3057,6 +3138,8 @@ def custody_closing_pdf(cid):
 def custody_request_pdf(cid):
     with db.session_scope() as s:
         c = _custody_or_404(s, cid)
+        if c.direct:
+            return err("ده تقفيل مباشر — مالوش طلب صرف (اطبع الملخص والفواتير من التقفيل)")
         data = custody_excel.request_workbook(s, c, uname(), _doc_lang(s))
         no = custody.custody_no(c)
         return _custody_pdf(s, data, f"طلب صرف عهدة {no}.pdf", f"طلب صرف عهدة {no}")
@@ -3067,10 +3150,22 @@ def custody_request_pdf(cid):
 def cancel_custody(cid):
     with db.session_scope() as s:
         c = _custody_or_404(s, cid)
-        if c.status != "requested":
+        if c.direct:                                   # تقفيل مباشر: بيتلغي بعد «إلغاء التقفيل» (مفيش فواتير ولا بنود مقفولة)
+            if c.status != "disbursed" or s.scalar(select(func.count()).select_from(M.CustodyLine).where(
+                    M.CustodyLine.custodyId == c.id, M.CustodyLine.closedDate.isnot(None))):
+                return err("ألغي التقفيل الأول (من «التقفيلات والفواتير»)، وبعدها التقفيل المباشر يتلغي")
+            carrier = s.get(M.Custody, c.carryToId) if c.carryToId else None
+            if carrier is not None and carrier.status in custody.FUNDED:
+                return err(f"مبلغه اتضاف على {custody.custody_no(carrier)} واتصرف — مينفعش يتلغي")
+            c.status = "cancelled"
+            custody.sync_carrier(s, c)                 # «المطلوب» في الطلب اللي كان مضاف عليه بينقص
+            c.carryToId = None
+        elif c.status != "requested":
             return err("العهدة اتصرفت خلاص، مينفعش تتلغي")
+        for x, _ in custody.carried(s, c):             # المستحقات اللي كانت مضافة على الطلب بترجع تستنى طلب تاني
+            x.carryToId = None
         c.status = "cancelled"
-        db.log_audit(s, "custody_delete", f"إلغاء عهدة {custody.custody_no(c)} — المستلم: {c.custodian}", uname())
+        db.log_audit(s, "custody_delete", f"إلغاء {'تقفيل مباشر' if c.direct else 'عهدة'} {custody.custody_no(c)} — المستلم: {c.custodian}", uname())
     return jsonify({"ok": True})
 
 

@@ -35,6 +35,12 @@ function invoiceStatusChip(inv) {
 function custodySettings() { return STATE.custodySettings || { issuerCompanyId: null, supportFee: 20, noSupportCostCenters: [] }; }
 const custodyNoSupport = cc => (custodySettings().noSupportCostCenters || []).includes(cc || '');
 const CUSTODY_STATUS = { requested: ['مطلوبة', 'orange'], disbursed: ['تم الصرف', 'blue'], closed: ['مقفولة', 'green'], cancelled: ['ملغاة', 'grey'] };
+/* ⚡ التقفيل المباشر (c.direct): إجراء اتصرف عليه من فلوس عهدة مع المستلم لشخص مش في أي طلب — اتسجّل واتقفل في خطوة
+   واحدة من غير صرف. مبلغه (c.dueAmount) مستحق للمستلم لحد ما يتضاف على طلب عهدة له (c.carryToId / carryToNumber)
+   والطلب ده يتصرف (c.carryFunded). والطلب نفسه شايل c.carried = [{id, number, amount}] و c.carriedAmount. */
+const custodyDirectTag = c => (c.carryToNumber
+  ? `<span class="small muted">↪ ${t('اتضاف لطلب')} <b class="num">${esc(c.carryToNumber)}</b>${c.carryFunded ? ' ✓' : ''}</span>`
+  : c.status === 'cancelled' ? '' : `<span class="small" style="color:var(--orange)">⏳ ${t('لسه مااتضافش لطلب')}</span>`);
 
 /** رقم العهدة: رمز صاحبها وقت الطلب + مسلسله «AA-0001» (custody.custody_no على السيرفر) */
 function custodyNo(c) { return c.number || 'CUS-' + String(c.no).padStart(4, '0'); }
@@ -68,6 +74,10 @@ function custodyStatusChip(st) {
   const [l, col] = CUSTODY_STATUS[st] || [st, 'grey'];
   return `<span class="chip" style="background:var(--${col}-soft);color:var(--${col})">${esc(t(l))}</span>`;
 }
+/** حالة العهدة — التقفيل المباشر اللي تقفيله اتلغى مالوش «تم الصرف» */
+function custodyChip(c) {
+  return c.direct && c.status === 'disbursed' ? `<span class="chip" style="background:var(--orange-soft);color:var(--orange)">${esc(t('تقفيله اتلغى'))}</span>` : custodyStatusChip(c.status);
+}
 /** مراحل نوع الطلب (للبند في جدول الرسوم) */
 function custodyFlowStages(flow) {
   return flow === 'gov' ? GOV_STAGES.filter(g => g.id !== 'awaiting_cancellation') : recruitStagesForSource(flow).filter(s => !s.rejected);
@@ -87,9 +97,14 @@ function custodyPersons(c) {
 function custodyTotals(c) {
   const ls = c.lines || [], people = custodyPersons(c);
   const spent = sum(ls.filter(l => l.done).map(custodyLineAmount));
-  const received = ['disbursed', 'closed'].includes(c.status) ? (c.disbursedAmount || 0) : 0;
+  const funded = ['disbursed', 'closed'].includes(c.status);
+  // gross = اللي اتصرف فعلًا. received = اللي يخص العهدة دي: الطلب ناقص مستحقات التقفيل المباشر المضافة عليه، والتقفيل
+  // المباشر مابياخدش حاجة لحد ما الطلب اللي اتضاف عليه يتصرف (قبلها مبلغه بالسالب = مستحق للمستلم)
+  const gross = !c.direct && funded ? (c.disbursedAmount || 0) : 0;
+  const received = c.direct ? (funded && c.carryFunded ? spent : 0) : funded ? gross - (c.carriedAmount || 0) : 0;
   const closed = people.filter(p => p.lines.every(l => l.closedDate));
-  return { planned: c.requestedAmount ?? sum(ls.map(l => l.planned)), received, spent, remaining: received - spent,
+  return { planned: (c.direct ? c.dueAmount : null) ?? c.requestedAmount ?? sum(ls.map(l => l.planned)), received, gross, spent, remaining: received - spent,
+    due: c.direct && funded && !c.carryFunded ? spent : 0,
     persons: people.length, ready: ls.filter(l => l.done && !l.closedDate).length,
     closed: closed.length, itemsDone: ls.filter(l => l.done).length, items: ls.length, itemsClosed: ls.filter(l => l.closedDate).length };
 }
@@ -113,16 +128,19 @@ function renderCustody() {
   const exTab = U.tab === 'expenses';            // 📊 لوحة المصروفات (expenses.js): كل العهد في النطاق — ليها مؤشراتها
   const all = custodiesInView();
   const open = all.filter(c => c.status === 'disbursed').map(custodyTotals);
+  // تقفيل مباشر مقفول ولسه مااتعوّضش ← المستلم صرفه من فلوس عهدة مفتوحة معاه
+  const dues = sum(all.filter(c => c.direct && c.status === 'closed').map(c => custodyTotals(c).due));
   const pending = invoicesInView().filter(i => i.status === 'pending');
   const owners = STATE.custodyUsers || [];
   const kpi = [[all.filter(c => c.status === 'requested').length, 'طلبات لسه ماتصرفتش', 'orange'], [open.length, 'عهد مفتوحة', 'blue'],
     [fmtMoney(sum(open.map(x => x.received))), 'اتصرف للمستلمين', ''], [fmtMoney(sum(open.map(x => x.spent))), 'اتنفّذ فعلًا', ''],
-    [fmtMoney(sum(open.map(x => x.remaining))), 'الرصيد مع المستلمين', 'purple'], [sum(open.map(x => x.ready)), 'إجراء جاهز للتقفيل', 'green'],
+    [fmtMoney(sum(open.map(x => x.remaining)) - dues), 'الرصيد مع المستلمين', 'purple'], [sum(open.map(x => x.ready)), 'إجراء جاهز للتقفيل', 'green'],
     [`${pending.length} · ${fmtMoney(sum(pending.map(i => i.total)))}`, 'فواتير بانتظار الحسابات', 'orange']];
   viewRoot().innerHTML = `<div class="page-head"><div><h1>${t('العهد والمصروفات')}</h1><div class="sub">${all.length} ${t('عهدة')}</div></div>
     <div class="actions">${custodySeeAll() ? `<select id="cu-owner" title="${esc(t('عهد مين'))}">${opt('me', '👤 ' + t('عهدي أنا'), U.owner === 'me')}${opt('all', '👥 ' + t('كل المستخدمين'), U.owner === 'all')}
         ${owners.filter(u => String(u.id) !== String(STATE.me.id)).map(u => opt(String(u.id), `${u.name}${u.code ? ' · ' + u.code : ''}`, String(U.owner) === String(u.id))).join('')}</select>` : ''}
       <button class="btn primary write-only" data-p="custody.edit" id="cu-add">➕ ${t('طلب عهدة')}</button>
+      <button class="btn write-only" data-p="custody.edit custody.direct" id="cu-direct" title="${esc(t('إجراء اتصرف عليه من فلوس عهدة لشخص مش في أي طلب'))}">🔒 ${t('تقفيل عهدة')}</button>
       <button class="btn" id="cu-plan">📅 ${t('خطة التجديدات')}</button>
       <button class="btn" data-p="custody.fees" id="cu-fees">⚙️ ${t('جدول الرسوم')}</button>
       <button class="btn" data-p="custody.fees" id="cu-set">🧾 ${t('إعدادات الفواتير')}</button></div></div>
@@ -132,6 +150,7 @@ function renderCustody() {
   const upd = p => { Object.assign(UI.custody, p); saveUiStateToLocalStorage(); render(); };
   $$('[data-cutab]').forEach(b => b.onclick = () => upd({ tab: b.dataset.cutab }));
   const add = $('#cu-add'); if (add) add.onclick = () => openCustodyRequestModal();
+  const dir = $('#cu-direct'); if (dir) dir.onclick = () => openCustodyRequestModal(null, { direct: true });
   $('#cu-plan').onclick = () => openRenewalPlanModal();
   const fees = $('#cu-fees'); if (fees) fees.onclick = () => openFeeItemsModal();
   const set = $('#cu-set'); if (set) set.onclick = () => openCustodySettingsModal();
@@ -163,27 +182,28 @@ function renderCustody() {
 function custodyListHtml() {
   const U = UI.custody, q = norm(U.q);
   const showOwner = custodySeeAll() && U.owner !== 'me';
-  const list = custodiesInView().filter(c => (!U.status || c.status === U.status) && (!U.type || c.txType === U.type)
+  const list = custodiesInView().filter(c => (!U.status || (U.status === 'direct' ? c.direct : c.status === U.status)) && (!U.type || c.txType === U.type)
     && (!U.custodian || c.custodian === U.custodian)
     && (!q || [c.custodian, custodyNo(c), c.ownerName, c.notes, ...(c.lines || []).flatMap(l => [l.personName, l.civilId])].some(v => norm(v).includes(q))));
   return `<div class="filters"><input type="search" id="cuf-q" placeholder="${esc(t('بحث بالرقم أو المستلم أو اسم موظف…'))}" value="${esc(U.q)}">
-      <select id="cuf-status">${opt('', t('— كل الحالات —'), !U.status)}${Object.entries(CUSTODY_STATUS).map(([k, [l]]) => opt(k, t(l), k === U.status)).join('')}</select>
+      <select id="cuf-status">${opt('', t('— كل الحالات —'), !U.status)}${Object.entries(CUSTODY_STATUS).map(([k, [l]]) => opt(k, t(l), k === U.status)).join('')}${opt('direct', '⚡ ' + t('تقفيل مباشر'), U.status === 'direct')}</select>
       <select id="cuf-type">${opt('', t('— كل الأنواع —'), !U.type)}${Object.entries(CUSTODY_TYPES).map(([k, v]) => opt(k, t(v.label), k === U.type)).join('')}</select>
       <select id="cuf-cust">${opt('', t('— كل المستلمين —'), !U.custodian)}${uniq(custodiesInView().map(c => c.custodian)).sort().map(x => opt(x, x, x === U.custodian)).join('')}</select>
       <button class="btn sm ghost" id="cuf-clear">✕ ${t('مسح الفلاتر')}</button></div>
     <div class="table-wrap"><table class="data"><thead><tr><th>${t('الرقم')}</th>${showOwner ? `<th>${t('صاحب العهدة')}</th>` : ''}<th>${t('النوع')}</th><th>${t('المستلم')}</th><th>${t('الأشخاص')}</th>
       <th>${t('المطلوب')}</th><th>${t('اتصرف')}</th><th>${t('اتنفّذ')}</th><th>${t('الرصيد')}</th><th>${t('البنود')}</th><th>${t('الحالة')}</th><th>${t('تاريخ الطلب')}</th></tr></thead><tbody>
-    ${list.map(c => { const tt = custodyTotals(c); return `<tr class="clickable" data-cu="${c.id}"><td class="num nowrap"><b>${esc(custodyNo(c))}</b></td>${showOwner ? `<td class="small">${esc(c.ownerName || '—')}</td>` : ''}<td>${esc(custodyTypeLabel(c.txType))}</td>
+    ${list.map(c => { const tt = custodyTotals(c); return `<tr class="clickable" data-cu="${c.id}"><td class="nowrap"><b class="num">${esc(custodyNo(c))}</b>${c.direct ? `<div class="small"><span class="chip">⚡ ${t('تقفيل مباشر')}</span></div><div>${custodyDirectTag(c)}</div>`
+        : (c.carried || []).length ? `<div class="small muted" title="${esc(t('مستحقات تقفيل مباشر مضافة على الطلب'))}">⚡ + ${esc(c.carried.map(x => x.number).join('، '))}</div>` : ''}</td>${showOwner ? `<td class="small">${esc(c.ownerName || '—')}</td>` : ''}<td>${esc(custodyTypeLabel(c.txType))}</td>
       <td>${esc(c.custodian)}</td><td class="num">${tt.persons}${tt.ready ? ` <span class="small" style="color:var(--green)" title="${esc(t('إجراء جاهز للتقفيل'))}">(✓ ${tt.ready})</span>` : ''}</td>
-      <td class="num">${fmtMoney(tt.planned)}</td><td class="num">${tt.received ? fmtMoney(tt.received) : '—'}</td><td class="num">${fmtMoney(tt.spent)}</td>
-      <td class="num" style="${tt.remaining < 0 ? 'color:var(--red)' : ''}">${tt.received ? fmtMoney(tt.remaining) : '—'}</td>
+      <td class="num">${fmtMoney(tt.planned)}</td><td class="num">${tt.gross ? fmtMoney(tt.gross) : '—'}</td><td class="num">${fmtMoney(tt.spent)}</td>
+      <td class="num" style="${tt.remaining < 0 ? 'color:var(--red)' : ''}"${tt.due ? ` title="${esc(t('مستحق للمستلم — بيتضاف على أقرب طلب عهدة له'))}"` : ''}>${tt.gross || tt.due ? fmtMoney(tt.remaining) : '—'}</td>
       <td><div class="small">${tt.itemsDone}/${tt.items}</div><div class="progress" style="width:80px"><i style="width:${tt.items ? 100 * tt.itemsDone / tt.items : 0}%"></i></div></td>
-      <td>${custodyStatusChip(c.status)}</td><td class="num small">${fmtDate(c.requestDate)}</td></tr>`; }).join('') || `<tr><td colspan="12" class="empty">${t('لا توجد عهد')}</td></tr>`}
+      <td>${custodyChip(c)}</td><td class="num small">${fmtDate(c.requestDate)}</td></tr>`; }).join('') || `<tr><td colspan="12" class="empty">${t('لا توجد عهد')}</td></tr>`}
     </tbody></table></div>`;
 }
 function custodyBalancesHtml() {
   const rows = custodianBalances();
-  return `<div class="notice small" style="margin-bottom:8px">${t('الرصيد = اللي اتصرف للمستلم − اللي اتنفّذ فعلًا (البنود اللي «تم»). الطلبات اللي لسه ماتصرفتش مش محسوبة.')}</div>
+  return `<div class="notice small" style="margin-bottom:8px">${t('الرصيد = اللي اتصرف للمستلم − اللي اتنفّذ فعلًا (البنود اللي «تم»). الطلبات اللي لسه ماتصرفتش مش محسوبة.')} ${t('التقفيل المباشر بينقّص رصيد المستلم لحد ما الطلب اللي اتضاف عليه مبلغه يتصرف.')}</div>
     <div class="table-wrap"><table class="data"><thead><tr><th>${t('المستلم')}</th><th>${t('اتصرف له')}</th><th>${t('اتنفّذ')}</th><th>${t('الرصيد معاه')}</th><th>${t('عهد مفتوحة')}</th><th>${t('طلبات لسه ماتصرفتش')}</th></tr></thead><tbody>
     ${rows.map(b => `<tr class="clickable" data-cust="${esc(b.name)}"><td><b>${esc(b.name)}</b></td><td class="num">${fmtMoney(b.received)}</td><td class="num">${fmtMoney(b.spent)}</td>
       <td class="num" style="font-weight:700;${b.remaining < 0 ? 'color:var(--red)' : ''}">${fmtMoney(b.remaining)}</td><td class="num">${b.open}</td><td class="num">${b.requested}</td></tr>`).join('')
@@ -273,27 +293,36 @@ function openCustodySettingsModal() {
 /* ---------- طلب عهدة (جديد أو تعديل قبل الصرف) ---------- */
 function openCustodyRequestModal(id = null, preset = null) {
   const old = id ? (STATE.custodies || []).find(c => c.id === id) : null;
-  const S = { tx: old ? old.txType : (preset && preset.tx) || 'renewal', persons: new Map(), quick: '' };    // id ← {items: {رقم البند: المبلغ}}
+  // 🔒 تقفيل عهدة مباشر (preset.direct): نفس النافذة — الإجراءات اللي اتعملت بمبالغها الفعلية ← بتتقفل وتطلع فواتيرها على طول
+  const direct = !old && !!(preset && preset.direct);
+  // id ← {items: {رقم البند: المبلغ}، وللتقفيل المباشر: receipts: {البند: رقم الإيصال}، expiries: {البند: الانتهاء الجديد}}
+  const S = { tx: old ? old.txType : (preset && preset.tx) || 'renewal', persons: new Map(), quick: '', dues: new Map() };
+  const extra = (pid, k) => { const p = S.persons.get(pid); return p[k] || (p[k] = {}); };
   const snap = {};                                                                  // بيانات الشخص من العهدة القديمة
   if (old) custodyPersons(old).forEach(p => { snap[p.id] = p; S.persons.set(p.id, { items: Object.fromEntries(p.lines.map(l => [l.feeItemId, l.planned])) }); });
   if (!old && preset) (preset.persons || []).forEach(p => S.persons.set(p.id, { items: { ...p.items } }));   // من خطة التجديدات
   const fees = () => (STATE.feeItems || []).filter(f => f.txType === S.tx && f.active);
   const defaults = () => Object.fromEntries(fees().map(f => [f.id, f.amount ?? null]));
   const m = openModal({
-    title: old ? `✏️ ${t('تعديل طلب العهدة')} ${esc(custodyNo(old))}` : '➕ ' + t('طلب عهدة'), size: 'wide',
+    title: direct ? '🔒 ' + t('تقفيل عهدة مباشر') : old ? `✏️ ${t('تعديل طلب العهدة')} ${esc(custodyNo(old))}` : '➕ ' + t('طلب عهدة'), size: 'wide',
     body: `<div class="form" id="cu-form">
         <label>${t('نوع المعاملة')}<select name="txType">${Object.entries(CUSTODY_TYPES).map(([k, v]) => opt(k, t(v.label), k === S.tx)).join('')}</select></label>
         <label><span class="req">${t('المستلم')}</span><input name="custodian" list="dl-custodians" value="${esc(old ? old.custodian : '')}" placeholder="${esc(t('اسم المندوب'))}"></label>
-        <label>${t('تاريخ الطلب')}<input type="date" name="requestDate" value="${esc(old ? old.requestDate || '' : todayISO())}"></label>
+        ${direct ? `<label><span class="req">${t('تاريخ التقفيل')}</span><input type="date" name="date" value="${todayISO()}" max="${todayISO()}"></label>
+        <label>${t('الدعم الإداري لكل موظف (د.ك)')}<input type="number" step="0.001" min="0" name="adminFee" value="${esc(custodySettings().supportFee ?? 20)}"></label>`
+          : `<label>${t('تاريخ الطلب')}<input type="date" name="requestDate" value="${esc(old ? old.requestDate || '' : todayISO())}"></label>`}
         <label class="full">${t('ملاحظات')}<input name="notes" value="${esc(old ? old.notes || '' : '')}"></label></div>
+      ${direct ? `<div class="notice small" style="margin-top:8px">${t('للإجراء اللي المستلم صرف عليه من فلوس عهدة معاه لشخص مش في أي طلب: بيتسجّل ويتقفل على طول وتطلع فواتيره، ورصيد المستلم بينقص بالمبلغ — والمبلغ بيتضاف على أقرب طلب عهدة له.')}</div>` : ''}
       <datalist id="dl-custodians">${uniq(custodiesInView().map(c => c.custodian)).map(x => `<option value="${esc(x)}">`).join('')}</datalist>
       <h4 class="cu-h">${t('الأشخاص')} <span class="small muted" id="cu-kind"></span></h4>
       <div class="row" style="gap:8px;flex-wrap:wrap"><input type="search" id="cu-q" placeholder="${esc(t('بحث بالاسم أو الرقم المدني…'))}" style="flex:1;min-width:200px">
         <span id="cu-quick"></span><span class="small muted" id="cu-sel-n"></span></div>
       <div class="cu-pick-list" id="cu-pick"></div>
-      <h4 class="cu-h">${t('البنود والمبالغ')} <span class="small muted">(${t('شيل علامة البند اللي الشخص مش محتاجه')})</span></h4>
-      <div id="cu-matrix"></div>`,
-    foot: `<button class="btn primary" data-save="print">🖨️ ${t('حفظ ومعاينة الطلب')}</button><button class="btn" data-save="">💾 ${t('حفظ')}</button>
+      <h4 class="cu-h">${direct ? `${t('الإجراءات والمبالغ الفعلية')} <span class="small muted">(${t('علّم الإجراءات اللي اتعملت واكتب مبلغها الفعلي')})</span>`
+        : `${t('البنود والمبالغ')} <span class="small muted">(${t('شيل علامة البند اللي الشخص مش محتاجه')})</span>`}</h4>
+      <div id="cu-matrix"></div><div id="cu-exp" style="margin-top:10px"></div><div id="cu-dues"></div><div class="row cu-cl-sum" id="cu-sum"></div>`,
+    foot: `${direct ? `<button class="btn primary" data-go>🔒 ${t('تقفيل وإصدار الفواتير')}</button>`
+        : `<button class="btn primary" data-save="print">🖨️ ${t('حفظ ومعاينة الطلب')}</button><button class="btn" data-save="">💾 ${t('حفظ')}</button>`}
       <span class="spacer"></span><button class="btn" data-close>${t('إلغاء')}</button>`,
   });
   const E = m.el;
@@ -332,21 +361,81 @@ function openCustodyRequestModal(id = null, preset = null) {
     if (CUSTODY_TYPES[S.tx].kuwaiti === false && !CUSTODY_TYPES[S.tx].doc) $('#cu-pick', E).insertAdjacentHTML('beforeend', `<div class="small muted" style="padding:6px 10px">🇰🇼 ${t('العمالة الوطنية ليها «تجديد إذن عمل — عمالة وطنية»')}</div>`);
     $('#cu-sel-n', E).textContent = `${t('المحددين')}: ${S.persons.size}`;
     $$('[data-pick]', E).forEach(cb => cb.onchange = () => {
-      if (cb.checked) S.persons.set(cb.dataset.pick, { items: defaults() }); else S.persons.delete(cb.dataset.pick);
+      // الطلب: كل البنود متعلّمة (الشخص محتاجها كلها غالبًا). التقفيل المباشر: المستخدم بيعلّم اللي اتعمل بس
+      if (cb.checked) S.persons.set(cb.dataset.pick, { items: direct ? {} : defaults() }); else S.persons.delete(cb.dataset.pick);
       drawPick(); drawMatrix();
     });
     const qk = $('[data-quick]', E); if (qk) qk.onclick = () => { S.quick = S.quick ? '' : 'soon'; drawPick(); };
   };
+  const val = v => (v === null || v === '' || isNaN(Number(v)) ? 0 : Number(v));
+  const grand = () => sum([...S.persons.values()].flatMap(p => Object.values(p.items).map(val)));
+  // الطلب: التقفيلات المباشرة المقفولة لنفس المستلم اللي لسه مااتضافتش لطلب (أو مضافة على الطلب ده) ← مبلغها بيتضاف عليه
+  const dueList = () => {
+    const who = ($('[name="custodian"]', E).value || '').trim();
+    return direct || !who ? [] : (STATE.custodies || []).filter(x => x.direct && x.status === 'closed' && (x.custodian || '').trim() === who
+      && (!x.carryToId || (old && x.carryToId === old.id)));
+  };
+  const duesOn = () => dueList().filter(x => S.dues.get(x.id));
+  const drawSum = () => {
+    const box = $('#cu-sum', E), g = grand(), chip = (l, v, on) => `<span class="chip${on ? ' on' : ''}">${esc(t(l))}: <b>${v}</b></span>`;
+    if (!direct) {
+      const d = sum(duesOn().map(x => x.dueAmount || 0));
+      box.innerHTML = dueList().length ? chip('بنود الطلب', fmtMoney(g)) + chip('مستحقات تقفيل مباشر', fmtMoney(d)) + chip('إجمالي المطلوب', fmtMoney(g + d), true) : '';
+      return;
+    }
+    const ps = [...S.persons.entries()].filter(([, p]) => Object.keys(p.items).length);
+    const cc = pid => (kind() === 'employee' ? IDX.employee[pid] : (STATE.candidates || []).find(c => c.id === pid) || {}).costCenter || '';
+    const sup = (Number($('[name="adminFee"]', E).value) || 0) * ps.filter(([pid]) => !custodyNoSupport(cc(pid))).length;
+    const who = ($('[name="custodian"]', E).value || '').trim(), bal = (custodianBalances().find(b => b.name === who) || { remaining: 0 }).remaining;
+    box.innerHTML = !ps.length ? '' : chip('الإجراءات', sum(ps.map(([, p]) => Object.keys(p.items).length))) + chip('الأشخاص', ps.length)
+      + chip('الفواتير', uniq(ps.map(([pid]) => cc(pid))).length) + chip('الرسوم الحكومية', fmtMoney(g)) + chip('الدعم الإداري', fmtMoney(sup))
+      + chip('إجمالي الفواتير', fmtMoney(g + sup), true)
+      + (who ? `<span class="chip" style="background:var(--purple-soft);color:var(--purple)">${esc(t('الرصيد مع المستلم'))}: <b>${fmtMoney(bal)}</b> ← <b${bal - g < 0 ? ' style="color:var(--red)"' : ''}>${fmtMoney(bal - g)}</b></span>` : '');
+  };
+  const drawDues = () => {
+    const box = $('#cu-dues', E), list = dueList();
+    list.forEach(x => { if (!S.dues.has(x.id)) S.dues.set(x.id, old ? x.carryToId === old.id : true); });   // طلب جديد ← متعلّمة
+    box.innerHTML = !list.length ? '' : `<h4 class="cu-h">⚡ ${t('إجراءات اتقفلت مباشر — مستحقة للمستلم')} <span class="small muted">(${t('مبلغها بيتضاف على الطلب ده — شيل العلامة لو هتتضاف على طلب تاني')})</span></h4>
+      <div class="cu-pick-list" style="max-height:180px">${list.map(x => `<label class="${S.dues.get(x.id) ? 'on' : ''}"><input type="checkbox" data-due="${esc(x.id)}" ${S.dues.get(x.id) ? 'checked' : ''}>
+        <b class="num">${esc(custodyNo(x))}</b><span class="small muted">${esc(custodyTypeLabel(x.txType))} · ${fmtDate(x.closedDate || x.requestDate)} · ${esc(uniq((x.lines || []).map(l => l.personName)).join('، '))}</span>
+        <span class="spacer"></span><b class="num">${fmtMoney(x.dueAmount)}</b></label>`).join('')}</div>`;
+    $$('[data-due]', box).forEach(cb => cb.onchange = () => { S.dues.set(cb.dataset.due, cb.checked); cb.closest('label').classList.toggle('on', cb.checked); drawSum(); });
+    drawSum();
+  };
+  // التقفيل المباشر: بند التجديد بيحدّث بيانات الموظف ← الانتهاء الجديد مطلوب (زي نافذة التقفيل)
+  const expRows = () => {
+    const out = [];
+    if (direct && kind() === 'employee') S.persons.forEach((p, pid) => fees().forEach(f => { if (f.id in p.items && CUSTODY_EXPIRY_FIELDS[f.updatesField]) out.push({ pid, f, old: (IDX.employee[pid] || {})[f.updatesField] || '' }); }));
+    return out;
+  };
+  const drawExp = () => {
+    const box = $('#cu-exp', E), rows = expRows();
+    if (!rows.length) { box.innerHTML = ''; return; }
+    box.innerHTML = `<h4 class="cu-h">📅 ${t('تواريخ الانتهاء الجديدة')} (${rows.length})</h4>
+      <div class="small muted" style="margin-bottom:6px">${t('التقفيل بيحدّث بيانات الموظف — التاريخ الجديد مطلوب لكل بند تجديد.')}</div>
+      <div class="table-wrap"><table class="data"><thead><tr><th>${t('الموظف')}</th><th>${t('البند')}</th><th>${t('كان')}</th><th><span class="req">${t('الانتهاء الجديد')}</span></th></tr></thead><tbody>
+      ${rows.map(({ pid, f, old: was }) => `<tr><td><b>${esc(info(pid).name)}</b></td><td>${esc(f.name)} <span class="small muted">(${esc(t(CUSTODY_EXPIRY_FIELDS[f.updatesField]))})</span></td>
+        <td class="num">${fmtDate(was) || '—'}</td><td><div class="row" style="gap:4px;flex-wrap:nowrap"><input type="date" data-dexp="${esc(pid)}|${f.id}" value="${esc(extra(pid, 'expiries')[f.id] || '')}">
+          ${was ? `<button type="button" class="btn sm ghost" data-dplus="${esc(pid)}|${f.id}|1" title="${esc(t('سنة من التاريخ القديم'))}">+1</button><button type="button" class="btn sm ghost" data-dplus="${esc(pid)}|${f.id}|2" title="${esc(t('سنتين من التاريخ القديم'))}">+2</button>` : ''}</div></td></tr>`).join('')}</tbody></table></div>`;
+    $$('[data-dexp]', box).forEach(i => i.oninput = () => { const [pid, fid] = i.dataset.dexp.split('|'); extra(pid, 'expiries')[fid] = i.value; });
+    $$('[data-dplus]', box).forEach(b => b.onclick = () => {
+      const [pid, fid, n] = b.dataset.dplus.split('|'), row = rows.find(r => r.pid === pid && r.f.id === fid);
+      const i = $$('[data-dexp]', box).find(x => x.dataset.dexp === `${pid}|${fid}`);
+      i.value = extra(pid, 'expiries')[fid] = addYearsISO(row.old, Number(n));
+    });
+  };
   const drawMatrix = () => {
     const fs = fees(), box = $('#cu-matrix', E);
-    if (!fs.length) { box.innerHTML = `<div class="notice warn">${t('مفيش بنود مفعّلة للنوع ده في جدول الرسوم')}</div>`; return; }
-    if (!S.persons.size) { box.innerHTML = `<div class="empty">${t('اختار الأشخاص من القائمة فوق')}</div>`; return; }
+    drawExp();
+    if (!fs.length) { box.innerHTML = `<div class="notice warn">${t('مفيش بنود مفعّلة للنوع ده في جدول الرسوم')}</div>`; drawSum(); return; }
+    if (!S.persons.size) { box.innerHTML = `<div class="empty">${t('اختار الأشخاص من القائمة فوق')}</div>`; drawSum(); return; }
     const cell = (pid, f) => {
       const it = S.persons.get(pid).items, on = f.id in it, v = it[f.id];
       const input = f.options
         ? `<select data-amt="${esc(pid)}|${f.id}" ${on ? '' : 'disabled'}>${f.options.split(',').map(o => opt(o, o, Number(o) === Number(v))).join('')}</select>`
         : `<input type="number" step="0.001" min="0" data-amt="${esc(pid)}|${f.id}" value="${v ?? ''}" ${f.amount == null ? `placeholder="${esc(t('المبلغ'))}"` : ''} ${on ? '' : 'disabled'}>`;
-      return `<td class="cu-cell ${on ? '' : 'off'}"><input type="checkbox" data-inc="${esc(pid)}|${f.id}" ${on ? 'checked' : ''}>${input}</td>`;
+      const rc = direct && on ? `<div><input class="cu-receipt" data-rc="${esc(pid)}|${f.id}" value="${esc(extra(pid, 'receipts')[f.id] || '')}" placeholder="${esc(t('رقم الإيصال'))}"></div>` : '';
+      return `<td class="cu-cell ${on ? '' : 'off'}"><input type="checkbox" data-inc="${esc(pid)}|${f.id}" ${on ? 'checked' : ''}>${input}${rc}</td>`;
     };
     box.innerHTML = `<div class="table-wrap"><table class="data cu-matrix"><thead><tr><th>${t('الاسم')}</th>
         ${fs.map(f => `<th>${esc(f.name)}<div class="small muted">${f.options ? `<select data-all="${f.id}">${opt('', t('للكل…'), true)}${f.options.split(',').map(o => opt(o, o, false)).join('')}</select>` : f.amount != null ? rptNum(f.amount) : t('مفتوح')}</div></th>`).join('')}
@@ -356,11 +445,12 @@ function openCustodyRequestModal(id = null, preset = null) {
       <tfoot><tr><td>${t('الإجمالي')} (${S.persons.size})</td>${fs.map(f => `<td class="num" data-coltot="${f.id}"></td>`).join('')}<td class="num"><b id="cu-grand"></b></td><td></td></tr></tfoot></table></div>`;
     translateDomText(box);
     const totals = () => {
-      const val = v => (v === null || v === '' || isNaN(Number(v)) ? 0 : Number(v));
+      drawSum();
       S.persons.forEach((p, pid) => { const el = $(`[data-rowtot="${CSS.escape(pid)}"]`, E); if (el) el.textContent = rptNum(sum(Object.values(p.items).map(val))); });
       fs.forEach(f => { $(`[data-coltot="${f.id}"]`, E).textContent = rptNum(sum([...S.persons.values()].map(p => (f.id in p.items ? val(p.items[f.id]) : 0)))); });
-      $('#cu-grand', E).textContent = rptNum(sum([...S.persons.values()].flatMap(p => Object.values(p.items).map(val))));
+      $('#cu-grand', E).textContent = rptNum(grand());
     };
+    $$('[data-rc]', box).forEach(inp => inp.oninput = () => { const [pid, fid] = inp.dataset.rc.split('|'); extra(pid, 'receipts')[fid] = inp.value; });
     $$('[data-inc]', box).forEach(cb => cb.onchange = () => {
       const [pid, fid] = cb.dataset.inc.split('|'), it = S.persons.get(pid).items;
       if (cb.checked) it[fid] = (fs.find(f => f.id === fid) || {}).amount ?? null; else delete it[fid];
@@ -384,7 +474,40 @@ function openCustodyRequestModal(id = null, preset = null) {
     S.tx = ev.target.value; S.persons.clear(); S.quick = ''; drawPick(); drawMatrix();
   };
   $('#cu-q', E).addEventListener('input', debounce(drawPick, 200));
-  drawPick(); drawMatrix();
+  $('[name="custodian"]', E).addEventListener('input', debounce(() => (direct ? drawSum() : drawDues()), 200));
+  if (direct) $('[name="adminFee"]', E).addEventListener('input', drawSum);
+  drawPick(); drawMatrix(); drawDues();
+  const go = $('[data-go]', E);
+  if (go) go.onclick = async () => {                       // 🔒 تقفيل مباشر
+    const d = formValues($('#cu-form', E));
+    if (!d.custodian) return openBlockAlert(t('اسم المستلم مطلوب'));
+    if (!d.date) return openBlockAlert(t('اختار تاريخ التقفيل'));
+    if (d.date > todayISO()) return openBlockAlert(t('تاريخ التقفيل لسه ماجاش'));
+    if (!S.persons.size) return openBlockAlert(t('اختار الشخص اللي اتعمل له الإجراء'));
+    const empty = [...S.persons.entries()].filter(([, p]) => !Object.keys(p.items).length).map(([pid]) => info(pid).name);
+    if (empty.length) return openBlockAlert(`${t('علّم الإجراءات اللي اتعملت لـ')}: ${esc(empty.join('، '))}`);
+    if ([...S.persons.values()].some(p => Object.values(p.items).some(v => v === null || v === '' || isNaN(Number(v))))) return openBlockAlert(t('اكتب المبلغ الفعلي لكل إجراء اتعمل'));
+    const exps = expRows().map(r => ({ ...r, v: extra(r.pid, 'expiries')[r.f.id] || '' }));
+    const miss = exps.filter(r => !r.v).length;
+    if (miss) return openBlockAlert(`${t('سجّل تاريخ الانتهاء الجديد لكل بنود التجديد')} (${miss})`);
+    const back = exps.find(r => r.old && r.v < r.old);
+    if (back) return openBlockAlert(`${esc(info(back.pid).name)}: ${t('الانتهاء الجديد لازم يبقى بعد القديم')} (${fmtDate(back.old)})`);
+    const persons = [...S.persons.entries()].map(([pid, p]) => ({ id: pid, items: p.items,
+      receipts: Object.fromEntries(Object.entries(p.receipts || {}).filter(([fid]) => fid in p.items)),
+      expiries: Object.fromEntries(exps.filter(r => r.pid === pid).map(r => [r.f.id, r.v])) }));
+    const n = sum(persons.map(p => Object.keys(p.items).length));
+    if (!await openConfirm(`${t('تقفيل مباشر')}: ${n} ${t('إجراء')} — ${fmtMoney(grand())} — ${t('المستلم')}: ${esc(d.custodian)}.<br>${t('الفواتير هتطلع على طول، ورصيد المستلم هينقص بالمبلغ لحد ما يتضاف على أقرب طلب عهدة له. تكمل؟')}`, { okLabel: t('تقفيل وإصدار الفواتير') })) return;
+    const send = force => persist('POST', '/api/custodies/direct', { txType: S.tx, custodian: d.custodian, date: d.date, adminFee: d.adminFee, notes: d.notes, persons, force }, 'تم التقفيل');
+    let res;
+    try { res = await send(false); } catch (e) {
+      if (e.data && e.data.block) return openBlockAlert(esc(e.message));
+      if (!(e.status === 409 && e.data && e.data.warn) || !await openConfirm(esc(e.message), { okLabel: t('إجراء جديد — كمّل') })) return;
+      try { res = await send(true); } catch (e2) { if (e2.data && e2.data.block) openBlockAlert(esc(e2.message)); return; }
+    }
+    m.close();
+    openCustodyDetails(res.id);
+    custodyPreview(`/api/custodies/${res.id}/closing.pdf?date=${res.date}`);
+  };
   $$('[data-save]', E).forEach(b => b.onclick = async () => {
     const d = formValues($('#cu-form', E));
     if (!d.custodian) return openBlockAlert(t('اسم المستلم مطلوب'));
@@ -392,7 +515,7 @@ function openCustodyRequestModal(id = null, preset = null) {
     if (!persons.length) return openBlockAlert(t('اختار موظف واحد على الأقل وبند واحد على الأقل'));
     const open = persons.filter(p => Object.values(p.items).some(v => v === null || v === '')).length;
     if (open && !await openConfirm(`${t('فيه بنود من غير مبلغ (زي التصديقات) عند')} ${open} ${t('شخص — هتتحسب صفر في الطلب لحد ما تتكتب. تكمل؟')}`)) return;
-    const send = force => persist(old ? 'PUT' : 'POST', old ? `/api/custodies/${old.id}` : '/api/custodies', { ...d, txType: S.tx, persons, force }, 'تم الحفظ');
+    const send = force => persist(old ? 'PUT' : 'POST', old ? `/api/custodies/${old.id}` : '/api/custodies', { ...d, txType: S.tx, persons, force, dues: duesOn().map(x => x.id) }, 'تم الحفظ');
     let res;
     try { res = await send(false); } catch (e) {
       // اتقفل لهم نفس النوع خلال 90 يوم ← تأكيد (والتقفيل بعد كده بيعدّيهم)
@@ -536,16 +659,21 @@ function openCustodyDetails(id) {
           ${base ? `<button type="button" class="btn sm ghost" data-plus="${l.id}|1" title="${esc(t('سنة من التاريخ القديم'))}">+1</button><button type="button" class="btn sm ghost" data-plus="${l.id}|2" title="${esc(t('سنتين من التاريخ القديم'))}">+2</button>` : ''}</div>
         <div class="small muted">${info}</div></td>`;
     };
-    $('.modal-head h2', E).innerHTML = `💰 ${t('عهدة')} ${esc(custodyNo(c))} — ${esc(custodyTypeLabel(c.txType))}`;
+    $('.modal-head h2', E).innerHTML = `${c.direct ? '⚡ ' + t('تقفيل مباشر') : '💰 ' + t('عهدة')} ${esc(custodyNo(c))} — ${esc(custodyTypeLabel(c.txType))}`;
+    const anyClosed = (c.lines || []).some(l => l.closedDate);
     const kv = (l, v) => `<div><span>${esc(t(l))}</span>${v || '<span class="muted">—</span>'}</div>`;
     const chip = (l, v, col) => `<span class="chip" style="font-size:13px;padding:4px 10px${col ? `;background:var(--${col}-soft);color:var(--${col})` : ''}">${esc(t(l))}: <b class="num">${v}</b></span>`;
-    $('#cu-d', E).innerHTML = `<div class="kv">${kv('المستلم', `<b>${esc(c.custodian)}</b>`)}${kv('الحالة', custodyStatusChip(c.status))}${kv('تاريخ الطلب', fmtDate(c.requestDate))}
-        ${kv('تاريخ الصرف', fmtDate(c.disbursedDate))}${kv('صاحب العهدة', esc(c.ownerName || c.createdBy))}${c.notes ? kv('ملاحظات', esc(c.notes)) : ''}</div>
+    $('#cu-d', E).innerHTML = `<div class="kv">${kv('المستلم', `<b>${esc(c.custodian)}</b>`)}${kv('الحالة', custodyChip(c))}${kv(c.direct ? 'تاريخ التقفيل' : 'تاريخ الطلب', fmtDate(c.requestDate))}
+        ${c.direct ? kv('مبلغه', custodyDirectTag(c)) : kv('تاريخ الصرف', fmtDate(c.disbursedDate))}${kv('صاحب العهدة', esc(c.ownerName || c.createdBy))}${c.notes ? kv('ملاحظات', esc(c.notes)) : ''}</div>
       <div class="row" style="margin-top:8px">${custodyLangSelect()}</div>
-      <div class="row" style="gap:6px;flex-wrap:wrap;margin:10px 0">${chip('المطلوب', fmtMoney(tt.planned))}${chip('اتصرف', tt.received ? fmtMoney(tt.received) : '—', 'blue')}
-        ${chip('اتنفّذ', fmtMoney(tt.spent))}${tt.received ? chip('الرصيد مع المستلم', fmtMoney(tt.remaining), tt.remaining < 0 ? 'red' : 'purple') : ''}${chip('جاهز للتقفيل', `${tt.ready} ${t('إجراء')}`, 'green')}${tt.itemsClosed ? chip('اتقفل', `${tt.itemsClosed}/${tt.items} ${t('إجراء')}`) : ''}</div>
+      <div class="row" style="gap:6px;flex-wrap:wrap;margin:10px 0">${c.direct
+        ? `${chip('اتنفّذ', fmtMoney(tt.spent))}${tt.due ? chip('مستحق للمستلم', fmtMoney(tt.due), 'red') : c.carryFunded ? chip('اتعوّض في', esc(c.carryToNumber), 'green') : ''}`
+        : `${chip('المطلوب', fmtMoney(tt.planned))}${c.carriedAmount ? chip('منها مستحقات تقفيل مباشر', fmtMoney(c.carriedAmount)) : ''}${chip('اتصرف', tt.gross ? fmtMoney(tt.gross) : '—', 'blue')}
+        ${chip('اتنفّذ', fmtMoney(tt.spent))}${tt.gross ? chip('الرصيد مع المستلم', fmtMoney(tt.remaining), tt.remaining < 0 ? 'red' : 'purple') : ''}`}${chip('جاهز للتقفيل', `${tt.ready} ${t('إجراء')}`, 'green')}${tt.itemsClosed ? chip('اتقفل', `${tt.itemsClosed}/${tt.items} ${t('إجراء')}`) : ''}</div>
       ${c.status === 'requested' ? `<div class="notice small">${t('اطبع الطلب واعتمده من المسؤول والإدارة المالية، وبعد الصرف اضغط «💵 تم الصرف» وسجّل المبلغ.')}</div>` : ''}
-      <div class="small muted" style="margin:6px 0">${t('البند بيتعلّم «تم» لوحده لما مرحلة الشخص تعدّيه، وتقدر تعلّمه وتعدّل المبلغ الفعلي ورقم الإيصال بإيدك.')}</div>
+      ${c.direct ? `<div class="notice small">${t('تقفيل مباشر: الإجراءات دي اتصرف عليها من فلوس عهدة مع المستلم لشخص مش في أي طلب. مبلغها مستحق للمستلم وبيتضاف على أقرب طلب عهدة له، ولما الطلب يتصرف رصيده بيرجع.')}${c.status === 'disbursed' ? ' ' + t('تقفيله اتلغى — عدّل البنود وقفّله تاني، أو ألغيه.') : ''}</div>` : ''}
+      ${(c.carried || []).length ? `<div class="notice small">⚡ ${t('مستحقات تقفيل مباشر مضافة على الطلب')}: ${c.carried.map(x => `<a href="#" data-open-cu="${esc(x.id)}"><b class="num">${esc(x.number)}</b></a> (${fmtMoney(x.amount)})`).join('، ')}</div>` : ''}
+      ${c.direct ? '' : `<div class="small muted" style="margin:6px 0">${t('البند بيتعلّم «تم» لوحده لما مرحلة الشخص تعدّيه، وتقدر تعلّمه وتعدّل المبلغ الفعلي ورقم الإيصال بإيدك.')}</div>`}
       <div class="table-wrap"><table class="data cu-lines"><thead><tr><th style="width:34px">✓</th><th>${t('البند')}</th><th>${t('الجهة')}</th><th>${t('المحدد')}</th><th>${t('الفعلي')}</th><th>${t('رقم الإيصال')}</th><th>${t('تاريخ التنفيذ')}</th>${hasExp ? `<th>${t('الانتهاء الجديد')}</th>` : ''}</tr></thead><tbody>
       ${custodyPersons(c).map(p => { const done = p.lines.every(l => l.done), allClosed = p.lines.every(l => l.closedDate), someClosed = p.lines.some(l => l.closedDate);
           const closedOn = allClosed && uniq(p.lines.map(l => l.closedDate)).sort().pop(); return `<tr class="cu-person ${allClosed ? 'cu-closed' : ''}"><td colspan="${hasExp ? 8 : 7}">${allClosed ? '🔒' : done ? '✅' : '⏳'} ${esc(p.name)}
@@ -560,12 +688,13 @@ function openCustodyDetails(id) {
       ${custodyClosingsHtml(c)}`;
     const f = $('#cu-df', E);
     f.innerHTML = `${edit && c.status === 'disbursed' && tt.ready ? `<button class="btn primary" data-a="close">🔒 ${t('تقفيل')} (${tt.ready})</button>` : ''}
-      <button class="btn" data-a="print">📄 ${t('طلب الصرف (معاينة وطباعة)')}</button>
+      ${c.direct ? '' : `<button class="btn" data-a="print">📄 ${t('طلب الصرف (معاينة وطباعة)')}</button>`}
       ${can('admin') ? `<button class="btn" data-a="transfer">👤 ${t('نقل الملكية')}</button>` : ''}
-      ${edit ? `<button class="btn primary" data-a="disburse">💵 ${t(c.status === 'requested' ? 'تم الصرف' : 'تعديل الصرف')}</button>` : ''}
+      ${edit && !c.direct ? `<button class="btn primary" data-a="disburse">💵 ${t(c.status === 'requested' ? 'تم الصرف' : 'تعديل الصرف')}</button>` : ''}
       ${edit && c.status === 'requested' ? `<button class="btn" data-a="edit">✏️ ${t('تعديل الطلب')}</button>` : ''}
       <span class="spacer"></span>
       ${c.status === 'requested' && can('custody.delete') ? `<button class="btn danger" data-a="cancel">🚫 ${t('إلغاء الطلب')}</button>` : ''}
+      ${c.direct && c.status === 'disbursed' && !anyClosed && !c.carryFunded && can('custody.delete') ? `<button class="btn danger" data-a="cancel-direct">🚫 ${t('إلغاء التقفيل المباشر')}</button>` : ''}
       <button class="btn" data-close>${t('إغلاق')}</button>`;
     $('[data-close]', f).onclick = () => m.close();
     $$('[data-a]', f).forEach(b => b.onclick = async () => {
@@ -577,8 +706,12 @@ function openCustodyDetails(id) {
       else if (a === 'edit') { m.close(); openCustodyRequestModal(c.id); }
       else if (a === 'cancel' && await openConfirm(`${t('إلغاء طلب العهدة')} ${custodyNo(c)}؟`, { danger: true, okLabel: t('إلغاء الطلب') })) {
         await persist('POST', `/api/custodies/${c.id}/cancel`, {}, 'تم الإلغاء'); draw();
+      } else if (a === 'cancel-direct' && await openConfirm(`${t('إلغاء التقفيل المباشر')} ${custodyNo(c)}؟ ${t('مش هيتحسب على المستلم ولا هيتضاف على أي طلب.')}`, { danger: true, okLabel: t('إلغاء التقفيل المباشر') })) {
+        try { await persist('POST', `/api/custodies/${c.id}/cancel`, {}, 'تم الإلغاء'); } catch (e) { /* ظاهر */ }
+        draw();
       }
     });
+    $$('[data-open-cu]', E).forEach(a => a.onclick = ev => { ev.preventDefault(); m.close(); openCustodyDetails(a.dataset.openCu); });
     $$('[data-closing]', E).forEach(b => b.onclick = () => custodyPreview(`/api/custodies/${c.id}/closing.pdf?date=${b.dataset.closing}${b.dataset.layout ? '&layout=' + b.dataset.layout : ''}`));
     bindCustodyLang(E);
     bindInvoiceActions(E, draw);
@@ -652,8 +785,10 @@ function printCustodyRequest(c) {
     title: t('طلب صرف عهدة'), subtitle: custodyTypeLabel(c.txType), company, landscape: cols.length > 4,
     meta: [[t('رقم العهدة'), custodyNo(c)], [t('تاريخ الطلب'), fmtDate(c.requestDate)], [t('المستلم'), c.custodian]],
     criteria: `${t('نوع المعاملة')}: ${esc(custodyTypeLabel(c.txType))} · ${t('المستلم')}: ${esc(c.custodian)}${c.notes ? ' · ' + esc(c.notes) : ''}`,
-    summary: [[people.length, t('عدد الأشخاص')], [groups.size, t('مراكز التكلفة')], [rptNum(sum(people.map(total))), t('إجمالي المطلوب (د.ك)')]],
-    body: table, sign: [t('المستلم'), t('المسؤول'), t('الإدارة المالية')],
+    summary: [[people.length, t('عدد الأشخاص')], [groups.size, t('مراكز التكلفة')], [rptNum(sum(people.map(total)) + (c.carriedAmount || 0)), t('إجمالي المطلوب (د.ك)')]],
+    body: table + ((c.carried || []).length ? `<table class="rpt" style="margin-top:10px"><thead><tr><th class="txt">${t('مستحقات تقفيل مباشر (اتصرفت قبل كده من فلوس عهدة مع المستلم)')}</th><th class="num">${t('المبلغ')} (${t('د.ك')})</th></tr></thead>
+      <tbody>${c.carried.map(x => `<tr><td class="txt">${esc(x.number)}</td><td class="num">${rptNum(x.amount)}</td></tr>`).join('')}</tbody>
+      <tfoot><tr><td class="txt">${t('إجمالي المطلوب (د.ك)')}</td><td class="num">${rptNum(sum(people.map(total)) + (c.carriedAmount || 0))}</td></tr></tfoot></table>` : ''), sign: [t('المستلم'), t('المسؤول'), t('الإدارة المالية')],
   });
 }
 

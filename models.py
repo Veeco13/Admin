@@ -433,6 +433,10 @@ class Custody(Base):
     ownerId: Mapped[Optional[int]] = col("owner_id", Integer)                     # صاحب العهدة (بيشوفها هو بس)
     prefix: Mapped[Optional[str]] = col("prefix", String(10))                     # رمز صاحبها وقت الطلب
     seq: Mapped[Optional[int]] = col("seq", Integer)                              # مسلسل لكل رمز ← «AA-0001»
+    # تقفيل مباشر: إجراء اتصرف عليه من فلوس عهدة لشخص مش في أي طلب — اتسجّل واتقفل في خطوة واحدة (من غير صرف)،
+    # ومبلغه بيتضاف على أقرب طلب عهدة لنفس المستلم (carryToId = الطلب ده).
+    direct: Mapped[bool] = col("direct", Boolean, nullable=False, default=False)
+    carryToId: Mapped[Optional[str]] = col("carry_to_id", ID, index=True)
 
 
 class CustodyLine(Base):
