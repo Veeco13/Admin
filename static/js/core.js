@@ -762,6 +762,8 @@ const REPORT_CSS = `
   .rpt-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:8px;margin:0 0 10px}
   .rpt-summary div{border:1px solid var(--line);border-top:3px solid var(--head);border-radius:3px;padding:5px 9px}
   .rpt-summary b{display:block;font-size:15px;line-height:1.3} .rpt-summary span{color:var(--muted);font-size:9px}
+  .ic{display:inline-block;width:1.15em;height:1.15em;vertical-align:-.2em;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+  .ic-kw{width:1.5em;height:1em;vertical-align:-.12em;stroke:none} .ic-t-ok{color:#1a7f4b} .ic-t-warn{color:#b26a00} .ic-t-bad{color:#b3261e} .toolbar .ic{color:inherit}
   table.rpt{width:100%;border-collapse:collapse;font-size:9.8px}
   table.rpt thead th{background:var(--head);color:#fff;font-weight:600;text-align:center;padding:6px 5px;border:1px solid var(--head);vertical-align:middle}
   table.rpt td{padding:4px 5px;border:1px solid var(--line);vertical-align:middle;text-align:center}
@@ -801,7 +803,7 @@ function openReportWindow({ title, subtitle = '', company = null, meta = [], cri
   const printed = `${fmtDate(todayISO())} ${new Date().toTimeString().slice(0, 5)}`;
   const pageNo = en ? `"Page " counter(page) " of " counter(pages)` : `"صفحة " counter(page) " من " counter(pages)`;
   const box = `font-family:"IBM Plex Sans Arabic",Tahoma,sans-serif;font-size:8pt;color:#66736f`;
-  w.document.write(`<!DOCTYPE html><html dir="${dir}" lang="${LANG}"><head><meta charset="utf-8"><title>${esc(title)}</title>
+  const doc = `<!DOCTYPE html><html dir="${dir}" lang="${LANG}"><head><meta charset="utf-8"><title>${esc(title)}</title>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap">
     <style>${REPORT_CSS}
       @page{size:A4 ${landscape ? 'landscape' : 'portrait'};margin:11mm 9mm 13mm;
@@ -819,7 +821,9 @@ function openReportWindow({ title, subtitle = '', company = null, meta = [], cri
       ${summary.length ? `<div class="rpt-summary">${summary.map(([v, l]) => `<div><b>${esc(v)}</b><span>${esc(l)}</span></div>`).join('')}</div>` : ''}
       ${body}
       ${sign ? `<div class="rpt-sign">${(Array.isArray(sign) ? sign : [t('أعده'), t('راجعه'), t('اعتمده')]).map(x => `<div>${esc(x)}</div>`).join('')}</div>` : ''}
-      <div class="rpt-end">— ${esc(t('نهاية التقرير'))} —</div></div></body></html>`);
+      <div class="rpt-end">— ${esc(t('نهاية التقرير'))} —</div></div></body></html>`;
+  const cut = doc.indexOf('<body>');                 // الإيموجي في جسم التقرير ← أيقونات خطية (icons.js)
+  w.document.write(doc.slice(0, cut) + iconizeHtml(doc.slice(cut)));
   w.document.close();
 }
 
