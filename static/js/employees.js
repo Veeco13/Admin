@@ -73,7 +73,7 @@ function empMsOptions(key, companies = []) {
     .map(p => ({ v: p.id, l: projectName(p.id) + (companies.length === 1 ? '' : ' — ' + companyName(p.companyId)) }))];
   if (key === 'agency') return [{ v: '__none', l: t('بدون وكالة') }, ...(STATE.agencies || []).map(a => ({ v: a.id, l: agencyName(a) }))];
   if (key === 'status') return Object.entries(EMP_STATUS_LABELS).map(([k, v]) => ({ v: k, l: LANG === 'en' ? v.en : v.ar }));
-  if (key === 'stage') return [{ v: '__none', l: t('بدون معاملة') }, { v: '__note', l: t('عليها ملاحظة تعطّل') }, ...[...GOV_STAGES, ...KW_END_STAGES].map(g => ({ v: g.id, l: g.dot + ' ' + t(g.label) }))];
+  if (key === 'stage') return [{ v: '__none', l: t('بدون معاملة') }, { v: '__note', l: t('عليها ملاحظة تعطّل') }, ...[...GOV_STAGES, ...END_STAGES_ALL].map(g => ({ v: g.id, l: g.dot + ' ' + t(g.label) }))];
   if (key === 'nationality') return counted(e => e.nationality, natLabel);
   if (key === 'profession') return counted(e => e.profession, profLabel);
   if (key === 'costCenter') return (STATE.costCenters || []).map(c => ({ v: c.name, l: ccLabel(c.name) }));
@@ -253,6 +253,7 @@ const EMP_REPORT_COLS = [
   { k: 'kuwaitEntryDate', g: 'work', l: 'تاريخ دخول الكويت', date: true, plain: true },
   { k: 'serviceEndDate', g: 'work', l: 'تاريخ انتهاء الخدمة', date: true, plain: true },
   { k: 'serviceEndReason', g: 'work', l: 'سبب انتهاء الخدمة', v: e => t(e.serviceEndReason) },
+  { k: 'serviceEndTransferTo', g: 'work', l: 'الشركة المحوَّل عليها', v: e => e.serviceEndTransferTo },
   { k: 'contractType', g: 'work', l: 'نوع العقد', v: e => t(e.contractType) },
   { k: 'agency', g: 'work', l: 'الوكالة', v: e => agencyName(projectAgency(empProjectId(e))) },
   { k: 'contractNo', g: 'work', l: 'رقم العقد', v: e => (IDX.project[empProjectId(e)] || {}).contractNo, num: true },
@@ -742,7 +743,8 @@ function empCardSections(e, { print = false, money = true } = {}) {
       ['نوع العقد', esc(e.contractType)], ['رقم الملف', num(e.fileNo)], ['الرقم الوظيفي', num(e.dpId)], ['مركز التكلفة', esc(ccLabel(e.costCenter))],
       ...(print ? [['شغال فعليًا في', esc(companyName(ccCo))]] : []), ['مكان العمل الفعلي', esc(e.actualWorkplace)],
       ...(moneyView ? [] : [housing]),
-      ...(e.serviceEndDate || empEnded(e) ? [['آخر يوم عمل', fmtDate(e.serviceEndDate)], ['سبب انتهاء الخدمة', esc(t(e.serviceEndReason || ''))]] : [])] },
+      ...(e.serviceEndDate || empEnded(e) ? [['آخر يوم عمل', fmtDate(e.serviceEndDate)], ['سبب انتهاء الخدمة', esc(t(e.serviceEndReason || ''))]] : []),
+      ...(e.serviceEndTransferTo ? [['الشركة المحوَّل عليها', esc(e.serviceEndTransferTo)]] : [])] },
     { key: 'edu', icon: '🎓', title: 'المؤهل الدراسي', fields: [
       ['المؤهل الدراسي', esc(e.qualification)], ['التخصص', esc(e.specialization)], ['الجامعة / جهة التخرج', esc(e.university)]] },
   ];
@@ -952,7 +954,7 @@ async function openProfileCard(id, tab = 'info') {
     title: esc(t('بطاقة الموظف')), size: 'wide',
     body: `${empCardHeadHtml(e)}
       ${empEndNotice(e)}
-      ${kwEndBannerHtml(e)}
+      ${endTrackBannerHtml(e)}
       ${approvalsBannerHtml(e.id)}
       ${e.govStageNote ? `<div class="notice warn" style="margin-top:10px">⚠️ ${esc(e.govStageNote)}</div>` : ''}
       ${e.transferNote ? `<div class="notice" style="margin-top:10px">ℹ️ ${esc(e.transferNote)}</div>` : ''}
@@ -1015,8 +1017,8 @@ async function openProfileCard(id, tab = 'info') {
     const dm = b.closest('details');
     if (dm) dm.open = false;
     if (a === 'edit') sub(() => openEmployeeModal(e.id));
-    else if (a === 'stage') sub(() => (kwEndStep(e) >= 0 ? openKwEndModal(e.id) : openGovStageModal(e.id)));
-    else if (a === 'kwend') sub(() => openKwEndModal(e.id));
+    else if (a === 'stage') sub(() => (endTrackOf(e) ? openEndTrackModal(e.id) : openGovStageModal(e.id)));
+    else if (a === 'endtrack') sub(() => openEndTrackModal(e.id));
     else if (a === 'status') sub(() => openEmployeeStatusModal(e.id));
     else if (a === 'signature') sub(() => openSignatureModal(e.id, e.name, canAll('employees.edit sensitive.documents')));
     else if (a === 'contract') { m.close(); VIEW_ARGS = { emp: e.id }; setView('contract'); }
@@ -1192,60 +1194,87 @@ function empEndNotice(e) {
   const st = e.employmentStatus, fin = e.serviceEndType && EMP_STATUS_LABELS[e.serviceEndType];
   if (st === 'warning' && e.serviceEndDate) {
     const then = fin ? `${LANG === 'en' ? ', ' : '، '}${t('وبعدها')} «${esc(LANG === 'en' ? fin.en : fin.ar)}»` : '';
-    return `<div class="notice warn" style="margin-top:10px">⏳ ${t('في فترة الإنذار')} — ${t('آخر يوم عمل')} ${fmtDate(e.serviceEndDate)} (${esc(daysText(daysUntil(e.serviceEndDate)))})${then}${e.serviceEndReason ? ` — ${esc(t(e.serviceEndReason))}` : ''}</div>`;
+    return `<div class="notice warn" style="margin-top:10px">⏳ ${t('في فترة الإنذار')} — ${t('آخر يوم عمل')} ${fmtDate(e.serviceEndDate)} (${esc(daysText(daysUntil(e.serviceEndDate)))})${then}${e.serviceEndReason ? ` — ${esc(t(e.serviceEndReason))}` : ''}${e.serviceEndTransferTo ? ` — ${t('الشركة الجديدة')}: ${esc(e.serviceEndTransferTo)}` : ''}</div>`;
   }
   if (empEnded(e)) {
     return `<div class="notice" style="margin-top:10px">🚪 ${esc(LANG === 'en' ? EMP_STATUS_LABELS[st].en : EMP_STATUS_LABELS[st].ar)}${e.serviceEndDate ? ` — ${t('آخر يوم عمل')} ${fmtDate(e.serviceEndDate)}` : ''}${e.serviceEndReason ? ` — ${esc(t(e.serviceEndReason))}` : ''}</div>`;
   }
   return '';
 }
-/* ---------- 🇰🇼 مسار «إنهاء خدمة — عمالة وطنية» (الكويتي والخليجي): استمارة 103 ← إلغاء التأمينات ← إلغاء إذن العمل ----------
-   بيتفتح لوحده من أول «فترة الإنذار» (app._kw_end_sync)، والخطوات بالترتيب (POST /api/employees/<id>/kw-end). */
-function kwEndBannerHtml(e) {
-  if (!kwEndApplies(e)) return '';
-  const i = kwEndStep(e), leaving = e.employmentStatus === 'warning' || empEnded(e);
-  const btn = l => `<button type="button" class="btn sm" data-a="kwend" style="margin-inline-start:8px">${l}</button>`;
-  if (i >= KW_END_STEPS) return `<div class="notice" style="margin-top:10px;background:var(--green-soft);color:var(--green)">✅ ${t('إنهاء خدمة — عمالة وطنية')}: ${t('اكتملت الإجراءات')}${btn(t('عرض الخطوات'))}</div>`;
-  if (i >= 0) return `<div class="notice err" style="margin-top:10px">🇰🇼 ${t('إنهاء خدمة — عمالة وطنية')}: ${t('الخطوة')} ${i + 1} ${t('من')} ${KW_END_STEPS} — <b>${esc(t(KW_END_STAGES[i].step))}</b>${btn(t('متابعة الخطوات'))}</div>`;
-  return leaving ? `<div class="notice warn write-only" data-p="employees.edit" style="margin-top:10px">🇰🇼 ${t('مسار إنهاء خدمة العمالة الوطنية لسه ماتفتحش للموظف ده')}${btn('▶️ ' + t('فتح المسار'))}</div>` : '';
+/* ---------- مسارات «إنهاء الخدمة» (END_TRACKS في core.js): بتتفتح لوحدها من أول «فترة الإنذار» (app._end_track_sync)،
+   والخطوات بالترتيب (POST /api/employees/<id>/end-track). العمالة الوطنية: استمارة 103 ← إلغاء التأمينات ← إلغاء إذن
+   العمل. الوافد: تحويل لشركة أخرى (طلب «أسهل» ← الموافقة) أو إلغاء نهائي (مخالصة ← الهيئة ← «أسهل» ← إذن العمل ← الإقامة). ---------- */
+function endTrackBannerHtml(e) {
+  const k = endTrackOf(e), leaving = e.employmentStatus === 'warning' || empEnded(e);
+  const btn = l => `<button type="button" class="btn sm" data-a="endtrack" style="margin-inline-start:8px">${l}</button>`;
+  if (k && k.done) return `<div class="notice" style="margin-top:10px;background:var(--green-soft);color:var(--green)">✅ ${t(k.tr.title)}: ${t('اكتملت الإجراءات')}${btn(t('عرض الخطوات'))}</div>`;
+  if (k) return `<div class="notice err" style="margin-top:10px">${k.tr.ico} ${t(k.tr.title)}: ${t('الخطوة')} ${k.i + 1} ${t('من')} ${k.n} — <b>${esc(t(k.tr.stages[k.i].step))}</b>${btn(t('متابعة الخطوات'))}</div>`;
+  return leaving ? `<div class="notice warn write-only" data-p="employees.edit" style="margin-top:10px">🚪 ${t('مسار إنهاء الخدمة لسه ماتفتحش للموظف ده')}${btn('▶️ ' + t('فتح المسار'))}</div>` : '';
 }
-function openKwEndModal(id) {
+function openEndTrackModal(id) {
   const e = IDX.employee[id];
   if (!e) return toast('الموظف غير موجود', 'err');
-  const cur = kwEndStep(e), tl = STATE.employeeTimeline[e.id] || [];
+  const k = endTrackOf(e), tl = STATE.employeeTimeline[e.id] || [], expat = empNeedsResidency(e);
+  const tr = k ? k.tr : END_TRACKS[!expat ? 'kw' : /تحويل/.test(e.serviceEndReason || '') ? 'xfer' : 'exit'];
+  const cur = k ? k.i : -1, n = tr.stages.length - 1;
   const lastOf = type => tl.filter(x => x.type === type).pop();
   const info = l => { const i = Math.max(l.lastIndexOf('(بتاريخ'), l.lastIndexOf('(اتطبعت')); return i >= 0 ? l.slice(i) : l; };   // «(بتاريخ …) — ملاحظة» من غير تكرار اسم الخطوة
-  const steps = KW_END_STAGES.slice(0, KW_END_STEPS).map((g, i) => {
+  const dateIn = `<label class="row small" style="gap:6px">${t('التاريخ')}<input type="date" data-et-date value="${todayISO()}" max="${todayISO()}"></label>`;
+  const doneBtn = l => `<button class="btn sm primary" data-et-done>✅ ${l}</button>`;
+  const actions = g => {
+    if (g.id === 'kw_end_form') return `<button class="btn sm primary" data-et-form="pifss">📄 ${t('فتح استمارة 103 (إنهاء خدمة)')}</button><button class="btn sm" data-et-done>✅ ${t('اتطبعت واتوقّعت')}</button>`;
+    if (g.id === 'ex_exit_clearance') return `<button class="btn sm primary" data-et-form="clearance">📄 ${t('فتح إقرار المخالصة (إلغاء نهائي)')}</button><button class="btn sm" data-et-done>✅ ${t('اتطبع واتوقّع')}</button>`;
+    if (g.id === 'ex_xfer_request') return `<label class="row small" style="gap:6px">${t('الشركة الجديدة')}<input data-et-company value="${esc(e.serviceEndTransferTo || '')}" placeholder="${esc(t('اسم الشركة اللي هيتحوّل عليها'))}" style="min-width:220px"></label>${dateIn}${doneBtn(t('الطلب وصل'))}`;
+    if (g.id === 'ex_exit_ashal') return `<button class="btn sm" data-et-upload data-p="sensitive.documents">📎 ${t('رفع المخالصة المعتمدة / كتاب الطيران في مرفقات الموظف')}</button>${dateIn}${doneBtn(t('تم'))}`;
+    return dateIn + doneBtn(t('تم'));
+  };
+  const steps = tr.stages.slice(0, n).map((g, i) => {
     const done = cur > i, active = cur === i, x = done ? lastOf(g.id) : null;
-    const act = !active ? '' : i === 0
-      ? `<div class="row write-only" data-p="employees.edit" style="gap:6px;flex-wrap:wrap;margin-top:6px"><button class="btn sm primary" data-kw-form>📄 ${t('فتح استمارة 103 (إنهاء خدمة)')}</button>
-          <button class="btn sm" data-kw-done>✅ ${t('اتطبعت واتوقّعت')}</button></div>`
-      : `<div class="row write-only" data-p="employees.edit" style="gap:6px;flex-wrap:wrap;margin-top:6px"><label class="row small" style="gap:6px">${t('تاريخ الإلغاء')}<input type="date" data-kw-date value="${todayISO()}" max="${todayISO()}"></label>
-          <button class="btn sm primary" data-kw-done>✅ ${t('تم الإلغاء')}</button></div>`;
     return `<div class="kw-step ${done ? 'done' : active ? 'on' : 'lock'}"><span class="kw-n">${done ? '✅' : active ? '▶️' : '🔒'}</span>
       <div><b>${i + 1}. ${esc(t(g.step))}</b>
         ${done && x ? `<div class="small muted">${esc(info(x.label))} · ${t('اتسجّل')} ${fmtDateTime(x.date)} · ${esc(x.user || '')}</div>` : ''}
         ${!done && !active && cur >= 0 ? `<div class="small muted">${t('بعد ما الخطوة اللي قبلها تخلص')}</div>` : ''}
-        ${i === KW_END_STEPS - 1 ? `<div class="small muted">ℹ️ ${t('دعم العمالة بيقف لوحده بعد إلغاء إذن العمل — مالوش إجراء.')}</div>` : ''}${act}</div></div>`;
+        ${g.id === 'kw_end_permit' ? `<div class="small muted">ℹ️ ${t('دعم العمالة بيقف لوحده بعد إلغاء إذن العمل — مالوش إجراء.')}</div>` : ''}
+        ${active ? `<div class="row write-only" data-p="employees.edit" style="gap:6px;flex-wrap:wrap;margin-top:6px">${actions(g)}</div>` : ''}</div></div>`;
   }).join('');
+  // الوافد: نوع الإجراء بيتغيّر طول ما مفيش خطوة اتعلّمت
+  const typeSel = expat && cur === 0 ? `<label class="row small write-only" data-p="employees.edit" style="gap:6px;margin-top:10px">${t('نوع الإجراء')}
+      <select data-et-type>${opt('xfer', t('تحويل لشركة أخرى'), k.key === 'xfer')}${opt('exit', t('إلغاء نهائي'), k.key === 'exit')}</select></label>` : '';
   const m = openModal({
-    title: `🇰🇼 ${t('إنهاء خدمة — عمالة وطنية')} — ${esc(e.name)}`,
+    title: `${tr.ico} ${t(tr.title)} — ${esc(e.name)}`,
     body: `${empEndNotice(e)}
       ${cur < 0 ? `<div class="notice warn" style="margin-top:10px">${t('المسار لسه ماتفتحش. بيتفتح لوحده لما الحالة تبقى «في فترة الإنذار» أو «مستقيل» أو «إنهاء خدمات».')}</div>` : ''}
-      ${cur >= KW_END_STEPS ? `<div class="notice" style="margin-top:10px;background:var(--green-soft);color:var(--green)">✅ ${t('اكتملت الإجراءات')}</div>` : ''}
-      <div class="kw-steps">${steps}</div>`,
-    foot: `${cur < 0 ? `<button class="btn primary write-only" data-p="employees.edit" data-kw-start>▶️ ${t('فتح المسار')}</button>` : ''}
-      ${cur > 0 ? `<button class="btn ghost write-only" data-p="employees.edit" data-kw-back>↩️ ${t('تراجع عن آخر خطوة')}</button>` : ''}
+      ${cur >= n ? `<div class="notice" style="margin-top:10px;background:var(--green-soft);color:var(--green)">✅ ${t('اكتملت الإجراءات')}</div>` : ''}
+      ${typeSel}<div class="kw-steps">${steps}</div>`,
+    foot: `${cur < 0 ? `<button class="btn primary write-only" data-p="employees.edit" data-et-start>▶️ ${t('فتح المسار')}</button>` : ''}
+      ${cur > 0 ? `<button class="btn ghost write-only" data-p="employees.edit" data-et-back>↩️ ${t('تراجع عن آخر خطوة')}</button>` : ''}
       <span class="spacer"></span><button class="btn" data-close>${t('إغلاق')}</button>`,
   });
   const send = async (body, msg) => {
-    try { await persist('POST', `/api/employees/${encodeURIComponent(id)}/kw-end`, body, msg); m.close(); openKwEndModal(id); } catch (_) { /* ظاهر */ }
+    try { await persist('POST', `/api/employees/${encodeURIComponent(id)}/end-track`, body, msg); m.close(); openEndTrackModal(id); } catch (_) { /* ظاهر */ }
   };
   const on = (sel, fn) => { const b = $(sel, m.el); if (b) b.onclick = fn; };
-  on('[data-kw-start]', () => send({ action: 'start' }, 'تم'));
-  on('[data-kw-back]', async () => { if (await openConfirm(t('تتراجع عن آخر خطوة اتعلّمت «تم»؟'), { okLabel: t('تراجع') })) send({ action: 'back' }, 'تم'); });
-  on('[data-kw-done]', () => send({ action: 'done', date: ($('[data-kw-date]', m.el) || {}).value || todayISO() }, 'تم'));
-  on('[data-kw-form]', () => { m.close(); openOfficialFormModal('pifss103', 'employee', id, { action: 'إنهاء خدمة' }); });
+  on('[data-et-start]', () => send({ action: 'start' }, 'تم'));
+  on('[data-et-back]', async () => { if (await openConfirm(t('تتراجع عن آخر خطوة اتعلّمت «تم»؟'), { okLabel: t('تراجع') })) send({ action: 'back' }, 'تم'); });
+  on('[data-et-done]', () => {
+    const co = $('[data-et-company]', m.el);
+    if (co && !co.value.trim()) return openBlockAlert(t('اكتب اسم الشركة اللي الموظف هيتحوّل عليها'));
+    send({ action: 'done', date: ($('[data-et-date]', m.el) || {}).value || todayISO(), company: co ? co.value.trim() : undefined }, 'تم');
+  });
+  on('[data-et-form]', ev => {
+    const kind = ev.currentTarget.dataset.etForm;
+    m.close();
+    if (kind === 'pifss') openOfficialFormModal('pifss103', 'employee', id, { action: 'إنهاء خدمة' });
+    else openClearanceModal(id, { procedure: 'travel' });
+  });
+  on('[data-et-upload]', async () => {
+    const f = await pickFile('');
+    if (!f) return;
+    const fd = new FormData(); fd.append('file', f);
+    try { await api('POST', `/api/employees/${encodeURIComponent(id)}/files`, fd); toast(t('تم رفع المرفق'), 'ok'); } catch (err) { toast(err.message, 'err'); }
+  });
+  const ts = $('[data-et-type]', m.el);
+  if (ts) ts.onchange = () => send({ action: 'type', type: ts.value }, 'تم');
 }
 function openEmployeeStatusModal(id) {
   const e = IDX.employee[id];
@@ -1376,14 +1405,14 @@ function bindKidRows(root) { $$('[data-kid-del]', root).forEach(b => b.onclick =
 
 /* ---------- إقرار مخالصة عمالية نهائية (استلام المستحقات) — forms/clearance.docx بمحرك العقود ---------- */
 const CLEARANCE_FIELDS = ['nameEn', 'nationality', 'dateOfHire', 'serviceEndDate', 'company.nameEn'];
-function openClearanceModal(id) {
+function openClearanceModal(id, { procedure = 'transfer' } = {}) {
   const e = IDX.employee[id];
   if (!e) return toast('غير موجود', 'err');
   const kit = missingDataKit(CLEARANCE_FIELDS, 'employee', e);
   const m = openModal({
     title: '🧾 ' + t('إقرار مخالصة عمالية نهائية') + ': ' + esc(e.name), size: kit.missing.length > 3 ? '' : 'narrow',
     body: `<div class="form" id="cl-form">
-        <label class="full">${t('نوع الإجراء')}<select name="__procedure">${opt('transfer', t('الإلغاء والتحويل خارج القطاع'), true)}${opt('travel', t('الإلغاء النهائي للسفر'), false)}${opt('', t('— من غير تحديد —'), false)}</select></label>
+        <label class="full">${t('نوع الإجراء')}<select name="__procedure">${opt('transfer', t('الإلغاء والتحويل خارج القطاع'), procedure === 'transfer')}${opt('travel', t('الإلغاء النهائي للسفر'), procedure === 'travel')}${opt('', t('— من غير تحديد —'), false)}</select></label>
         <label>${t('تاريخ الإقرار')}<input type="date" name="__date" value="${todayISO()}"></label>
         <label>${t('المفوّض بالتوقيع')}<select name="__sig">${batchSigOptions(kit.cid)}</select></label>
         <label class="check" data-p="contract.sign"><input type="checkbox" name="__signFirst"> ✍️ ${t('بتوقيع المفوّض')}</label>
@@ -1404,6 +1433,7 @@ function openClearanceModal(id) {
       const res = await fetchBlob(`/api/employees/${encodeURIComponent(e.id)}/clearance/${b.dataset.go}`,
         { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...opts, ...data }) });
       m.close(); openPdfPreviewModal(res.blob, res.name, 1);
+      if (opts.procedure === 'travel') reload().catch(() => {});      // أول خطوة في مسار «إلغاء نهائي» اتعلّمت على السيرفر
     } catch (err) { toast(err.message, 'err'); b.disabled = false; }
   });
 }
@@ -1509,7 +1539,7 @@ function openEmployeeModal(id) {
       <label class="check"><input type="checkbox" name="isDriver" ${e.isDriver ? 'checked' : ''}> 🚚 ${t('سائق')}</label>
       ${dt('drivingLicenseExp', 'انتهاء رخصة القيادة')}
       <h4>المعاملة الحكومية</h4>
-      <label>${t('المرحلة')}<select name="govStage">${opt('', '—', !e.govStage)}${[...GOV_STAGES, ...KW_END_STAGES.filter(g => g.id === e.govStage)].map(g => opt(g.id, g.dot + ' ' + t(g.label), g.id === e.govStage)).join('')}</select></label>
+      <label>${t('المرحلة')}<select name="govStage">${opt('', '—', !e.govStage)}${[...GOV_STAGES, ...END_STAGES_ALL.filter(g => g.id === e.govStage)].map(g => opt(g.id, g.dot + ' ' + t(g.label), g.id === e.govStage)).join('')}</select></label>
       ${inp('govStageResponsible', 'المسؤول')}${dt('govStageStartDate', 'تاريخ بدء المعاملة')}${inp('govTransactionCost', 'تكلفة المعاملة', 'number', 'step="0.001" min="0"')}
       <label class="full">${t('ملاحظة تعطّل على المعاملة')}<input name="govStageNote" value="${v('govStageNote')}"></label>
       <label class="full">${t('حالة التحويل')}<input name="transferNote" value="${v('transferNote')}"></label>

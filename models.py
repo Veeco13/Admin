@@ -152,6 +152,7 @@ class Employee(Base):
     serviceEndDate: Mapped[Optional[date]] = col("service_end_date", Date)      # آخر يوم عمل (إقرار المخالصة)
     serviceEndType: Mapped[Optional[str]] = col("service_end_type", String(20))   # resigned | terminated (بعد فترة الإنذار)
     serviceEndReason: Mapped[Optional[str]] = col("service_end_reason", NAME)     # سبب انتهاء الخدمة
+    serviceEndTransferTo: Mapped[Optional[str]] = col("service_end_transfer_to", NAME)   # الشركة اللي اتحوّل عليها (مسار «تحويل لشركة أخرى»)
     salary: Mapped[Optional[float]] = col("salary", Float)
     housingIncluded: Mapped[bool] = col("housing_included", Boolean, default=False)
     housingAmount: Mapped[Optional[float]] = col("housing_amount", Float)

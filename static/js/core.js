@@ -71,7 +71,7 @@ const EMP_STATUS_LABELS = {
 const EMP_ENDED = ['resigned', 'terminated'];
 function empEnded(e) { return EMP_ENDED.includes(e && e.employmentStatus); }
 // سبب انتهاء الخدمة (نفس استمارة 103): «استقالة» ← مستقيل، والباقي ← إنهاء خدمات (app.end_type_for_reason)
-const END_REASONS = ['استقالة', 'إنهاء خدمات من صاحب العمل', 'انتهاء العقد', 'التقاعد', 'الوفاة'];
+const END_REASONS = ['استقالة', 'إنهاء خدمات من صاحب العمل', 'انتهاء العقد', 'تحويل إقامة لشركة أخرى', 'التقاعد', 'الوفاة'];   // «تحويل…» ← مسار التحويل للوافد
 function endTypeForReason(r) { return /استقال/.test(r || '') ? 'resigned' : 'terminated'; }
 const RECRUIT_STAGES_OUTSIDE = [
   { id: 'work_permit',           label: 'استخراج تصريح العمل' },
@@ -191,20 +191,39 @@ function datePill(s) {
 }
 function fmtMoney(v) { if (v === null || v === undefined || v === '') return '—'; const n = Number(v); return isNaN(n) ? v : n.toLocaleString('en-US', { maximumFractionDigits: 3 }) + ' ' + t('د.ك'); }
 function statusPill(s) { const st = EMP_STATUS_LABELS[s] || EMP_STATUS_LABELS.active; return `<span class="pill s-${esc(s || 'active')}">${esc(LANG === 'en' ? st.en : st.ar)}</span>`; }
-// مسار «إنهاء خدمة — عمالة وطنية» (الكويتي والخليجي — نفس app.KW_END_STAGES): المرحلة = الخطوة الشغالة دلوقتي.
-// برّه GOV_STAGES علشان مراحل التجديد وبنود العهد ماتتأثرش. دعم العمالة بيقف لوحده بعد إلغاء إذن العمل ← مالوش خطوة.
-const KW_END_STAGES = [
-  { id: 'kw_end_form',   label: 'إنهاء خدمة: طباعة استمارة 103 والتوقيع عليها',           step: 'طباعة استمارة 103 (إنهاء خدمة) والتوقيع عليها', dot: '🔴', color: 'var(--red)' },
-  { id: 'kw_end_pifss',  label: 'إنهاء خدمة: إلغاء الاشتراك في التأمينات الاجتماعية',      step: 'إلغاء الاشتراك في التأمينات الاجتماعية',        dot: '🔴', color: 'var(--red)' },
-  { id: 'kw_end_permit', label: 'إنهاء خدمة: إلغاء إذن العمل',                            step: 'إلغاء إذن العمل',                              dot: '🔴', color: 'var(--red)' },
-  { id: 'kw_end_done',   label: 'إنهاء خدمة: اكتملت الإجراءات',                           dot: '✅', color: 'var(--green)' },
-];
-const KW_END_STEPS = KW_END_STAGES.length - 1;       // 3 خطوات، والرابعة = اكتملت
-/** رقم الخطوة الشغالة (0..2)، 3 = اكتملت، -1 = مش في المسار */
-function kwEndStep(e) { return KW_END_STAGES.findIndex(g => g.id === (e && e.govStage)); }
-/** المسار بتاع العمالة الوطنية والخليجيين (اللي مالهمش إقامة) */
-function kwEndApplies(e) { return !empNeedsResidency(e); }
-function govStageInfo(id) { return GOV_STAGES.find(g => g.id === id) || KW_END_STAGES.find(g => g.id === id); }
+// مسارات «إنهاء الخدمة» (نفس app.END_TRACKS): المرحلة = الخطوة الشغالة دلوقتي في employee.govStage، وآخر مرحلة = اكتمل.
+// برّه GOV_STAGES علشان مراحل التجديد وبنود العهد ماتتأثرش.
+//   kw — العمالة الوطنية والخليجيين (دعم العمالة بيقف لوحده بعد إلغاء إذن العمل ← مالوش خطوة)
+//   xfer — وافد اتحوّل لشركة تانية (من غير مخالصة)   ·   exit — وافد إلغاء نهائي
+const END_STAGE = (id, label, step, done) => ({ id, label, step, dot: done ? '✅' : '🔴', color: done ? 'var(--green)' : 'var(--red)' });
+const END_TRACKS = {
+  kw: { title: 'إنهاء خدمة — عمالة وطنية', ico: '🇰🇼', stages: [
+    END_STAGE('kw_end_form', 'إنهاء خدمة: طباعة استمارة 103 والتوقيع عليها', 'طباعة استمارة 103 (إنهاء خدمة) والتوقيع عليها'),
+    END_STAGE('kw_end_pifss', 'إنهاء خدمة: إلغاء الاشتراك في التأمينات الاجتماعية', 'إلغاء الاشتراك في التأمينات الاجتماعية'),
+    END_STAGE('kw_end_permit', 'إنهاء خدمة: إلغاء إذن العمل', 'إلغاء إذن العمل'),
+    END_STAGE('kw_end_done', 'إنهاء خدمة: اكتملت الإجراءات', '', true)] },
+  xfer: { title: 'إنهاء خدمة — تحويل لشركة أخرى', ico: '🔁', stages: [
+    END_STAGE('ex_xfer_request', 'إنهاء خدمة (تحويل): وصول طلب التحويل على «أسهل»', 'وصول طلب التحويل من الشركة الجديدة على «أسهل»'),
+    END_STAGE('ex_xfer_approve', 'إنهاء خدمة (تحويل): الموافقة على الطلب في «أسهل»', 'الموافقة على طلب التحويل في «أسهل»'),
+    END_STAGE('ex_xfer_done', 'إنهاء خدمة (تحويل): اكتمل — الإقامة اتحولت', '', true)] },
+  exit: { title: 'إنهاء خدمة — إلغاء نهائي', ico: '✈️', stages: [
+    END_STAGE('ex_exit_clearance', 'إنهاء خدمة (إلغاء نهائي): إقرار المخالصة والتوقيع', 'طباعة إقرار المخالصة وتوقيع الموظف والمفوّض بالتوقيع'),
+    END_STAGE('ex_exit_pam', 'إنهاء خدمة (إلغاء نهائي): اعتماد المخالصة في الهيئة', 'اعتماد المخالصة في الهيئة العامة للقوى العاملة'),
+    END_STAGE('ex_exit_ashal', 'إنهاء خدمة (إلغاء نهائي): رفع المخالصة وكتاب الطيران على «أسهل»', 'رفع المخالصة المعتمدة مع كتاب الطيران على «أسهل»'),
+    END_STAGE('ex_exit_permit', 'إنهاء خدمة (إلغاء نهائي): صدور إلغاء إذن العمل', 'صدور إلغاء إذن العمل'),
+    END_STAGE('ex_exit_residency', 'إنهاء خدمة (إلغاء نهائي): إلغاء الإقامة', 'إلغاء الإقامة'),
+    END_STAGE('ex_exit_done', 'إنهاء خدمة (إلغاء نهائي): اكتملت الإجراءات', '', true)] },
+};
+const END_STAGES_ALL = Object.values(END_TRACKS).flatMap(x => x.stages);
+/** مسار إنهاء الخدمة الشغال للموظف: {key, tr, i (الخطوة الشغالة)، n (عدد الخطوات)، done} — أو null لو مش في مسار */
+function endTrackOf(e) {
+  for (const [key, tr] of Object.entries(END_TRACKS)) {
+    const i = tr.stages.findIndex(g => g.id === (e && e.govStage));
+    if (i >= 0) return { key, tr, i, n: tr.stages.length - 1, done: i >= tr.stages.length - 1 };
+  }
+  return null;
+}
+function govStageInfo(id) { return GOV_STAGES.find(g => g.id === id) || END_STAGES_ALL.find(g => g.id === id); }
 function govStagePill(id) { const g = govStageInfo(id); return g ? `<span class="chip">${g.dot} ${esc(t(g.label))}</span>` : '<span class="muted">—</span>'; }
 function norm(s) { return String(s ?? '').toLowerCase().replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').replace(/[ً-ْ]/g, '').trim(); }
 function initials(name) { return (name || '?').trim().split(/\s+/).slice(0, 2).map(w => w[0]).join(''); }
@@ -1026,12 +1045,12 @@ function trackedAlertItems(maxDays = 90, system = false) {
       push({ kind: 'employee', refId: e.id, name: empName(e), what: f.label, date: e[f.key], renew: rn[f.key], wait: pamWaiting(e, f.key) });   // wait ← مش محسوب «منتهي»
     }
   }
-  // مسار إنهاء خدمة العمالة الوطنية: واقف على خطوة ← بيفضل ظاهر لحد ما يكمل (حتى لو خدمته انتهت)
+  // مسار إنهاء الخدمة: واقف على خطوة ← بيفضل ظاهر لحد ما يكمل (حتى لو خدمته انتهت)
   for (const e of scopedEmployees()) {
-    const i = kwEndStep(e);
-    if (i < 0 || i >= KW_END_STEPS) continue;
+    const k = endTrackOf(e);
+    if (!k || k.done) continue;
     const past = e.serviceEndDate && e.serviceEndDate < todayISO();
-    push({ kind: 'employee', refId: e.id, name: empName(e), what: `${t('إنهاء خدمة — واقف على')}: ${t(KW_END_STAGES[i].step)}`,
+    push({ kind: 'employee', refId: e.id, name: empName(e), what: `${t('إنهاء خدمة — واقف على')}: ${t(k.tr.stages[k.i].step)}`,
       date: past ? e.serviceEndDate : todayISO(), sub: `${t('آخر يوم عمل')} ${fmtDate(e.serviceEndDate) || '—'}` });
   }
   for (const c of scopedCompanies()) {
