@@ -276,7 +276,8 @@ def salary_xlsx(kind, number, data):
         put("G28", data.get("bankAr") or None)
         put("C29", data.get("account") or None)
         put("G29", data.get("account") or None)
-    put("G44", f"Ref # {number}")
+    # رقم الشهادة: في تذييل الصفحة — أقصى الأسفل والشمال، بخط صغير (مش في نص الورقة)
+    ws.oddFooter.left.text, ws.oddFooter.left.size, ws.oddFooter.left.font = f"Ref # {number}", 8, "Calibri,Regular"
     out = io.BytesIO()
     wb.save(out)
     return out.getvalue()
