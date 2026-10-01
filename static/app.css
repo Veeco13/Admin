@@ -68,7 +68,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .logo-mark { width: 30px; height: 30px; flex-shrink: 0; display: block; }
 .wordmark { font-family: "IBM Plex Sans", "Segoe UI", Arial, sans-serif; font-weight: 600; font-size: 16px; letter-spacing: .32em; margin-inline-end: -.32em; direction: ltr; color: var(--text); }
 .wordmark b { font-weight: inherit; color: var(--primary); }
-.brand small { font-size: 12px; color: var(--muted); border-inline-start: 1px solid var(--border); padding-inline-start: 10px; margin-inline-start: 6px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+/* اسم الجهة: واضح وبولد جنب LUNX */
+.brand small { font-size: 15px; font-weight: 700; color: var(--text); border-inline-start: 1px solid var(--border); padding-inline-start: 12px; margin-inline-start: 6px; max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
 .brand small:empty { display: none; }
 .search-wrap { position: relative; flex: 1; max-width: 520px; margin-inline: auto; }
 .search-wrap input { width: 100%; padding: 8px 14px; border-radius: 999px; border: 1px solid transparent; background: var(--surface-2); color: var(--text); outline: none; }

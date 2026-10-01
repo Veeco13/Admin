@@ -792,11 +792,12 @@ function openReportWindow({ title, subtitle = '', company = null, meta = [], cri
   const w = window.open('', '_blank');
   if (!w) { toast('المتصفح منع نافذة الطباعة', 'err'); return; }
   const en = LANG === 'en', dir = en ? 'ltr' : 'rtl';
-  const group = orgName() || 'LUNX';
+  const group = orgName();                       // اسم الجهة (العميل) — اسم البرنامج مابيتطبعش في التقارير
   const brand = company
     ? `${company.logoUrl ? `<img src="${esc(location.origin + company.logoUrl)}" alt="">` : `<div class="mark">${esc((company.nameAr || '?').trim()[0])}</div>`}
        <div><div class="ar">${esc(en ? (company.nameEn || company.nameAr) : company.nameAr)}</div>${!en && company.nameEn ? `<div class="en">${esc(company.nameEn)}</div>` : ''}</div>`
-    : `<div class="mark">${esc(group.trim()[0] || 'L')}</div><div><div class="ar">${esc(group)}</div><div class="en">${esc(t('كل الشركات'))}</div></div>`;
+    : group ? `<div class="mark">${esc(group.trim()[0])}</div><div><div class="ar">${esc(group)}</div><div class="en">${esc(t('كل الشركات'))}</div></div>`
+      : `<div><div class="ar">${esc(t('كل الشركات'))}</div></div>`;
   const printed = `${fmtDate(todayISO())} ${new Date().toTimeString().slice(0, 5)}`;
   const pageNo = en ? `"Page " counter(page) " of " counter(pages)` : `"صفحة " counter(page) " من " counter(pages)`;
   const box = `font-family:"IBM Plex Sans Arabic",Tahoma,sans-serif;font-size:8pt;color:#66736f`;
@@ -805,7 +806,7 @@ function openReportWindow({ title, subtitle = '', company = null, meta = [], cri
     <style>${REPORT_CSS}
       @page{size:A4 ${landscape ? 'landscape' : 'portrait'};margin:11mm 9mm 13mm;
         @bottom-center{content:${pageNo};${box}}
-        @bottom-${en ? 'left' : 'right'}{content:${cssStr(title + ' — ' + (company ? (en ? company.nameEn || company.nameAr : company.nameAr) : group))};${box}}
+        @bottom-${en ? 'left' : 'right'}{content:${cssStr([title, company ? (en ? company.nameEn || company.nameAr : company.nameAr) : group].filter(Boolean).join(' — '))};${box}}
         @bottom-${en ? 'right' : 'left'}{content:${cssStr(printed)};${box}}}</style></head>
     <body><div class="toolbar no-print"><button class="primary" onclick="print()">🖨️ ${esc(t('طباعة'))}</button><button onclick="close()">${esc(t('إغلاق'))}</button>
       <span class="sp"></span><small>${esc(t('معاينة الطباعة'))} · A4 ${esc(t(landscape ? 'عرضي' : 'طولي'))}</small></div>

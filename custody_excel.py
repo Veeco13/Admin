@@ -12,7 +12,7 @@
 - فاتورة لوحدها (invoice_workbook).
 - طلب صرف عهدة (Advance Payment Request): كل الأشخاص وبنودهم + ملخص المطلوب لكل مركز تكلفة.
 
-الأرقام معادلات (SUM). الطباعة: A4، عرض الصفحة، رأس الجدول بيتكرر، «صفحة X من Y»، وختم «صادر من Lunx — المستخدم — الوقت».
+الأرقام معادلات (SUM). الطباعة: A4، عرض الصفحة، رأس الجدول بيتكرر، «صفحة X من Y»، وختم «صادر بواسطة المستخدم — الوقت» (من غير اسم البرنامج).
 """
 import io
 import math
@@ -351,7 +351,7 @@ def _signatures(ws, row, ncols, labels, prepared_by=None):
 
 
 def _print_setup(ws, landscape, title_row, footer_left, user=None):
-    """A4 على عرض الصفحة، رأس الجدول بيتكرر، والتذييل: رقم الكشف، «صفحة X من Y»، وختم «صادر من Lunx — المستخدم — الوقت»."""
+    """A4 على عرض الصفحة، رأس الجدول بيتكرر، والتذييل: رقم الكشف، «صفحة X من Y»، وختم «صادر بواسطة المستخدم — الوقت» (من غير اسم البرنامج)."""
     ws.page_setup.paperSize = ws.PAPERSIZE_A4
     ws.page_setup.orientation = "landscape" if landscape else "portrait"
     ws.page_setup.fitToWidth, ws.page_setup.fitToHeight = 1, 0
@@ -364,8 +364,8 @@ def _print_setup(ws, landscape, title_row, footer_left, user=None):
     who = (user or "").replace("&", "&&")
     ws.oddFooter.left.text, ws.oddFooter.left.size = footer_left.replace("&", "&&"), 8
     ws.oddFooter.center.text, ws.oddFooter.center.size = _L(ws, "Page &P of &N", "صفحة &P من &N", " · "), 8
-    ws.oddFooter.right.text, ws.oddFooter.right.size = _L(ws, f"Issued by Lunx · {who} · &D &T", f"صادر من Lunx · {who} · &D &T",
-                                                          " / ") if _lang(ws) != "both" else f"Lunx · {who} · &D &T", 8
+    ws.oddFooter.right.text, ws.oddFooter.right.size = _L(ws, f"Issued by {who} · &D &T", f"صادر بواسطة {who} · &D &T",
+                                                          " / ") if _lang(ws) != "both" else f"{who} · &D &T", 8      # من غير اسم البرنامج
     ws.sheet_view.showGridLines = False
     ws.sheet_properties.tabColor = PRIMARY
 
