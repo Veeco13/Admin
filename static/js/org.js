@@ -234,6 +234,11 @@ function openCompanyModal(id) {
       <label>${t('انتهاء تفويض المرور')}<input type="date" name="trafficAuthExpiry" value="${v('trafficAuthExpiry')}"></label>
       <label>${t('انتهاء تفويض الشؤون المدنية')}<input type="date" name="civilAffairsAuthExpiry" value="${v('civilAffairsAuthExpiry')}"></label>
       <label>${t('الشعار')}<input type="file" id="co-logo" accept="image/*"></label>
+      <label class="full">📄 ${t('ورق الشركة الرسمي (صورة A4 كاملة)')}<input type="file" id="co-paper" accept="image/*">
+        <span class="small muted">${t('بيظهر خلفية في معاينة الشهادات بس — مابيتطبعش (الطباعة على الورق الرسمي نفسه). ومقاسات الترويسة والتذييل بتتاخد منه.')}</span>
+        ${c && c.letterheadUrl ? `<span class="row" style="gap:10px;margin-top:6px"><img src="${esc(c.letterheadUrl)}?v=${Date.now()}" alt="" style="height:110px;border:1px solid var(--border);border-radius:4px;background:#fff">
+          <span class="small">✓ ${t('مرفوع')}${c.letterheadTop != null ? ` · ${t('الترويسة')} ${c.letterheadTop} ${t('مم')} · ${t('التذييل')} ${c.letterheadBottom} ${t('مم')}` : ''}<br>
+          <button type="button" class="btn sm danger" id="co-paper-rm" style="margin-top:6px">✕ ${t('حذف الورق')}</button></span></span>` : ''}</label>
       </form>`,
     foot: `<button class="btn primary" data-save>حفظ</button><button class="btn" data-close>إلغاء</button>`,
   });
@@ -243,6 +248,18 @@ function openCompanyModal(id) {
     const res = await persist(id ? 'PUT' : 'POST', id ? '/api/companies/' + id : '/api/companies', d, 'تم الحفظ');
     const logo = $('#co-logo', m.el).files[0];
     if (logo) { const fd = new FormData(); fd.append('file', logo); await persist('POST', `/api/companies/${id || res.id}/docs/logo`, fd); }
+    const paper = $('#co-paper', m.el).files[0];
+    if (paper) {
+      const fd = new FormData(); fd.append('file', paper);
+      const r = await persist('POST', `/api/companies/${id || res.id}/docs/letterhead`, fd);
+      if (r && r.top == null) toast(t('الورق اترفع، بس مقاسات الترويسة والتذييل ماتعرفتش من الصورة — ارفع صورة الورق كاملة ومظبوطة.'), 'err');
+    }
+    m.close();
+  };
+  const rm = $('#co-paper-rm', m.el);
+  if (rm) rm.onclick = async () => {
+    if (!await openConfirm(t('حذف ورق الشركة الرسمي؟ الشهادات هتتعاين من غيره.'), { danger: true, okLabel: t('حذف') })) return;
+    await persist('DELETE', `/api/companies/${id}/docs/letterhead`, undefined, 'تم الحذف');
     m.close();
   };
 }

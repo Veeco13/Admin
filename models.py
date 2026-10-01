@@ -64,6 +64,11 @@ class Company(Base):
     civilAffairsAuthExpiry: Mapped[Optional[date]] = col("civil_affairs_auth_expiry", Date)
     activity: Mapped[Optional[str]] = col("activity", NAME)
     logoPath: Mapped[Optional[str]] = col("logo_path", Unicode(500))
+    # ورق الشركة الرسمي (صورة A4): خلفية في معاينة الشهادات بس. top / bottom = آخر الترويسة وبداية التذييل بالملّي
+    # (متقاسين من الصورة وقت الرفع — letters.measure_paper) ← هوامش الشهادة بتتظبط عليهم
+    letterheadPath: Mapped[Optional[str]] = col("letterhead_path", Unicode(500))
+    letterheadTop: Mapped[Optional[float]] = col("letterhead_top", Float)
+    letterheadBottom: Mapped[Optional[float]] = col("letterhead_bottom", Float)
 
 
 class Project(Base):

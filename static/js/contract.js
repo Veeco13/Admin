@@ -292,20 +292,22 @@ function batchSigOptions(companyId) {
     + (others.length ? `<optgroup label="${esc(t('مفوّضين في شركات تانية'))}">${others.map(s => opt(s.id, label(s), false)).join('')}</optgroup>` : '');
 }
 
-/** معاينة PDF وطباعة بس (من غير تنزيل ولا شريط أدوات المتصفح). kind = نوعه في سجل التدقيق لما يتطبع */
-function openPdfPreviewModal(blob, name, n, kind = 'employee') {
-  const url = URL.createObjectURL(blob);
+/** معاينة PDF وطباعة بس (من غير تنزيل ولا شريط أدوات المتصفح). kind = نوعه في سجل التدقيق لما يتطبع.
+    opts.printBlob = الملف اللي بيتطبع لو غير اللي ظاهر: المعاينة على ورق الشركة، والطباعة من غيره (على الورق الرسمي نفسه) */
+function openPdfPreviewModal(blob, name, n, kind = 'employee', opts = null) {
+  const url = URL.createObjectURL(blob), printUrl = opts && opts.printBlob ? URL.createObjectURL(opts.printBlob) : null;
   const m = openModal({
     title: `📄 ${esc(name)}`, size: 'wide',
-    body: `<iframe class="pdf-frame" src="${url}#toolbar=0&navpanes=0" title="PDF"></iframe>`,
+    body: `<iframe class="pdf-frame" src="${url}#toolbar=0&navpanes=0" title="PDF"></iframe>
+      ${printUrl ? `<iframe class="pdf-print" src="${printUrl}" title="print" aria-hidden="true" tabindex="-1"></iframe>` : ''}`,
     foot: `<button class="btn primary" data-print>🖨️ ${t('طباعة')}${n > 1 ? ` (${n})` : ''}</button>
-      <span class="small muted">${t('معاينة وطباعة بس — التنزيل مقفول')}</span>
+      <span class="small muted">${t('معاينة وطباعة بس — التنزيل مقفول')}${printUrl ? ` · 📄 ${t('ورق الشركة ظاهر في المعاينة بس — مش هيتطبع')}` : ''}</span>
       <span class="spacer"></span><button class="btn" data-close>إغلاق</button>`,
-    onClose: () => setTimeout(() => URL.revokeObjectURL(url), 60000),
+    onClose: () => setTimeout(() => { URL.revokeObjectURL(url); if (printUrl) URL.revokeObjectURL(printUrl); }, 60000),
   });
   $('[data-print]', m.el).onclick = () => {
     printLog(name.replace(/\.pdf$/i, ''), kind);
-    const fr = $('iframe', m.el);
+    const fr = $(printUrl ? 'iframe.pdf-print' : 'iframe.pdf-frame', m.el);
     try { fr.contentWindow.focus(); fr.contentWindow.print(); } catch (_) { toast(t('تعذّرت الطباعة من هنا'), 'err'); }
   };
 }

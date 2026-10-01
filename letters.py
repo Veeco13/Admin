@@ -214,8 +214,87 @@ def date_ar(v):
     return f"{d.day} {MONTHS_AR[d.month - 1]} {d.year}" if d else None
 
 
-def salary_xlsx(kind, number, data):
-    """قالب الشركة ← الشيت المطلوب بس، متعبّي بالبيانات الوظيفية (الشكل زي ما هو) ← xlsx bytes."""
+# ---------------------------------------------------------------------------
+# ورق الشركة الرسمي (letterhead): صورة A4 لكل شركة. الطباعة بتبقى على الورق المطبوع نفسه، فالصورة بتظهر خلفية في
+# **المعاينة بس**، ومقاساتها (آخر الترويسة وبداية التذييل) بتظبط هوامش الشهادة علشان مفيش حاجة تنزل على المطبوع.
+# ---------------------------------------------------------------------------
+PAGE_H_MM = 297.0
+_PAPER_PDF = {}
+
+
+def measure_paper(path):
+    """صورة ورق الشركة ← (آخر الترويسة من فوق، بداية التذييل من تحت) بالملّي، أو None لو مش واضحة.
+    أطول مساحة فاضية في الصفحة هي مكان الكتابة: اللي فوقها ترويسة واللي تحتها تذييل."""
+    from PIL import Image
+    try:
+        with Image.open(path) as im:
+            g = im.convert("L")
+            w, h = g.size
+            g = g.crop((int(w * .02), 0, int(w * .98), h))          # حواف المسح (ظل الورقة) مش حبر
+            hist = g.histogram()
+            paper = max(range(128, 256), key=lambda v: hist[v])     # لون الورق = أكتر درجة فاتحة
+            ink = g.point(lambda v: 255 if v < paper - 20 else 0).resize((1, h), Image.BOX)   # نسبة الحبر في كل سطر
+            rows = [v > 1 for v in ink.getdata()]
+    except Exception:
+        return None
+    best, start = (0, 0), None
+    for y, on in enumerate(rows + [True]):
+        if not on and start is None:
+            start = y
+        elif on and start is not None:
+            if y - start > best[1] - best[0]:
+                best = (start, y)
+            start = None
+    if best[1] - best[0] < h * .4:                                  # مفيش مساحة كتابة واضحة ← مش ورق رسمي
+        return None
+    return round(best[0] / h * PAGE_H_MM, 1), round((h - best[1]) / h * PAGE_H_MM, 1)
+
+
+def company_paper(s, company_id):
+    """ورق الشركة ← {path, size: (فوق، تحت) أو None} — أو None لو مالهاش ورق مرفوع."""
+    c = s.get(M.Company, company_id) if company_id else None
+    path = db.resolve_file(c.letterheadPath) if c is not None and c.letterheadPath else None
+    if not path or not os.path.exists(path):
+        return None
+    size = (c.letterheadTop, c.letterheadBottom) if c.letterheadTop is not None and c.letterheadBottom is not None else None
+    return {"path": path, "size": size}
+
+
+def paper_pdf(path):
+    """صورة الورق ← PDF صفحة A4 واحدة (في الذاكرة لحد ما الملف يتغيّر)."""
+    from PIL import Image
+    key = (path, os.path.getmtime(path))
+    if key not in _PAPER_PDF:
+        with Image.open(path) as im:
+            im = im.convert("RGB")
+            im.thumbnail((1654, 2339))                              # 200 نقطة في البوصة كفاية للمعاينة
+            buf = io.BytesIO()
+            im.save(buf, "PDF", resolution=im.width / (210 / 25.4))
+        if len(_PAPER_PDF) > 8:
+            _PAPER_PDF.clear()
+        _PAPER_PDF[key] = buf.getvalue()
+    return _PAPER_PDF[key]
+
+
+def with_paper(pdf, paper):
+    """الشهادة فوق ورق الشركة — **للمعاينة بس** (الطباعة من الملف الأصلي على الورق الرسمي)."""
+    from pypdf import PdfReader, PdfWriter, Transformation
+    bg = PdfReader(io.BytesIO(paper)).pages[0]
+    bw, bh = float(bg.mediabox.width), float(bg.mediabox.height)
+    out = PdfWriter()
+    for page in PdfReader(io.BytesIO(pdf)).pages:
+        w, h = float(page.mediabox.width), float(page.mediabox.height)
+        base = out.add_blank_page(width=w, height=h)
+        base.merge_transformed_page(bg, Transformation().scale(w / bw, h / bh))
+        base.merge_page(page)
+    buf = io.BytesIO()
+    out.write(buf)
+    return buf.getvalue()
+
+
+def salary_xlsx(kind, number, data, paper=None):
+    """قالب الشركة ← الشيت المطلوب بس، متعبّي بالبيانات الوظيفية (الشكل زي ما هو) ← xlsx bytes.
+    paper = (آخر الترويسة، بداية التذييل) بالملّي من ورق الشركة ← الهوامش بتتظبط عليه."""
     wb = openpyxl.load_workbook(TEMPLATE)
     keep = SHEETS[kind]
     for ws in list(wb.worksheets):
@@ -278,6 +357,16 @@ def salary_xlsx(kind, number, data):
         put("G29", data.get("account") or None)
     # رقم الشهادة: في تذييل الصفحة — أقصى الأسفل والشمال، بخط صغير (مش في نص الورقة)
     ws.oddFooter.left.text, ws.oddFooter.left.size, ws.oddFooter.left.font = f"Ref # {number}", 8, "Calibri,Regular"
+    # منطقة الطباعة لحد آخر سطر مكتوب (السطور الفاضية تحت بتزق لصفحة تانية لما هامش التذييل يكبر)
+    filled = [c.row for row in ws.iter_rows(min_row=2, max_row=45, max_col=9) for c in row if c.value not in (None, "", " ")]
+    ws.print_area = f"A2:I{max(filled) + 1}"
+    if paper:
+        top, bottom = paper
+        mg, default = ws.page_margins, ws.sheet_format.defaultRowHeight or 15
+        blank = sum(ws.row_dimensions[r].height or default for r in range(2, min(filled))) * 25.4 / 72   # سطور فاضية قبل العنوان
+        mg.top = max(mg.top, (top + 5 - blank) / 25.4)              # العنوان تحت الترويسة المطبوعة
+        mg.footer = (bottom + 3) / 25.4                            # الرقم المرجعي فوق التذييل المطبوع
+        mg.bottom = max(mg.bottom, mg.footer + 5 / 25.4)
     out = io.BytesIO()
     wb.save(out)
     return out.getvalue()

@@ -449,7 +449,7 @@ def dump_state(s, ctx=None):
         if not company_ok(c.id):
             if c.id in ref_companies:
                 companies.append({"id": c.id, "nameAr": c.nameAr, "nameEn": c.nameEn, "signatories": [], "docs": {},
-                                  "logoUrl": None, "outOfScope": True})
+                                  "logoUrl": None, "letterheadUrl": None, "outOfScope": True})
             continue
         logo = f"/files/logo/{c.id}" if c.logoPath else None
         if companies_full:
@@ -460,6 +460,7 @@ def dump_state(s, ctx=None):
         else:   # الاسم بس (عشان باقي الشاشات تعرض اسم شركة الموظف)
             d = {"id": c.id, "nameAr": c.nameAr, "nameEn": c.nameEn, "signatories": [], "docs": {}}
         d["logoUrl"] = logo
+        d["letterheadUrl"] = f"/files/letterhead/{c.id}" if c.letterheadPath else None      # ورق الشركة (معاينة الشهادات)
         companies.append(d)
     visible_sigs = {x["civilId"] for c in companies for x in c["signatories"] if x.get("civilId")}
 

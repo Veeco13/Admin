@@ -52,7 +52,7 @@ BASE_DIR = db.BASE_DIR
 BUILTIN_TEMPLATES = os.path.join(BASE_DIR, "templates_docs")     # القوالب اللي جاية مع الكود
 TEMPLATE_DOCS = db.data_path("templates_docs")                  # القوالب المستخدمة (بتتحفظ مع البيانات)
 UPLOADS = db.data_path("uploads")
-for sub in ("", "employees", "companies", "signatories", "signatures", "logos", "imports"):
+for sub in ("", "employees", "companies", "signatories", "signatures", "logos", "letterheads", "imports"):
     os.makedirs(os.path.join(UPLOADS, sub), exist_ok=True)
 os.makedirs(TEMPLATE_DOCS, exist_ok=True)
 RETIRED_TEMPLATES = ("contract_template.docx", "contract_template_v2.docx")
@@ -1545,7 +1545,8 @@ DOC_KINDS = ("trafficAuth", "civilAffairs", "commercialLicense")
 @app.post("/api/companies/<cid>/docs/<kind>")
 @require("companies.edit")
 def upload_company_doc(cid, kind):
-    if kind not in DOC_KINDS and kind != "logo":
+    image = kind in ("logo", "letterhead")         # letterhead = ورق الشركة الرسمي (صورة A4 — لمعاينة الشهادات بس)
+    if kind not in DOC_KINDS and not image:
         return err("نوع مستند غير معروف")
     if not me().company_ok(cid):
         return forbidden(OUT_OF_SCOPE)
@@ -1555,10 +1556,10 @@ def upload_company_doc(cid, kind):
     f = request.files.get("file")
     if not f:
         return err("لا يوجد ملف")
-    ext, problem = check_upload(f, images_only=kind == "logo")
+    ext, problem = check_upload(f, images_only=image)
     if problem:
         return err(problem)
-    folder = os.path.join(UPLOADS, "logos" if kind == "logo" else "companies")
+    folder = os.path.join(UPLOADS, {"logo": "logos", "letterhead": "letterheads"}.get(kind, "companies"))
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, f"{cid}_{kind}{ext}")
     f.save(path)
@@ -1568,6 +1569,16 @@ def upload_company_doc(cid, kind):
             c = s.get(M.Company, cid)
             if c:
                 c.logoPath = rel
+        elif kind == "letterhead":
+            c = s.get(M.Company, cid)
+            if c:
+                if c.letterheadPath and c.letterheadPath != rel:           # صورة قديمة بامتداد تاني
+                    _remove_quietly(db.resolve_file(c.letterheadPath))
+                c.letterheadPath = rel
+                c.letterheadTop, c.letterheadBottom = letters.measure_paper(path) or (None, None)
+                db.log_audit(s, "company_edit", f"رفع ورق الشركة الرسمي: {c.nameAr}" + (
+                    f" (الترويسة {c.letterheadTop:g} مم، التذييل {c.letterheadBottom:g} مم)" if c.letterheadTop is not None else ""), uname())
+                return jsonify({"ok": True, "top": c.letterheadTop, "bottom": c.letterheadBottom})
         else:
             s.merge(M.CompanyDoc(companyId=cid, kind=kind, name=f.filename, path=rel, uploadedAt=db.now()))
     return jsonify({"ok": True})
@@ -1579,10 +1590,37 @@ def delete_company_doc(cid, kind):
     if not me().company_ok(cid):
         return forbidden(OUT_OF_SCOPE)
     with db.session_scope() as s:
+        if kind == "letterhead":
+            c = s.get(M.Company, cid)
+            if c is not None and c.letterheadPath:
+                _remove_quietly(db.resolve_file(c.letterheadPath))
+                c.letterheadPath = c.letterheadTop = c.letterheadBottom = None
+                db.log_audit(s, "company_edit", f"حذف ورق الشركة الرسمي: {c.nameAr}", uname())
+            return jsonify({"ok": True})
         d = s.get(M.CompanyDoc, (cid, kind))
         if d:
             s.delete(d)
     return jsonify({"ok": True})
+
+
+def _remove_quietly(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+@app.get("/files/letterhead/<cid>")
+@require("companies.view")
+def get_letterhead(cid):
+    """صورة ورق الشركة الرسمي (للعرض في بيانات الشركة)."""
+    if not me().company_ok(cid):
+        abort(403)
+    with db.session_scope(commit=False) as s:
+        c = s.get(M.Company, cid)
+    if not c or not c.letterheadPath:
+        abort(404)
+    return send_viewable(db.resolve_file(c.letterheadPath))
 
 
 @app.get("/files/company/<cid>/<kind>")
@@ -4406,10 +4444,14 @@ def create_letter(emp_id):
         return jsonify({"ok": True, "id": x.id, "number": number})
 
 
+_LETTER_PDF = {}
+
+
 @app.get("/api/letters/<lid>/pdf")
 @require("employees.view", "sensitive.salary")
 def letter_pdf(lid):
-    """شهادة الراتب PDF من نسختها المحفوظة (نفس الرقم والبيانات) — معاينة وطباعة بس."""
+    """شهادة الراتب PDF من نسختها المحفوظة (نفس الرقم والبيانات) — معاينة وطباعة بس.
+    ?paper=1 ← نفس الشهادة فوق صورة ورق الشركة: **للمعاينة بس** — الطباعة من الملف العادي (على الورق الرسمي نفسه)."""
     with db.session_scope(commit=False) as s:
         x = s.get(M.HrLetter, lid)
         if x is None or x.kind not in letters.SHEETS:
@@ -4417,10 +4459,22 @@ def letter_pdf(lid):
         if x.employeeId and not emp_ok(s, x.employeeId):
             return forbidden(OUT_OF_SCOPE)
         kind, number, data = x.kind, x.number, json.loads(x.data or "{}")
-    try:
-        pdf = contracts.xlsx_to_pdf(letters.salary_xlsx(kind, number, data))
-    except RuntimeError as e:
-        return err(str(e), 501)
+        paper = letters.company_paper(s, x.companyId)
+    size = paper["size"] if paper else None
+    # المعاينة (بالورق) والطباعة (من غيره) طلبين ورا بعض ← التحويل لـ PDF مرة واحدة
+    key = (lid, hashlib.md5(json.dumps([kind, number, data, size, os.path.getmtime(letters.TEMPLATE)], sort_keys=True,
+                                       default=str).encode()).hexdigest())
+    pdf = _LETTER_PDF.get(key)
+    if pdf is None:
+        try:
+            pdf = contracts.xlsx_to_pdf(letters.salary_xlsx(kind, number, data, size))
+        except RuntimeError as e:
+            return err(str(e), 501)
+        if len(_LETTER_PDF) > 20:
+            _LETTER_PDF.clear()
+        _LETTER_PDF[key] = pdf
+    if request.args.get("paper") and paper:
+        pdf = letters.with_paper(pdf, letters.paper_pdf(paper["path"]))
     return send_file(io.BytesIO(pdf), mimetype="application/pdf", as_attachment=False, download_name=f"{number}.pdf")
 
 

@@ -52,8 +52,13 @@ async function reprintLetter(x) {
   if (x.kind === 'return') return printReturnForm(x);
   if (!STATE.sheetPdfAvailable) return openBlockAlert(t('الشهادة محتاجة Microsoft Excel أو LibreOffice على السيرفر.'));
   toast(t('جاري تجهيز المعاينة…'));
-  try { const r = await fetchBlob(`/api/letters/${x.id}/pdf`); openPdfPreviewModal(r.blob, `${x.number}.pdf`, 1, 'employee'); }
-  catch (e) { toast(e.message, 'err'); }
+  // الشركة ليها ورق رسمي مرفوع ← المعاينة عليه، والطباعة من غيره (على الورق المطبوع نفسه)
+  const paper = !!(IDX.company[x.companyId] || {}).letterheadUrl;
+  try {
+    const r = await fetchBlob(`/api/letters/${x.id}/pdf`);
+    const view = paper ? await fetchBlob(`/api/letters/${x.id}/pdf?paper=1`) : r;
+    openPdfPreviewModal(view.blob, `${x.number}.pdf`, 1, 'employee', paper ? { printBlob: r.blob } : null);
+  } catch (e) { toast(e.message, 'err'); }
 }
 async function setLeaveStatus(x, status, after) {
   try { await persist('PUT', `/api/letters/${x.id}/status`, { status }, 'تم الحفظ'); if (after) after(); } catch (_) { /* ظاهر */ }

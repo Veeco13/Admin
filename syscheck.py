@@ -21,7 +21,7 @@ import models as M
 
 OK, WARN, BAD = "ok", "warn", "bad"
 KEY, EVERY_DAYS = "syscheck_result", 7
-FILE_COLS = ("path", "logoPath", "filePath")         # أعمدة المرفقات في أي جدول
+FILE_COLS = ("path", "logoPath", "letterheadPath", "filePath")         # أعمدة المرفقات في أي جدول
 SKIP_DIRS = ("imports",)                             # ملفات الاستيراد المؤقتة مش مرفقات
 _lock = threading.Lock()
 
