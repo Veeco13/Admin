@@ -130,6 +130,8 @@ const EMP_DATE_FIELDS = [
   { key: 'healthCardExp',     label: 'البطاقة الصحية' },
   { key: 'drivingLicenseExp', label: 'رخصة القيادة', driverOnly: true },
 ];
+/** المستندات اللي بتتابَع للموظف ده: رخصة القيادة للسواق بس، والإقامة لغير الكويتي والخليجي (مالهمش إقامة) */
+function empDateFields(e) { return EMP_DATE_FIELDS.filter(f => (!f.driverOnly || e.isDriver) && (f.key !== 'residencyExp' || empNeedsResidency(e))); }
 
 /* ---------- localStorage (القسم 10) ---------- */
 function lsGet(k, def = null) { try { const v = localStorage.getItem(k); return v === null ? def : v; } catch (e) { return def; } }
@@ -977,8 +979,7 @@ function empDocCompleteness(e) {
 }
 function empUrgency(e) {
   let min = null;
-  for (const f of EMP_DATE_FIELDS) {
-    if (f.driverOnly && !e.isDriver) continue;
+  for (const f of empDateFields(e)) {
     const d = daysUntil(e[f.key]);
     if (d !== null && (min === null || d < min)) min = d;
   }
@@ -1003,8 +1004,7 @@ function trackedAlertItems(maxDays = 90, system = false) {
   for (const e of scopedEmployees()) {
     if (empEnded(e)) continue;
     const rn = (STATE.renewing || {})[e.id] || {};     // عليه بند تجديد مفتوح لسه تاريخه الجديد ماتسجلش
-    for (const f of EMP_DATE_FIELDS) {
-      if (f.driverOnly && !e.isDriver) continue;
+    for (const f of empDateFields(e)) {
       push({ kind: 'employee', refId: e.id, name: empName(e), what: f.label, date: e[f.key], renew: rn[f.key] });
     }
   }

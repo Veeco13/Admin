@@ -14,6 +14,7 @@ import io
 import json
 import os
 import re
+import threading
 import time
 from datetime import datetime
 from functools import wraps
@@ -324,7 +325,12 @@ def admin_required(f):
     @wraps(f)
     def w(*a, **kw):
         u = me()
-        if not u or not u.isAdmin:
+        if not u:                          # الجلسة خلصت ← الواجهة بترجّع لصفحة الدخول (زي login_required)
+            session.clear()
+            if request.path.startswith("/api/"):
+                return jsonify({"error": "unauthorized"}), 401
+            return redirect(url_for("login"))
+        if not u.isAdmin:
             return forbidden()
         return f(*a, **kw)
     return w
@@ -370,16 +376,62 @@ def dup_name(d):
     return d["name"] if me().allCompanies else "سجل آخر"
 
 
+# قفل الدخول: LOGIN_MAX محاولة غلط لنفس المستخدم من نفس الجهاز (أو LOGIN_MAX_IP من الجهاز كله) في LOGIN_WINDOW ثانية
+# ← قفل LOGIN_LOCK ثانية. في الذاكرة (بيتصفّر مع إعادة التشغيل)، وكل محاولة غلط بتتسجّل في سجل التدقيق.
+LOGIN_MAX, LOGIN_MAX_IP, LOGIN_WINDOW, LOGIN_LOCK = 5, 20, 15 * 60, 5 * 60
+_login_fails, _login_guard = {}, threading.Lock()
+
+
+def _login_keys(username):
+    ip = request.remote_addr or "?"
+    return (f"u:{username.lower()}|{ip}", LOGIN_MAX), (f"ip:{ip}", LOGIN_MAX_IP)
+
+
+def _login_wait(username):
+    """الثواني الباقية على فك القفل (0 = مش مقفول)."""
+    now, wait = time.time(), 0
+    with _login_guard:
+        for key, limit in _login_keys(username):
+            tries = [t for t in _login_fails.get(key, []) if now - t < LOGIN_WINDOW]
+            _login_fails[key] = tries
+            if len(tries) >= limit:
+                wait = max(wait, int(LOGIN_LOCK - (now - tries[-1])))
+    return max(wait, 0)
+
+
+def _login_failed(username):
+    """بتسجّل المحاولة الغلط ← True لو وصل للحد (اتقفل)."""
+    now, locked = time.time(), False
+    with _login_guard:
+        if len(_login_fails) > 5000:       # حماية للذاكرة
+            _login_fails.clear()
+        for key, limit in _login_keys(username):
+            tries = [t for t in _login_fails.get(key, []) if now - t < LOGIN_WINDOW] + [now]
+            _login_fails[key] = tries
+            locked = locked or len(tries) >= limit
+    return locked
+
+
+def _login_ok(username):
+    with _login_guard:
+        _login_fails.pop(_login_keys(username)[0][0], None)
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     error = None
     if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        wait = _login_wait(username)
+        if wait:
+            return render_template("login.html", error=f"محاولات كتير غلط — جرّب تاني بعد {wait // 60 + 1} دقيقة"), 429
         with db.session_scope() as s:
-            u = s.scalar(select(M.User).where(M.User.username == request.form.get("username", "").strip()))
+            u = s.scalar(select(M.User).where(M.User.username == username))
             if u and check_password_hash(u.passwordHash, request.form.get("password", "")):
                 if not u.active:
                     error = "الحساب ده موقوف، كلّم مدير النظام"
                 else:
+                    _login_ok(username)
                     u.lastLogin = db.now()
                     session.clear()
                     session["uid"] = u.id
@@ -392,6 +444,13 @@ def login():
                     return redirect(url_for("index"))
             else:
                 error = "اسم المستخدم أو كلمة المرور غير صحيحة"
+                locked = _login_failed(username)
+                who = f"{username[:40] or '—'} (من {request.remote_addr or '؟'})"
+                db.log_audit(s, "login_locked" if locked else "login_fail",
+                             (f"قفل الدخول {LOGIN_LOCK // 60} دقايق بعد محاولات غلط كتير: {who}" if locked
+                              else f"محاولة دخول بكلمة سر غلط: {who}"), username[:40] or None)
+                if locked:
+                    error = f"محاولات كتير غلط — جرّب تاني بعد {LOGIN_LOCK // 60} دقايق"
     return render_template("login.html", error=error)
 
 
@@ -906,6 +965,11 @@ def import_employees():
             hold = None if u.can(approvals.PERM) else (lambda s2, e, data: approvals.hold(s2, e, data, u, f"استيراد ملف {name}"))
             stats = importer.import_file(s, path, uname(), allow_add=allow_add, hold=hold)
             batch = stats.pop("_batch", [])
+            read = stats["updated"] + stats["unchanged"] + stats["added"] + stats["skipped"] + len(stats["notRegistered"]) + len(stats["held"])
+            if not read:                           # ولا صف اتقرا ← الملف مش بالشكل المطلوب (بدل نتيجة كلها أصفار)
+                why = "؛ ".join(stats.get("problems") or []) or "مفيش صف فيه رقم مدني"
+                raise ValueError(f"{why}. أول صف لازم يكون فيه عمود «الرقم المدني» وعمود «الاسم». "
+                                 "لو عايز تكمّل خانات ناقصة بس (تليفونات، إيميلات…) استخدم «📥 استيراد بيانات تكميلية».")
             if mode == "apply" and batch:           # كل خانة اتغيّرت بقيمتها القديمة ← «↩️ تراجع» عن الدفعة كلها
                 stats["batchId"] = import_extra.record_file_import(s, name, stats, batch, uname())
             if mode == "apply":
@@ -916,6 +980,8 @@ def import_employees():
                              + (f"، تخطّي {len(miss)} رقم مدني مش مسجّل ({'، '.join(x['id'] for x in miss[:20])}"
                                 + ("…" if len(miss) > 20 else "") + ")" if miss else "")
                              + (f"، {len(stats['guarded'])} قيمة إنجليزي ماكتبتش على الخانات العربي" if stats["guarded"] else ""), uname())
+    except ValueError as e:
+        return err(f"الملف ماتقراش: {e}")
     except Exception as e:
         return err(f"خطأ في قراءة الملف: {e}")
     return jsonify({"ok": True, "mode": mode, "token": token, "fileName": name, "allowAdd": allow_add, **stats})
@@ -1869,7 +1935,7 @@ def permit_cap(s, kind, hid, project_id=None):
     out = []
     if kind == "employee":
         e = s.get(M.Employee, hid)
-        if e is not None and e.residencyExp:
+        if e is not None and e.residencyExp and pdf_forms.needs_residency(e.nationality):   # الكويتي والخليجي مالهمش إقامة
             out.append(("انتهاء الإقامة", e.residencyExp))
     else:
         v = s.get(M.Vehicle, hid)
@@ -3860,7 +3926,8 @@ def data_quality(s):
         "التاريخ لازم في نماذج التأمينات وإقرار المخالصة.")
     for f, lab in (("residencyExp", "الإقامة"), ("workPermitExp", "إذن العمل")):
         add(f"emp_expired_{f}", f"{lab} منتهية لموظفين في الخدمة", "high",
-            [emp(e, fmt(getattr(e, f))) for e in active if getattr(e, f) and getattr(e, f) < today])
+            [emp(e, fmt(getattr(e, f))) for e in active if getattr(e, f) and getattr(e, f) < today
+             and (f != "residencyExp" or pdf_forms.needs_residency(e.nationality))])     # الكويتي والخليجي مالهمش إقامة
     need_res = [e for e in active if pdf_forms.needs_residency(e.nationality)]
     add("emp_no_residency", "من غير تاريخ انتهاء الإقامة أو إذن العمل", "medium",
         [emp(e, "، ".join(x for x, v in (("الإقامة", e.residencyExp), ("إذن العمل", e.workPermitExp)) if not v)) for e in need_res

@@ -9,7 +9,7 @@ function collectAllTrackedDates() {
   // تواريخ الموظفين مجمّعة حسب نوع المستند والمستوى
   const emps = scopedEmployees().filter(e => !empEnded(e));
   return EMP_DATE_FIELDS.map(f => {
-    const list = emps.filter(e => !f.driverOnly || e.isDriver);
+    const list = emps.filter(e => empDateFields(e).includes(f));        // الإقامة لغير الكويتي والخليجي بس
     const tiers = { expired: 0, d30: 0, d60: 0, d90: 0, ok: 0, none: 0 };
     list.forEach(e => tiers[tierOf(e[f.key])]++);
     return { ...f, total: list.length, tiers };

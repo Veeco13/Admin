@@ -298,7 +298,13 @@ def import_dataframe_with_headers(s, df, user, stats, cache, allow_add=True):
         if key in HEADER_MAP:
             cols[c] = HEADER_MAP[key]
     if "id" not in cols.values() or "name" not in cols.values():
+        miss = [lab for f, lab in (("id", "الرقم المدني"), ("name", "الاسم")) if f not in cols.values()]
+        stats.setdefault("problems", []).append("ناقص عمود " + " و".join(f"«{x}»" for x in miss))
         return False
+    for c in df.columns:                           # أعمدة عنوانها مش معروف ← بتتجاهل، وبتتقال في النتيجة
+        key = str(c).strip()
+        if c not in cols and key and key.lower() != "nan" and not key.startswith("Unnamed") and key not in stats["ignored"]:
+            stats["ignored"].append(key)
     for _, row in df.iterrows():
         rec = {}
         for c, f in cols.items():
@@ -346,7 +352,7 @@ def import_file(s, path, user, allow_add=True, hold=None):
     hold(s, e, data) ← التعديلات الحساسة (المرتب، البنك، إنهاء الخدمة) بتتشال من الصف وبتتحوّل لطلبات موافقة
     (approvals.hold) للمستخدم اللي مالوش صلاحية الموافقة."""
     stats = {"added": 0, "updated": 0, "unchanged": 0, "skipped": 0, "sheets": [], "notRegistered": [],
-             "changes": [], "addedList": [], "held": [], "guarded": [], "_hold": hold, "_batch": []}
+             "changes": [], "addedList": [], "held": [], "guarded": [], "ignored": [], "problems": [], "_hold": hold, "_batch": []}
     cache = {}
     if path.lower().endswith(".csv"):
         frames = {"csv": pd.read_csv(path, header=None, dtype=object, encoding="utf-8-sig")}

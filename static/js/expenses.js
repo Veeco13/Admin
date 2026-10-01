@@ -136,7 +136,7 @@ function expensesHtml() {
       <select id="exf-type">${opt('', t('— كل الأنواع —'), !F.type)}${Object.entries(CUSTODY_TYPES).map(([k, v]) => opt(k, t(v.label), k === F.type)).join('')}</select>
       <label class="row small" style="gap:5px"><input type="checkbox" id="exf-ok" ${F.approved ? 'checked' : ''}> ${t('المعتمد من الحسابات بس')}</label>
       <button class="btn sm ghost" id="exf-clear">✕ ${t('مسح الفلاتر')}</button><span class="spacer"></span>
-      <button class="btn sm" id="ex-print">🖨️ ${t('معاينة وطباعة')}</button></div>`;
+      <button class="btn sm" id="ex-print" ${M.invs.length ? '' : 'disabled'}>🖨️ ${t('معاينة وطباعة')}</button></div>`;
   const kpis = `<div class="cu-kpis ex-kpis">
       ${tile(fmtMoney(M.cur.total), 'مصروفات الشهر ده', delta === null ? (M.prev.total ? '' : t('الشهر اللي فات مفيهوش مصروفات')) : `${delta > 0 ? '▲' : delta < 0 ? '▼' : '='} ${Math.abs(delta)}% ${t('عن الشهر اللي فات')} (${expNum(M.prev.total)})`, 'blue')}
       ${tile(fmtMoney(T.total), 'إجمالي الفترة', `${t('رسوم')} ${expNum(T.gov)} · ${t('دعم')} ${expNum(T.support)}`, 'green')}

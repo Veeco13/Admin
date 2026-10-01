@@ -69,7 +69,7 @@ function permitDefaultProject(h) { const pr = h && IDX.project[h.projectId]; ret
 function permitCaps(kind, h, projectId) {
   if (!h) return [];
   const out = [];
-  if (kind === 'employee') { if (h.residencyExp) out.push({ l: t('الإقامة'), d: h.residencyExp, src: 'residency' }); }
+  if (kind === 'employee') { if (h.residencyExp && empNeedsResidency(h)) out.push({ l: t('الإقامة'), d: h.residencyExp, src: 'residency' }); }
   else {
     if (h.insuranceExpiry) out.push({ l: t('الرخصة والتأمين'), d: h.insuranceExpiry, src: 'insurance' });
   }

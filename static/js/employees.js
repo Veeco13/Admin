@@ -49,7 +49,7 @@ function filteredEmployees(f = UI.emp) {
     if (L.costCenter.length && !L.costCenter.includes(e.costCenter || '')) return false;
     if (f.driver && !e.isDriver) return false;
     if (f.tier) {                                      // «خلال 60 يوم» = من النهارده لحد 60 يوم (TIER_WITHIN)
-      const fields = f.tierField === 'any' ? EMP_DATE_FIELDS.filter(x => !x.driverOnly || e.isDriver).map(x => x.key) : [f.tierField];
+      const fields = f.tierField === 'any' ? empDateFields(e).map(x => x.key) : [f.tierField];
       if (!fields.some(k => tierIn(e[k], f.tier))) return false;
     }
     return true;
@@ -522,8 +522,8 @@ function printEmployeeReport(list, cols, { title, filters, selectedCount }) {
   if (R.groupBy) crit.push(`${t('تجميع حسب')}: ${esc(t(groupLabel))}`);
   crit.push(`${t('ترتيب حسب')}: ${esc(t(EMP_REPORT_COLS.find(c => c.k === R.sort).l))}`);
   // الملخص
-  const expired = list.filter(e => EMP_DATE_FIELDS.some(f => (!f.driverOnly || e.isDriver) && tierOf(e[f.key]) === 'expired')).length;
-  const soon = list.filter(e => EMP_DATE_FIELDS.some(f => (!f.driverOnly || e.isDriver) && tierOf(e[f.key]) === 'd30')).length;
+  const expired = list.filter(e => empDateFields(e).some(f => tierOf(e[f.key]) === 'expired')).length;
+  const soon = list.filter(e => empDateFields(e).some(f => tierOf(e[f.key]) === 'd30')).length;
   const summary = R.summary ? [[list.length, t('إجمالي الموظفين')], [list.filter(e => (e.employmentStatus || 'active') === 'active').length, t('في الخدمة')],
     [expired, t('عندهم مستند منتهي')], [soon, t('مستند بينتهي خلال 30 يوم')],
     ...(can('sensitive.salary') && cols.some(c => c.k === 'salary') ? [[fmtMoney(sum(list.map(e => e.salary))), t('إجمالي الرواتب')]] : [])] : [];
@@ -664,6 +664,8 @@ function importResultHtml(r, preview) {
       <span class="chip">${t('من غير تغيير')}: <b>${r.unchanged || 0}</b></span>
       ${miss.length ? `<span class="chip x">⚠️ ${w('هيتخطّى', 'اتخطّى')}: <b>${miss.length}</b></span>` : ''}
       ${r.skipped ? `<span class="chip">${t('صفوف من غير رقم مدني أو اسم')}: <b>${r.skipped}</b></span>` : ''}</div>
+    ${(r.ignored || []).length ? `<div class="notice warn" style="margin-top:8px">⚠️ ${t('أعمدة عنوانها مش معروف — اتجاهلت')}: ${r.ignored.map(x => `«<b>${esc(x)}</b>»`).join('، ')}
+      <div class="small">${t('صحّح عنوان العمود في الملف (مثلًا «الهاتف»)، أو استخدم «📥 استيراد بيانات تكميلية» وهتختار كل عمود يروح لأنهي خانة.')}</div></div>` : ''}
     ${changes.length ? `<details ${changes.length <= 20 ? 'open' : ''}><summary><b>✏️ ${t('التغييرات')}</b> (${changes.length} ${t('موظف')})</summary>
       <div class="imp-list">${changes.map(c => `<div class="imp-emp"><b>${esc(c.name)}</b> <span class="num small muted">${esc(c.id)}</span><ul>
         ${c.fields.map(f => `<li>${esc(t(f.label))}: <span class="imp-old">${val(f.old)}</span> ← <span class="imp-new">${val(f.new)}</span></li>`).join('')}
