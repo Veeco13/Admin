@@ -539,7 +539,8 @@ def api_state():
                             if x.employeeId in emp_ids and (x.kind not in letters.SHEETS or see_sal)]
         holders = permit_holders(s, u) if u.can("permits.view") else {"employees": [], "vehicles": []}
         state["permitHolders"] = holders
-        state.update(dump_permits(s, {e["id"] for e in holders["employees"]}, {v["id"] for v in holders["vehicles"]}))
+        state.update(dump_permits(s, {e["id"] for e in holders["employees"]}, {v["id"] for v in holders["vehicles"]}, u))
+        state["permitParts"] = [x for x in permit_parts(s) if u.part_ok(x["key"])] if u.can("permits.view") else []
         for cc in state.get("costCenters", []):                   # رمز المركز بيتحدد مرة واحدة ومايتغيّرش
             cc["codeLocked"] = bool(cc.get("code"))
     if not custody.sees_all(u):                                   # عمليات عهد المستخدمين التانيين مش ليه
@@ -2046,7 +2047,12 @@ def permit_forms_pdf(kind):
     if not permit_forms.available():
         return err("قوالب نماذج التصاريح مش موجودة على السيرفر (forms/permits)", 501)
     names = dict(permit_forms.FORMS[kind])
+    part_key = str(d.get("part") or "")
     with db.session_scope() as s:
+        u = me()
+        part = next((x for x in permit_parts(s) if x["key"] == part_key), None)
+        if (part_key and part is None) or not (u.part_ok(part_key) if part_key else u.allParts):
+            return forbidden("النماذج دي لجزء مش في نطاقك")
         ids = []
         for v in data.get("vehicles") or []:
             if v.get("id"):                              # عربية من البرنامج ← لازم تبقى في نطاق المستخدم
@@ -2058,7 +2064,7 @@ def permit_forms_pdf(kind):
             pdf = permit_forms.render(kind, forms, data)
         except RuntimeError as ex:
             return err(str(ex), 501)
-        label = f"{permit_forms.KINDS[kind]} — " + "، ".join(names[f] for f in forms)
+        label = f"{permit_forms.KINDS[kind]} — " + "، ".join(names[f] for f in forms) + (f" ({part['nameAr']})" if part else "")
         for vid in dict.fromkeys(ids):
             _plog(s, "vehicle", vid, None, "form", f"نموذج: {label}")
         plates = "، ".join(str(v.get("plate") or "") for v in data.get("vehicles") or [])
@@ -2166,6 +2172,100 @@ def delete_vehicle(vid):
 PERMIT_HOLDERS = ("employee", "vehicle")
 PERMIT_FILE_EXT = (".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
 
+# أجزاء التصاريح (القسم 24.2): كل وكالة / شركة ليها تصاريحها. الجزء بيتحدد من التصريح: المقاول من الباطن لو متسجّل،
+# وإلا صاحب العقد. الإعداد في meta: {"order": [مفاتيح بالترتيب], "subs": {company_id: {"signatories": [], "mandoubs": []}}}
+PARTS_KEY = "permit_parts"
+NOT_YOUR_PART = "التصريح ده في جزء مش في نطاقك"
+
+
+def _str_list(v):
+    return [str(x).strip() for x in v if str(x).strip()] if isinstance(v, list) else []
+
+
+def permit_parts_cfg(s):
+    try:
+        cfg = json.loads(db.get_meta(s, PARTS_KEY) or "{}")
+    except ValueError:
+        cfg = {}
+    cfg = cfg if isinstance(cfg, dict) else {}
+    subs = cfg.get("subs") if isinstance(cfg.get("subs"), dict) else {}
+    return {"order": _str_list(cfg.get("order")),
+            "subs": {str(c): {"signatories": _str_list(v.get("signatories")), "mandoubs": _str_list(v.get("mandoubs"))}
+                     for c, v in subs.items() if isinstance(v, dict)}}
+
+
+def permit_part_key(sub_id, project):
+    """مفتاح جزء التصريح: «co:<المقاول من الباطن>»، وإلا «ag:<وكالة العقد>»، وإلا «co:<شركة العقد>» — و"" من غير عقد."""
+    if sub_id:
+        return f"co:{sub_id}"
+    if project is None:
+        return ""
+    return f"ag:{project.agencyId}" if project.agencyId else f"co:{project.companyId}"
+
+
+def _part_of(s, p):
+    return permit_part_key(p.subcontractorId, s.get(M.Project, p.projectId) if p.projectId else None)
+
+
+def permit_parts(s):
+    """الأجزاء بالترتيب: الوكالات اللي ليها عقود حكومية / من الباطن، الشركات اللي عقودها من غير وكالة (own)،
+    والشركات اللي بتدخل مقاول من الباطن (sub — من الإعداد أو متسجّلة على تصريح). مفيش أسماء في الكود."""
+    cfg = permit_parts_cfg(s)
+    agencies = {a.id: a for a in s.scalars(select(M.Agency).order_by(M.Agency.position, M.Agency.nameAr))}
+    companies = {c.id: c for c in s.scalars(select(M.Company))}
+    parts = {}
+
+    def company_part(cid, sub):
+        c = companies.get(cid)
+        if c is None:
+            return
+        x = parts.setdefault(f"co:{cid}", {"key": f"co:{cid}", "kind": "company", "id": cid, "nameAr": c.nameAr, "nameEn": c.nameEn,
+                                           "companyId": cid, "sub": False, "own": False, "signatories": [], "mandoubs": []})
+        x["sub" if sub else "own"] = True
+        if sub:
+            x.update(cfg["subs"].get(cid, {}))
+
+    used = {pr.agencyId for pr in s.scalars(select(M.Project).where(M.Project.kind.in_(PERMIT_PROJECT_KINDS))) if pr.agencyId}
+    for a in agencies.values():
+        if a.id in used:
+            parts[f"ag:{a.id}"] = {"key": f"ag:{a.id}", "kind": "agency", "id": a.id, "nameAr": a.nameAr, "nameEn": a.nameEn,
+                                   "companyId": a.companyId, "sub": False, "own": True, "signatories": [], "mandoubs": []}
+    for pr in s.scalars(select(M.Project).where(M.Project.kind.in_(PERMIT_PROJECT_KINDS))):
+        if not pr.agencyId or pr.agencyId not in agencies:
+            company_part(pr.companyId, False)
+    for cid in list(cfg["subs"]) + [c for c in s.scalars(select(M.Permit.subcontractorId).where(M.Permit.subcontractorId.isnot(None)).distinct())]:
+        company_part(cid, True)
+    order = {k: i for i, k in enumerate(cfg["order"])}
+    natural = {k: i for i, k in enumerate(parts)}
+    return sorted(parts.values(), key=lambda x: (order.get(x["key"], len(order)), natural[x["key"]]))
+
+
+@app.put("/api/permit-parts")
+@admin_required
+def save_permit_parts():
+    """إعداد الأجزاء (مدير النظام): {order: [مفاتيح], subs: [{companyId, signatories: [...], mandoubs: [...]}]}.
+    subs = الشركات اللي بتدخل مقاول من الباطن (ليها جزء لوحدها) ومعتمديها ومناديبها في النماذج."""
+    d = body()
+    with db.session_scope() as s:
+        old = permit_parts_cfg(s)
+        subs = {}
+        for x in d.get("subs") or []:
+            c = s.get(M.Company, (x or {}).get("companyId") or "")
+            if c is None:
+                return err("الشركة غير موجودة")
+            subs[c.id] = {"signatories": list(dict.fromkeys(_str_list(x.get("signatories")))),
+                          "mandoubs": [i for i in dict.fromkeys(_str_list(x.get("mandoubs"))) if s.get(M.Employee, i) is not None]}
+        for cid in old["subs"]:
+            if cid not in subs and s.scalar(select(func.count()).select_from(M.Permit).where(M.Permit.subcontractorId == cid)):
+                c = s.get(M.Company, cid)
+                return err(f"«{c.nameAr if c else cid}» عليها تصاريح متسجّلة من الباطن — مينفعش تتشال من الأجزاء", 409, block=True)
+        cfg = {"order": list(dict.fromkeys(k for k in _str_list(d.get("order")) if k.startswith(("ag:", "co:")))), "subs": subs}
+        db.set_meta(s, PARTS_KEY, json.dumps(cfg, ensure_ascii=False))
+        s.flush()
+        names = "، ".join(x["nameAr"] for x in permit_parts(s))
+        db.log_audit(s, "permit_edit", f"إعداد أجزاء التصاريح: {names}"[:900], uname())
+    return jsonify({"ok": True})
+
 
 def _permit_holder(s, kind, hid, action):
     """صاحب التصريح ← (اسمه للسجل، رد خطأ أو None) بعد التأكد من صلاحية قسم التصاريح ونطاق الشركات."""
@@ -2199,6 +2299,8 @@ def _permit_of(s, pid, action):
     if p is None:
         return None, None, err("التصريح غير موجود", 404)
     who, e = _permit_holder(s, p.holderKind, p.employeeId if p.holderKind == "employee" else p.vehicleId, action)
+    if e is None and not me().part_ok(_part_of(s, p)):
+        e = forbidden(NOT_YOUR_PART)
     return p, who, e
 
 
@@ -2299,16 +2401,21 @@ def link_dependents(s, tp):
     return n
 
 
-def dump_permits(s, emp_ids, veh_ids):
-    """الأنواع والأماكن للكل، والتصاريح للموظفين والسيارات الظاهرين للمستخدم بس."""
+def dump_permits(s, emp_ids, veh_ids, u=None):
+    """الأنواع والأماكن للكل، والتصاريح للموظفين والسيارات الظاهرين للمستخدم بس — وفي الأجزاء اللي في نطاقه (part)."""
+    projects = {pr.id: pr for pr in s.scalars(select(M.Project))}
     places = {}
     for r in s.scalars(select(M.PermitPlaceLink)):
         places.setdefault(r.permitId, []).append(r.placeId)
     permits = []
     for p in s.scalars(select(M.Permit).order_by(M.Permit.expiryDate)):
         if (p.holderKind == "employee" and p.employeeId in emp_ids) or (p.holderKind == "vehicle" and p.vehicleId in veh_ids):
+            part = permit_part_key(p.subcontractorId, projects.get(p.projectId))
+            if u is not None and not u.part_ok(part):
+                continue
             d = db.to_dict(p)
             d.pop("filePath", None)
+            d["part"] = part
             d["placeIds"] = places.get(p.id, [])
             d["fileUrl"] = f"/files/permit/{p.id}" if p.filePath else None
             permits.append(d)
@@ -2334,6 +2441,8 @@ def _permit_values(s, kind, hid, d, pid=None, batch_parent=None):
     today = datetime.now().date()
     issue, expiry = db.parse_date(d.get("issueDate")), db.parse_date(d.get("expiryDate"))
     proj = d.get("projectId") or None
+    # المقاول من الباطن: لو مش مبعوت في التعديل بيفضل زي ما هو
+    sub = (d.get("subcontractorId") or None) if "subcontractorId" in d else (old.subcontractorId if old is not None else None)
     kids = list(s.scalars(select(M.Permit).where(M.Permit.parentId == old.id))) if old is not None else []
     if kids and old.typeId != tp.id:
         names = "، ".join(dict.fromkeys((s.get(M.PermitType, k.typeId) or M.PermitType(nameAr="تصريح")).nameAr for k in kids))
@@ -2343,7 +2452,7 @@ def _permit_values(s, kind, hid, d, pid=None, batch_parent=None):
         req = s.get(M.PermitType, tp.requiresTypeId)
         req_name = req.nameAr if req is not None else "التصريح الأساسي"
         if batch_parent is not None:
-            p_exp, p_proj = batch_parent["expiry"], batch_parent["proj"]
+            p_exp, p_proj, p_sub = batch_parent["expiry"], batch_parent["proj"], batch_parent["sub"]
         else:
             want = d.get("parentId") or (old.parentId if old is not None and old.typeId == tp.id else None)
             parent = s.get(M.Permit, want) if want else None
@@ -2355,9 +2464,9 @@ def _permit_values(s, kind, hid, d, pid=None, batch_parent=None):
                               "(أو علّم عليه في نفس الشاشة)", 400, True)
             if not (old is not None and old.parentId == parent.id) and (not parent.expiryDate or parent.expiryDate < today):
                 return None, (f"«{req_name}»{' رقم ' + parent.permitNo if parent.permitNo else ''} منتهي — جدّده الأول", 400, True)
-            parent_id, p_exp, p_proj = parent.id, parent.expiryDate, parent.projectId
+            parent_id, p_exp, p_proj, p_sub = parent.id, parent.expiryDate, parent.projectId, parent.subcontractorId
         if tp.sameExpiry:
-            expiry, proj = p_exp, p_proj
+            expiry, proj, sub = p_exp, p_proj, p_sub          # نفس تاريخ الأساسي وعقده وجزءه
             if not proj:
                 return None, (f"«{req_name}» مالوش عقد — عدّله واختار عقده الأول", 400, True)
         else:
@@ -2380,6 +2489,16 @@ def _permit_values(s, kind, hid, d, pid=None, batch_parent=None):
         return None, (f"«{project.nameAr}» مش عقد حكومي ولا عقد من الباطن — التصريح بيطلع على العقد", 400, True)
     if project.expiryDate and project.expiryDate < today and not (old is not None and old.projectId == proj):
         return None, (f"العقد «{project.nameAr}» خلص في {project.expiryDate.strftime('%d/%m/%Y')} — اختار عقد ساري", 400, True)
+    if sub and not (old is not None and old.subcontractorId == sub):
+        company = s.get(M.Company, sub)
+        if company is None:
+            return None, ("المقاول من الباطن غير موجود", 400, False)
+        if sub not in permit_parts_cfg(s)["subs"]:
+            return None, (f"«{company.nameAr}» مش متسجّلة مقاول من الباطن في أجزاء التصاريح", 400, True)
+        if sub == project.companyId and not project.agencyId:
+            return None, (f"«{company.nameAr}» هي صاحبة العقد نفسه — مش مقاول من الباطن عليه", 400, True)
+    if not me().part_ok(permit_part_key(sub, project)):     # الجزء اللي التصريح هيتسجّل فيه لازم يبقى في نطاقه
+        return None, ("التصريح ده هيتسجّل في جزء مش في نطاقك — اختار عقد أو مقاول من الباطن من جزءك", 403, True)
     caps = permit_cap(s, kind, hid, proj)    # التصريح مايعدّيش أقرب تاريخ (الإقامة / العقد / رخصة العربية)
     if parent_cap and parent_cap[1]:
         caps = sorted(caps + [parent_cap], key=lambda x: x[1])
@@ -2395,7 +2514,7 @@ def _permit_values(s, kind, hid, d, pid=None, batch_parent=None):
             owner = s.get(M.Employee, other.employeeId) if other.employeeId else s.get(M.Vehicle, other.vehicleId)
             name = (owner.name if other.employeeId else owner.plate) if owner is not None else ""
             return None, (f"رقم التصريح {pno} ({tp.nameAr}) مسجّل بالفعل لـ {name}", 409, True)
-    return {"tp": tp, "pno": pno, "issuer": (d.get("issuer") or "").strip() or None, "proj": proj, "issue": issue,
+    return {"tp": tp, "pno": pno, "issuer": (d.get("issuer") or "").strip() or None, "proj": proj, "sub": sub, "issue": issue,
             "expiry": expiry, "notes": (d.get("notes") or "").strip() or None, "parentId": parent_id,
             "places": [x for x in dict.fromkeys(d.get("placeIds") or []) if s.get(M.PermitPlace, x) is not None]}, None
 
@@ -2412,6 +2531,7 @@ def _write_permit(s, p, kind, hid, who, v):
         s.add(p)
     p.typeId, p.permitNo, p.issuer = v["tp"].id, v["pno"], v["issuer"]
     p.projectId, p.issueDate, p.expiryDate, p.notes = v["proj"], v["issue"], v["expiry"], v["notes"]
+    p.subcontractorId = v["sub"]
     p.parentId = v["parentId"]
     p.updatedAt, p.updatedBy = db.now(), uname()
     s.flush()
@@ -2434,9 +2554,10 @@ def _sync_children(s, p, tp, who):
     n = 0
     for k in list(s.scalars(select(M.Permit).where(M.Permit.parentId == p.id))):
         ktp = s.get(M.PermitType, k.typeId)
-        if ktp is None or not ktp.sameExpiry or (k.expiryDate == p.expiryDate and k.projectId == p.projectId):
+        if ktp is None or not ktp.sameExpiry or (k.expiryDate == p.expiryDate and k.projectId == p.projectId
+                                                    and k.subcontractorId == p.subcontractorId):
             continue
-        k.expiryDate, k.projectId = p.expiryDate, p.projectId
+        k.expiryDate, k.projectId, k.subcontractorId = p.expiryDate, p.projectId, p.subcontractorId
         k.updatedAt, k.updatedBy = db.now(), uname()
         label = (f"تعديل {ktp.nameAr}{' رقم ' + k.permitNo if k.permitNo else ''} لـ {who} مع «{tp.nameAr}» — "
                  f"ينتهي {k.expiryDate.strftime('%d/%m/%Y')}")
@@ -2462,6 +2583,8 @@ def save_permit(pid=None):
         who, e = _permit_holder(s, kind, hid, "edit")
         if e:
             return e
+        if p is not None and not me().part_ok(_part_of(s, p)):
+            return forbidden(NOT_YOUR_PART)
         v, problem = _permit_values(s, kind, hid, d, pid)
         if problem:
             return err(problem[0], problem[1], block=problem[2])
@@ -2480,7 +2603,7 @@ def save_permits_batch():
         return err("اختار نوع تصريح واحد على الأقل")
     if len(rows) > 20:
         return err("الحد الأقصى 20 تصريح في المرة")
-    shared = {k: d.get(k) for k in ("projectId", "placeIds", "notes")}
+    shared = {k: d.get(k) for k in ("projectId", "subcontractorId", "placeIds", "notes")}
     with db.session_scope() as s:
         kind, hid = d.get("holderKind"), d.get("holderId")
         who, e = _permit_holder(s, kind, hid, "edit")
@@ -2548,8 +2671,16 @@ def permit_log(kind, hid):
         _, e = _permit_holder(s, kind, hid, "view")
         if e:
             return e
-        rows = s.scalars(select(M.PermitLog).where(M.PermitLog.holderKind == kind, M.PermitLog.holderId == hid)
-                         .order_by(M.PermitLog.date.desc(), M.PermitLog.id.desc()).limit(500))
+        rows = list(s.scalars(select(M.PermitLog).where(M.PermitLog.holderKind == kind, M.PermitLog.holderId == hid)
+                              .order_by(M.PermitLog.date.desc(), M.PermitLog.id.desc()).limit(500)))
+        u = me()
+        if not u.allParts:                       # محدود بأجزاء ← سطور تصاريحه بس (واللي مالهاش تصريح: طباعة البطاقة)
+            ok = {}
+            for r in rows:
+                if r.permitId and r.permitId not in ok:
+                    p = s.get(M.Permit, r.permitId)
+                    ok[r.permitId] = p is not None and u.part_ok(_part_of(s, p))
+            rows = [r for r in rows if not r.permitId or ok[r.permitId]]
         return jsonify({"log": [db.to_dict(r) for r in rows]})
 
 
@@ -4019,6 +4150,7 @@ def _user_api(u, scopes, cc_scopes):
     return {"id": u.id, "username": u.username, "displayName": u.displayName, "roleId": u.roleId,
             "allCompanies": bool(u.allCompanies), "companies": scopes.get(u.id, []),
             "costCenters": cc_scopes.get(u.id, []), "active": bool(u.active),
+            "permitParts": sorted(perms.parse_parts(u.permitParts) or []) or None,      # None = كل الأجزاء
             "jobTitle": u.jobTitle, "email": u.email, "phone": u.phone, "custodyCode": u.custodyCode,
             "custodyCodeLocked": bool(u.custodyCode),
             "lastLogin": db.ser(u.lastLogin), "createdAt": db.ser(u.createdAt)}
@@ -4054,6 +4186,15 @@ def _set_user_fields(s, u, d):
         u.active = bool(d["active"])
     if "allCompanies" in d:
         u.allCompanies = bool(d["allCompanies"])
+    if "permitParts" in d:                                  # None = كل أجزاء التصاريح، أو قايمة مفاتيح
+        if d["permitParts"] is None:
+            u.permitParts = None
+        else:
+            known = {x["key"] for x in permit_parts(s)}
+            keys = [k for k in dict.fromkeys(_str_list(d["permitParts"])) if k in known]
+            if not keys:
+                return "اختار جزء واحد على الأقل من أجزاء التصاريح، أو «كل الأجزاء»"
+            u.permitParts = json.dumps(keys)
     s.flush()
     if "companies" in d:
         cids = [c for c in dict.fromkeys(d["companies"] or []) if s.get(M.Company, c)]

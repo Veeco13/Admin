@@ -48,7 +48,9 @@ function permitFormVehicleRow(v, kind) {
 
 function openVehiclePermitForms(pre = {}) {
   if (!STATE.permitFormsAvailable) return openBlockAlert(t('قوالب نماذج التصاريح مش موجودة على السيرفر.'));
-  const projects = scopedProjects().filter(p => ['gov', 'sub'].includes(p.kind)).sort((a, b) => projectName(a.id).localeCompare(projectName(b.id), 'ar'));
+  // الجزء اللي النماذج بتطلع له (من قسم التصاريح): عقوده بس، ولو شركة داخلة من الباطن ← اسمها في «المقاول من الباطن»
+  const part = pre.part && pre.part !== 'all' ? pre.part : '', partX = permitPart(part), subX = partX && partX.sub ? partX : null;
+  const projects = scopedProjects().filter(p => ['gov', 'sub'].includes(p.kind) && permitProjectInPart(p, part)).sort((a, b) => projectName(a.id).localeCompare(projectName(b.id), 'ar'));
   if (!projects.length) return openBlockAlert(t('مفيش عقود حكومية أو من الباطن — التصاريح بتطلع على عقد.'));
   // العقد الافتراضي: عقد السيارة المختارة، وإلا آخر عقد اشتغلت عليه على الجهاز ده، وإلا أول عقد
   const firstVeh = IDX.vehicle[(pre.vehicleIds || [])[0]] || {}, known = id => projects.some(p => p.id === id);
@@ -58,7 +60,7 @@ function openVehiclePermitForms(pre = {}) {
   const today = todayISO();
   const field = (f, label, type = 'text', cls = '') => `<label class="${cls}">${t(label)}<input ${type === 'date' ? 'type="date"' : ''} data-f="${f}"${type === 'ltr' ? ' dir="ltr"' : ''}></label>`;
   const m = openModal({
-    title: '📄 ' + t('نماذج تصاريح السيارات'), size: 'wide',
+    title: '📄 ' + t('نماذج تصاريح السيارات') + (partX ? ' — ' + esc(permitPartName(part)) : ''), size: 'wide',
     body: `<div class="form" id="pf-top">
         <label>${t('نوع التصريح')}<select id="pf-kind">${Object.entries(PERMIT_FORM_KINDS).map(([k, v]) => opt(k, t(v.label), k === S.kind)).join('')}</select></label>
         <label>${t('العقد')}<select id="pf-project">${projects.map(p => opt(p.id, projectName(p.id) + (p.contractNo ? ' · ' + p.contractNo : ''), p.id === S.projectId)).join('')}</select></label>
@@ -90,15 +92,16 @@ function openVehiclePermitForms(pre = {}) {
   const fillContract = () => {
     const p = project(), a = agency(), end = p.clientExtDate || p.clientEndDate || p.expiryDate || '';
     set('contractorAr', a.contractorAr || companyName(p.companyId)); set('contractorEn', a.contractorEn || (IDX.company[p.companyId] || {}).nameEn);
-    set('subcontractor', ''); set('contractNo', p.contractNo); set('startDate', p.clientStartDate || p.startDate); set('endDate', p.clientEndDate || p.expiryDate);
+    set('subcontractor', subX ? subX.nameAr : ''); set('contractNo', p.contractNo); set('startDate', p.clientStartDate || p.startDate); set('endDate', p.clientEndDate || p.expiryDate);
     set('extDate', p.clientExtDate); set('team', p.clientTeam); set('teamEn', p.clientTeamEn); set('teamCode', p.clientTeamCode); set('clearancePrefix', p.clearancePrefix);
     set('from', today); set('to', end); set('requestDate', today);
-    const ids = (a.mandoubs || []).filter(id => IDX.employee[id]);
+    const ids = uniq([...(subX ? subX.mandoubs || [] : []), ...(a.mandoubs || [])]).filter(id => IDX.employee[id]);    // مناديب المقاول من الباطن الأول
     S.mandoubId = ids[0] || '';
     $('#pf-mandoub', E).innerHTML = ids.map((id, i) => opt(id, IDX.employee[id].name + (i ? '' : ` (${t('الأساسي')})`), id === S.mandoubId)).join('') + opt('', t('— مندوب تاني (اكتب بياناته) —'), !S.mandoubId);
     fillMandoub();
-    $('#pf-signs', E).innerHTML = (a.signatories || []).map(x => `<option value="${esc(x)}">`).join('');
-    set('signatory', (a.signatories || [])[0]);
+    const signs = uniq([...(subX ? subX.signatories || [] : []), ...(a.signatories || [])]);
+    $('#pf-signs', E).innerHTML = signs.map(x => `<option value="${esc(x)}">`).join('');
+    set('signatory', signs[0]);
   };
   const fillMandoub = () => {
     const e = IDX.employee[S.mandoubId];
@@ -118,9 +121,9 @@ function openVehiclePermitForms(pre = {}) {
         <td><button type="button" class="btn sm danger" data-vrm="${i}">✕</button></td></tr>`).join('')
         || `<tr><td colspan="${cols.length + 2}" class="empty">${t('أضف سيارة من الخانة اللي فوق')}</td></tr>`}</tbody>`;
     // سيارات العقد المختار أول القايمة
-    const used = new Set(S.rows.map(r => r.id)), mine = v => (v.projectId === S.projectId || v.affairsProjectId === S.projectId ? 0 : 1);
+    const used = new Set(S.rows.map(r => r.id)), mine = v => ((subX ? v.companyId === subX.id || v.ownerCompanyId === subX.id : v.projectId === S.projectId || v.affairsProjectId === S.projectId) ? 0 : 1);
     $('#pf-vehicles', E).innerHTML = STATE.vehicles.filter(v => !used.has(v.id)).sort((a, b) => mine(a) - mine(b) || String(a.plate).localeCompare(String(b.plate)))
-      .map(v => `<option value="${esc(permitFormPlate(v.plate))}">${esc([v.model, mine(v) ? '' : projectName(S.projectId)].filter(Boolean).join(' · '))}</option>`).join('');
+      .map(v => `<option value="${esc(permitFormPlate(v.plate))}">${esc([v.model, mine(v) ? '' : subX ? permitPartName(part) : projectName(S.projectId)].filter(Boolean).join(' · '))}</option>`).join('');
     $$('[data-vrm]', E).forEach(b => b.onclick = () => { S.rows.splice(Number(b.dataset.vrm), 1); drawVehicles(); drawForms(); });
   };
   const drawForms = () => {
@@ -139,7 +142,7 @@ function openVehiclePermitForms(pre = {}) {
   const addVehicle = v => { if (!v || S.rows.some(r => r.id === v.id)) return; S.rows.push(permitFormVehicleRow(v, S.kind)); };
   // ---- جمع البيانات اللي ظاهرة
   const collect = () => ({
-    contractorAr: val('contractorAr'), contractorEn: val('contractorEn'), subcontractor: val('subcontractor'), contractNo: val('contractNo'),
+    contractorAr: val('contractorAr'), contractorEn: val('contractorEn'), subcontractor: val('subcontractor'), subcontractorEn: subX && val('subcontractor') === subX.nameAr ? subX.nameEn || '' : '', contractNo: val('contractNo'),
     startDate: val('startDate'), endDate: val('endDate'), extDate: val('extDate'), team: val('team'), teamEn: val('teamEn'), teamCode: val('teamCode'),
     from: val('from'), to: val('to'), requestDate: val('requestDate'), signatory: val('signatory'),
     mandoub: { name: val('mandoubName'), nationality: val('mandoubNationality'), civilId: val('mandoubCivil'), phone: val('mandoubPhone') },
@@ -153,7 +156,7 @@ function openVehiclePermitForms(pre = {}) {
     if (over) return openBlockAlert(`«${t(K.forms.find(x => x[0] === over)[1])}» ${t('بيشيل')} ${PERMIT_FORM_ROWS[over]} ${t('سيارات بالكتير — قسّم الطلب')}`);
     toast(t('جاري تجهيز المعاينة…'));
     try {
-      const r = await postForBlob(`/api/permit-forms/${S.kind}/pdf`, { forms, data: collect() });
+      const r = await postForBlob(`/api/permit-forms/${S.kind}/pdf`, { forms, data: collect(), part: part || permitPartKey('', S.projectId) });
       const name = forms.length === 1 ? t(K.forms.find(x => x[0] === forms[0])[1]) : `${t('نماذج')} ${t(K.label)}`;
       openPdfPreviewModal(r.blob, name + '.pdf', 1, 'permit');
     } catch (e) { openBlockAlert(esc(e.message)); }

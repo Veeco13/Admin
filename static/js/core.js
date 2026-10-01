@@ -245,6 +245,7 @@ function buildIndex() {
     permitType: Object.fromEntries((STATE.permitTypes || []).map(x => [x.id, x])),
     permitPlace: Object.fromEntries((STATE.permitPlaces || []).map(x => [x.id, x])),
     permit: Object.fromEntries((STATE.permits || []).map(x => [x.id, x])),
+    permitPart: Object.fromEntries((STATE.permitParts || []).map(x => [x.key, x])),       // أجزاء التصاريح اللي في نطاقه
     permitsOf: { employee: {}, vehicle: {} },          // تصاريح كل موظف / عربية
     // بيانات أصحاب التصاريح (من مركز الموظفين والسيارات — للعرض بس في قسم التصاريح)
     permitHolder: {
@@ -1085,7 +1086,7 @@ function trackedAlertItems(maxDays = 90, system = false) {
     if (!h || !permitCurrent(p)) continue;
     if (permitNeedsCancel(p))            // مستقيل / إنهاء خدمات / في فترة إنذار ← لازم يتلغي
       push({ kind: 'permit', refId: p.id, name: permitHolderName(p), what: `${t('لازم إلغاء')} ${permitLabel(p)} — ${t('آخر يوم شغل')} ${fmtDate(h.serviceEndDate) || '—'}`, date: h.serviceEndDate || todayISO() });
-    else if (!(p.holderKind === 'employee' && empEnded(h))) push({ kind: 'permit', refId: p.id, name: permitHolderName(p), what: permitLabel(p), date: p.expiryDate });
+    else if (!(p.holderKind === 'employee' && empEnded(h))) push({ kind: 'permit', refId: p.id, name: permitHolderName(p), what: permitLabel(p) + (permitParts().length > 1 && permitPartName(p.part) ? ` — ${permitPartName(p.part)}` : ''), date: p.expiryDate });
   }
   for (const c of STATE.candidates) {
     if (c.stage === 'rejected' || c.stage === 'all_completed' || c.source === 'kuwaiti') continue;
@@ -1446,9 +1447,10 @@ async function openUsersModal(tab) {
   const roles = roleData.roles;
   const roleOf = id => roles.find(r => r.id === id);
   const ccName = id => (STATE.costCenters.find(c => c.id === id) || {}).name || id;
-  const scopeText = u => u.allCompanies ? `<span class="chip on">${t('كل الشركات')}</span>`
+  const scopeCo = u => u.allCompanies ? `<span class="chip on">${t('كل الشركات')}</span>`
     : u.companies.map(c => `<span class="chip">${esc(companyName(c) || c)}</span>`).join(' ')
       + (u.costCenters || []).map(c => `<span class="chip" title="${esc(t('مركز تكلفة'))}">💼 ${esc(ccName(c))}</span>`).join(' ');
+  const scopeText = u => scopeCo(u) + (u.permitParts ? ' ' + u.permitParts.map(k => `<span class="chip" title="${esc(t('أجزاء التصاريح'))}">🪪 ${esc(permitPartName(k) || k)}</span>`).join(' ') : '');
   const usersPane = `<div class="row" style="margin-bottom:10px"><span class="muted">${users.length} ${t('مستخدم')} · ${users.filter(u => u.active).length} ${t('نشط')}</span><span class="spacer"></span>
       <button class="btn primary" data-user-add>➕ ${t('إضافة مستخدم')}</button></div>
     <div class="table-wrap"><table class="data"><thead><tr><th>${t('المستخدم')}</th><th>${t('الوظيفة')}</th><th>${t('الدور')}</th><th>${t('نطاق الشركات')}</th><th>${t('الحالة')}</th><th>${t('آخر دخول')}</th><th></th></tr></thead><tbody>
@@ -1493,6 +1495,7 @@ function openUserEditModal(u, roles, done) {
   u = u || { active: true, allCompanies: true, companies: [], costCenters: [], roleId: (roles.find(r => r.id === 'viewer') || roles[0]).id };
   const v = k => esc(u[k] ?? '');
   const isSelf = !isNew && u.id === STATE.me.id;
+  const pparts = STATE.permitParts || [];                  // أجزاء التصاريح (مدير النظام شايفها كلها)
   const roleHelp = id => { const r = roles.find(x => x.id === id); return r ? `<div class="small muted">${esc(r.description || '')}</div><div class="row" style="flex-wrap:wrap;gap:4px;margin-top:4px">${permSummary(r.permissions, r.isAdmin)}</div>` : ''; };
   const m = openModal({
     title: isNew ? t('إضافة مستخدم') : t('تعديل مستخدم') + ': ' + esc(u.username), size: 'wide',
@@ -1518,6 +1521,10 @@ function openUserEditModal(u, roles, done) {
         <div class="small muted" style="margin:10px 0 4px">💼 ${t('مراكز التكلفة: كل موظفين المركز (مفيدة لمركز من غير شركة مسجّلة)')}</div>
         <div class="form">${STATE.costCenters.slice().sort((a, b) => (a.companyId ? 1 : 0) - (b.companyId ? 1 : 0)).map(c => `<label class="check"><input type="checkbox" data-cc="${c.id}" ${(u.costCenters || []).includes(c.id) ? 'checked' : ''}> ${esc(c.name)}
           <span class="small muted">${c.companyId ? '(' + esc(companyName(c.companyId)) + ')' : '(' + t('من غير شركة') + ')'}</span></label>`).join('')}</div></div>
+      ${pparts.length ? `<h4>🪪 ${t('أجزاء التصاريح')}</h4>
+      <label class="check full"><input type="radio" name="pparts" value="all" ${u.permitParts ? '' : 'checked'}> ${t('كل الأجزاء')}</label>
+      <label class="check full"><input type="radio" name="pparts" value="some" ${u.permitParts ? 'checked' : ''}> ${t('أجزاء محددة بس — ومايشوفش تصاريح أي جزء تاني')}</label>
+      <div class="full" id="pparts-box" style="grid-column:1/-1;${u.permitParts ? '' : 'display:none'}"><div class="form">${pparts.map(x => `<label class="check"><input type="checkbox" data-ppart="${esc(x.key)}" ${(u.permitParts || []).includes(x.key) ? 'checked' : ''}> ${esc(permitPartName(x.key))}</label>`).join('')}</div></div>` : ''}
       </form>
       ${isSelf ? `<div class="notice">${t('ده حسابك: مش هينفع تغيّر دورك أو توقفه من هنا.')}</div>` : ''}`,
     foot: `${!isNew && !isSelf ? `<button class="btn danger" data-del>🗑️ ${t('حذف')}</button><span class="spacer"></span>` : ''}
@@ -1526,12 +1533,15 @@ function openUserEditModal(u, roles, done) {
   const f = $('#user-form', m.el);
   $('[name=roleId]', f).onchange = e => { $('#role-help', f).innerHTML = roleHelp(e.target.value); translateDomText($('#role-help', f)); };
   $$('[name=scope]', f).forEach(r => r.onchange = () => { $('#scope-box', f).style.display = $('[name=scope]:checked', f).value === 'all' ? 'none' : ''; });
+  $$('[name=pparts]', f).forEach(r => r.onchange = () => { $('#pparts-box', f).style.display = $('[name=pparts]:checked', f).value === 'all' ? 'none' : ''; });
   $('[data-save]', m.el).onclick = async () => {
     const d = formValues(f);
     delete d.scope;
     d.allCompanies = $('[name=scope]:checked', f).value === 'all';
     d.companies = $$('[data-co]', f).filter(x => x.checked).map(x => x.dataset.co);
     d.costCenters = $$('[data-cc]', f).filter(x => x.checked).map(x => x.dataset.cc);
+    if (pparts.length) d.permitParts = $('[name=pparts]:checked', f).value === 'all' ? null : $$('[data-ppart]', f).filter(x => x.checked).map(x => x.dataset.ppart);
+    delete d.pparts;
     if (!d.password) delete d.password;
     if (u.custodyCodeLocked) delete d.custodyCode; else if (d.custodyCode) d.custodyCode = d.custodyCode.toUpperCase();
     if (isSelf) { delete d.active; delete d.roleId; }

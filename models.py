@@ -314,6 +314,8 @@ class User(Base):
     phone: Mapped[Optional[str]] = col("phone", SHORT)
     lastLogin: Mapped[Optional[datetime]] = col("last_login", DateTime)
     custodyCode: Mapped[Optional[str]] = col("custody_code", String(10))          # رمزه في أرقام العهد (AA-0001)
+    # أجزاء التصاريح اللي يشوفها (JSON مفاتيح «ag:<وكالة>» / «co:<شركة>») — فاضي = كل الأجزاء
+    permitParts: Mapped[Optional[str]] = col("permit_parts", TEXT)
     createdAt: Mapped[Optional[datetime]] = col("created_at", DateTime)
 
 
@@ -597,6 +599,8 @@ class Permit(Base):
     permitNo: Mapped[Optional[str]] = col("permit_no", SHORT)
     issuer: Mapped[Optional[str]] = col("issuer", NAME)                          # الجهة المانحة
     projectId: Mapped[Optional[str]] = col("project_id", ID, fk("projects.id"))
+    # الشركة اللي داخلة مقاول من الباطن على العقد ده ← التصريح في جزءها (فاضي ← جزء صاحب العقد). من غير FK زي parentId
+    subcontractorId: Mapped[Optional[str]] = col("subcontractor_id", ID)
     issueDate: Mapped[Optional[date]] = col("issue_date", Date)
     expiryDate: Mapped[Optional[date]] = col("expiry_date", Date)
     notes: Mapped[Optional[str]] = col("notes", TEXT)

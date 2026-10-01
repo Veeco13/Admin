@@ -99,6 +99,7 @@ class UserCtx:
         self.allCompanies = self.isAdmin or bool(user.allCompanies)
         self.companies = set(company_ids)
         self.costCenters = set(cost_center_names)    # أسماء (الموظفين مربوطين بالمركز بالاسم)
+        self.permitParts = None if self.isAdmin else parse_parts(getattr(user, "permitParts", None))   # None = كل الأجزاء
 
     # --- الصلاحيات ---
     def can(self, key):
@@ -118,6 +119,15 @@ class UserCtx:
             for f in self.denied_fields(kind):
                 d.pop(f, None)
         return d
+
+    # --- أجزاء التصاريح (القسم 24.2) ---
+    @property
+    def allParts(self):
+        return self.permitParts is None
+
+    def part_ok(self, key):
+        """الجزء في نطاقه؟ (التصريح اللي مالوش جزء — من غير عقد — لصاحب «كل الأجزاء» بس)."""
+        return self.permitParts is None or (bool(key) and key in self.permitParts)
 
     # --- نطاق الشركات ---
     def company_ok(self, company_id):
@@ -155,12 +165,23 @@ class UserCtx:
             "isAdmin": self.isAdmin, **admin_only,
             "perms": sorted(self.perms, key=ALL_KEYS.index),
             "allCompanies": self.allCompanies,
+            "permitPartsAll": self.allParts, "permitParts": None if self.allParts else sorted(self.permitParts),
             "hiddenFields": {"employee": self.denied_fields("employee"),
                              "candidate": self.denied_fields("candidate")},
             # توافق مع الواجهة القديمة
             "role": "admin" if self.isAdmin else "user",
             "readOnly": not any(k.endswith((".edit", ".delete")) for k in self.perms),
         }
+
+
+def parse_parts(text):
+    """users.permit_parts ← مجموعة مفاتيح الأجزاء، أو None لو فاضي (= كل الأجزاء)."""
+    try:
+        v = json.loads(text) if text else None
+    except ValueError:
+        v = None
+    keys = {str(k) for k in v if str(k).startswith(("ag:", "co:"))} if isinstance(v, list) else set()
+    return keys or None
 
 
 def load_ctx(s, uid):
