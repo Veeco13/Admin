@@ -448,11 +448,11 @@ function renderVehicles() {
       <select id="v-cc">${opt('', t('— كل مراكز التكلفة —'), !V.cc)}${opt('__out', '⚠️ ' + t('برّه وكالة عقدها'), V.cc === '__out')}${STATE.costCenters.map(c => opt(c.name, `${c.code || ''} ${ccLabel(c.name)}`, c.name === V.cc)).join('')}</select>
       <button class="btn sm ghost" id="v-clear">✕ ${t('مسح الفلاتر')}</button></div>
     ${byAffairs
-      ? `<div class="table-wrap"><table class="data"><thead><tr><th>${t('رقم اللوحة')}</th><th>${t('النوع / الموديل')}</th><th>${t('الشركة')}</th><th>${t('مركز التكلفة')}</th><th>${t('مع مين')}</th><th>${t('العقد / المشروع')}</th></tr></thead>
-        <tbody>${affairsGroups().map(([k, vs]) => `<tr><td colspan="6" style="background:var(--surface-2)"><b>🗂️ ${k ? esc(affairsLabel(k)) : esc(t('بدون ملف شؤون'))}</b>
+      ? `<div class="table-wrap"><table class="data"><thead><tr><th>${t('رقم اللوحة')}</th><th>${t('النوع / الموديل')}</th><th>${t('الشركة')}</th><th>${t('مركز التكلفة')}</th><th>${t('مع مين')}</th><th>${t('العقد / المشروع')}</th><th>${t('انتهاء التأمين')}</th></tr></thead>
+        <tbody>${affairsGroups().map(([k, vs]) => `<tr><td colspan="7" style="background:var(--surface-2)"><b>🗂️ ${k ? esc(affairsLabel(k)) : esc(t('بدون ملف شؤون'))}</b>
             ${k && IDX.project[k] && IDX.project[k].contractNo ? ` <span class="small muted">${t('رقم العقد')} ${esc(IDX.project[k].contractNo)}</span>` : ''} <span class="chip">${vs.length} ${t('سيارة')}</span></td></tr>`
-          + vs.map(v => `${vrow(v)}<td>${esc(v.costCenter || '—')}</td><td>${vehicleUserHtml(v)}</td><td>${esc(projectName(v.projectId)) || '<span class="muted">—</span>'}</td></tr>`).join('')).join('')
-          || `<tr><td colspan="6" class="empty">${t('لا توجد سيارات')}</td></tr>`}</tbody></table></div>
+          + vs.map(v => `${vrow(v)}<td>${esc(v.costCenter || '—')}</td><td>${vehicleUserHtml(v)}</td><td>${esc(projectName(v.projectId)) || '<span class="muted">—</span>'}</td><td>${datePill(v.insuranceExpiry)}</td></tr>`).join('')).join('')
+          || `<tr><td colspan="7" class="empty">${t('لا توجد سيارات')}</td></tr>`}</tbody></table></div>
         <div class="small muted" style="margin-top:6px">${t('ملف الشؤون = الملف المسجّلة عليه العربية علشان العمالة — غير العقد اللي بيأثر على التصاريح.')}</div>`
       : `<div class="table-wrap"><table class="data"><thead><tr><th>${t('رقم اللوحة')}</th><th>${t('النوع / الموديل')}</th><th>${t('الشركة')}</th><th>${t('ملف الشؤون')}</th><th>${t('العقد / المشروع')}</th><th>${t('مركز التكلفة')}</th><th>${t('مع مين')}</th><th>${t('انتهاء التأمين')}</th><th>${t('انتهاء الدفتر')}</th></tr></thead>
     <tbody>${list.map(v => {
@@ -483,14 +483,14 @@ function printAffairsVehicles(groups, total) {
   let body = '';
   groups.forEach(([k, vs]) => {
     let z = 0;
-    body += `<tr class="grp"><td colspan="7">${esc(k ? affairsLabel(k) : t('بدون ملف شؤون'))}<small>${vs.length} ${t('سيارة')}</small></td></tr>`
+    body += `<tr class="grp"><td colspan="8">${esc(k ? affairsLabel(k) : t('بدون ملف شؤون'))}<small>${vs.length} ${t('سيارة')}</small></td></tr>`
       + vs.map((v, i) => `<tr class="${z++ % 2 ? 'z' : ''}"><td class="idx">${i + 1}</td><td class="num">${esc(v.plate)}</td><td class="txt">${esc(t(VEHICLE_TYPES[v.vehicleType] || ''))}</td>
-        <td class="txt">${esc(v.model || '')}</td><td class="txt">${esc(companyName(v.companyId))}</td><td class="txt">${esc(v.costCenter || '')}</td><td class="txt">${esc(vehicleUserName(v))}</td></tr>`).join('');
+        <td class="txt">${esc(v.model || '')}</td><td class="txt">${esc(companyName(v.companyId))}</td><td class="txt">${esc(v.costCenter || '')}</td><td class="txt">${esc(vehicleUserName(v))}</td><td class="num"${tierOf(v.insuranceExpiry) === 'expired' ? ' style="color:#c0392b;font-weight:700"' : ''}>${fmtDate(v.insuranceExpiry) || '—'}</td></tr>`).join('');
   });
   openReportWindow({
     title: t('السيارات المسجّلة على ملفات الشؤون'), landscape: false,
     summary: [[String(total), t('سيارة')], [String(groups.filter(([k]) => k).length), t('ملف شؤون')]],
-    body: `<table class="rpt"><thead><tr><th>#</th><th>${t('رقم اللوحة')}</th><th class="txt">${t('النوع')}</th><th class="txt">${t('الموديل')}</th><th class="txt">${t('الشركة')}</th><th class="txt">${t('مركز التكلفة')}</th><th class="txt">${t('مع مين')}</th></tr></thead><tbody>${body}</tbody></table>`,
+    body: `<table class="rpt"><thead><tr><th>#</th><th>${t('رقم اللوحة')}</th><th class="txt">${t('النوع')}</th><th class="txt">${t('الموديل')}</th><th class="txt">${t('الشركة')}</th><th class="txt">${t('مركز التكلفة')}</th><th class="txt">${t('مع مين')}</th><th>${t('انتهاء التأمين')}</th></tr></thead><tbody>${body}</tbody></table>`,
   });
   printLog(t('السيارات المسجّلة على ملفات الشؤون'), 'vehicle');
 }

@@ -731,7 +731,8 @@ const REPORT_CSS = `
   table.rpt td.txt,table.rpt th.txt{text-align:start;padding-inline:8px} table.rpt td.ltr{direction:ltr;text-align:left;padding-inline:8px}
   table.rpt tr.grp td{background:var(--band);font-weight:700;font-size:10.5px;padding:6px;border-top:1.5px solid var(--head);text-align:start}
   table.rpt tr.grp img{height:18px;max-width:40px;object-fit:contain;vertical-align:middle;margin-inline-end:6px}
-  table.rpt tr.grp small{color:var(--muted);font-weight:500;margin-inline-start:6px}
+  table.rpt tr.grp small{color:var(--muted);font-weight:500;font-size:9.5px;float:left;margin-inline-start:12px;unicode-bidi:isolate}
+  [dir=ltr] table.rpt tr.grp small{float:right}
   table.rpt tr.sub td{font-weight:600;background:#fbfcfb;border-bottom:1.5px solid var(--line)}
   table.rpt tfoot td{font-weight:700;background:var(--band);border-top:2px solid var(--head);padding:6px 5px}
   .pill{display:inline-block;padding:0 5px;border-radius:3px;white-space:nowrap}
