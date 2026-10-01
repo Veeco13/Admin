@@ -131,6 +131,11 @@ const EMP_DATE_FIELDS = [
   { key: 'drivingLicenseExp', label: 'رخصة القيادة', driverOnly: true },
 ];
 /** المستندات اللي بتتابَع للموظف ده: رخصة القيادة للسواق بس، والإقامة لغير الكويتي والخليجي (مالهمش إقامة) */
+/** إذن عمل العمالة الكويتية بيتجدد لوحده من الهيئة: لو تاريخه عدّى ← «بانتظار تجديد الهيئة»، مش «منتهي» ومش محتاج إجراء */
+const PAM_WAIT_TEXT = 'بانتظار تجديد الهيئة';
+function pamWaiting(e, key) { const d = key === 'workPermitExp' && isKuwaitiStaff(e) ? daysUntil(e.workPermitExp) : null; return d !== null && d < 0; }
+/** «متبقي / منتهي منذ…» لمستند موظف — أو «بانتظار تجديد الهيئة» */
+function empDocText(e, key) { return pamWaiting(e, key) ? `⏳ ${t(PAM_WAIT_TEXT)}` : daysText(daysUntil(e[key])); }
 function empDateFields(e) { return EMP_DATE_FIELDS.filter(f => (!f.driverOnly || e.isDriver) && (f.key !== 'residencyExp' || empNeedsResidency(e))); }
 
 /* ---------- localStorage (القسم 10) ---------- */
@@ -998,14 +1003,14 @@ function trackedAlertItems(maxDays = 90, system = false) {
     const d = daysUntil(o.date);
     if (d === null || d > maxDays) return;
     const key = `${o.kind}|${o.refId}|${o.name}|${o.date}`;
-    if (byKey[key]) { byKey[key].what += ' + ' + t(o.what); byKey[key].renew = byKey[key].renew || o.renew; return; }
+    if (byKey[key]) { byKey[key].what += ' + ' + t(o.what); byKey[key].renew = byKey[key].renew || o.renew; byKey[key].wait = byKey[key].wait && !!o.wait; return; }
     items.push(byKey[key] = { ...o, what: t(o.what), days: d, tier: tierOf(o.date) });
   };
   for (const e of scopedEmployees()) {
     if (empEnded(e)) continue;
     const rn = (STATE.renewing || {})[e.id] || {};     // عليه بند تجديد مفتوح لسه تاريخه الجديد ماتسجلش
     for (const f of empDateFields(e)) {
-      push({ kind: 'employee', refId: e.id, name: empName(e), what: f.label, date: e[f.key], renew: rn[f.key] });
+      push({ kind: 'employee', refId: e.id, name: empName(e), what: f.label, date: e[f.key], renew: rn[f.key], wait: pamWaiting(e, f.key) });   // wait ← مش محسوب «منتهي»
     }
   }
   for (const c of scopedCompanies()) {
@@ -1077,8 +1082,8 @@ function renderAlertCenterPanel(filter = 'all') {
   if (filter !== 'all') filter = tierFilterValue(filter) || 'all';        // «منتهي» من لوحة المعلومات ← خلال 30 يوم
   const items = trackedAlertItems(90, true);
   const counts = { all: items.length };
-  for (const k of TIER_FILTERS) counts[k] = items.filter(i => tierIn(i.date, k)).length;
-  const shown = filter === 'all' ? items : items.filter(i => tierIn(i.date, filter));
+  for (const k of TIER_FILTERS) counts[k] = items.filter(i => !i.wait && tierIn(i.date, k)).length;      // «بانتظار تجديد الهيئة» في «الكل» بس
+  const shown = filter === 'all' ? items : items.filter(i => !i.wait && tierIn(i.date, filter));
   const root = $('#side-root');
   root.innerHTML = `<div class="side-panel" id="alert-panel">
     <div class="modal-head"><h2>🔔 مركز التنبيهات</h2><button class="btn ghost" id="close-side">✕</button></div>
@@ -1088,7 +1093,7 @@ function renderAlertCenterPanel(filter = 'all') {
     <div class="body">${shown.length ? shown.map((it, i) => `
       <div class="alert-item" data-i="${i}">
         <div><b>${esc(it.name)}</b><div class="small muted">${esc(t(it.what))} · ${esc(t({ employee: 'موظف', company: 'شركة', project: 'مشروع', vehicle: 'سيارة', candidate: 'مترشّح', permit: 'التصاريح', system: 'النظام' }[it.kind]))}</div></div>
-        <div style="text-align:end">${datePill(it.date)}<div class="small muted">${esc(daysText(it.days))}</div></div>
+        <div style="text-align:end">${it.wait ? `<span class="pill t-d30">${fmtDate(it.date)}</span>` : datePill(it.date)}<div class="small muted">${esc(it.wait ? `⏳ ${t(PAM_WAIT_TEXT)}` : daysText(it.days))}</div></div>
       </div>`).join('') : '<div class="empty">لا توجد تنبيهات 🎉</div>'}</div></div>`;
   translateDomText(root);
   $('#close-side').onclick = closeSidePanel;
@@ -1097,7 +1102,7 @@ function renderAlertCenterPanel(filter = 'all') {
 }
 function closeSidePanel() { $('#side-root').innerHTML = ''; }
 function updateAlertCount() {
-  const n = trackedAlertItems(90, true).filter(i => i.days <= 30).length;
+  const n = trackedAlertItems(90, true).filter(i => i.days <= 30 && !i.wait).length;
   const el = $('#alert-count');
   el.hidden = !n; el.textContent = n > 99 ? '99+' : n;
 }
@@ -1163,7 +1168,7 @@ function renderNav() {
 }
 function renderAlertBar() {
   const items = trackedAlertItems();
-  const expired = items.filter(i => i.days < 0).length;
+  const expired = items.filter(i => i.days < 0 && !i.wait).length;
   const week = items.filter(i => i.days >= 0 && i.days <= 7).length;
   const stuck = scopedEmployees().filter(e => e.govStageNote && !empEnded(e)).length;
   let html = '';

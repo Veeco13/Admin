@@ -3927,7 +3927,11 @@ def data_quality(s):
     for f, lab in (("residencyExp", "الإقامة"), ("workPermitExp", "إذن العمل")):
         add(f"emp_expired_{f}", f"{lab} منتهية لموظفين في الخدمة", "high",
             [emp(e, fmt(getattr(e, f))) for e in active if getattr(e, f) and getattr(e, f) < today
-             and (f != "residencyExp" or pdf_forms.needs_residency(e.nationality))])     # الكويتي والخليجي مالهمش إقامة
+             and (f != "residencyExp" or pdf_forms.needs_residency(e.nationality))     # الكويتي والخليجي مالهمش إقامة
+             and not (f == "workPermitExp" and pdf_forms.is_kuwaiti(e.nationality))])  # الكويتي بيتجدد من الهيئة لوحده
+    add("emp_pam_waiting", "عمالة وطنية إذن عملهم بانتظار تجديد الهيئة", "low",
+        [emp(e, fmt(e.workPermitExp)) for e in active if e.workPermitExp and e.workPermitExp < today and pdf_forms.is_kuwaiti(e.nationality)],
+        "إذن عمل العمالة الكويتية بيتجدد تلقائي من الهيئة — حدّث التاريخ لما التجديد يظهر.")
     need_res = [e for e in active if pdf_forms.needs_residency(e.nationality)]
     add("emp_no_residency", "من غير تاريخ انتهاء الإقامة أو إذن العمل", "medium",
         [emp(e, "، ".join(x for x, v in (("الإقامة", e.residencyExp), ("إذن العمل", e.workPermitExp)) if not v)) for e in need_res

@@ -66,13 +66,15 @@ function renderDashboard() {
   const emps = scopedEmployees();
   const active = emps.filter(e => !empEnded(e));
   const items = trackedAlertItems();
-  const expired = items.filter(i => i.days < 0), week = items.filter(i => i.days >= 0 && i.days <= 7), month = items.filter(i => i.days > 7 && i.days <= 30);
-  const due = items.filter(i => i.days <= 30);
+  const waiting = items.filter(i => i.wait);          // إذن عمل كويتي بانتظار تجديد الهيئة ← مش «محتاج إجراء»
+  const expired = items.filter(i => i.days < 0 && !i.wait), week = items.filter(i => i.days >= 0 && i.days <= 7), month = items.filter(i => i.days > 7 && i.days <= 30);
+  const due = items.filter(i => i.days <= 30 && !i.wait);
   const stuck = active.filter(e => e.govStageNote);
   const count = st => emps.filter(e => (e.employmentStatus || 'active') === st).length;
 
   /* ---------- الصف الأول: محتاج إجراء + المؤشرات ---------- */
-  const heroSplit = [['expired', 'red', t('منتهي'), expired.length], ['d30', 'orange', t('خلال 7 أيام'), week.length], ['d30', 'yellow', t('خلال 30 يوم'), month.length]];
+  const heroSplit = [['expired', 'red', t('منتهي'), expired.length], ['d30', 'orange', t('خلال 7 أيام'), week.length], ['d30', 'yellow', t('خلال 30 يوم'), month.length],
+    ...(waiting.length ? [['all', 'grey', `⏳ ${t(PAM_WAIT_TEXT)}`, waiting.length]] : [])];
   const hero = `<section class="db-hero db-span-4">
       <div class="db-eyebrow">🔔 ${t('محتاج إجراء')}</div>
       <div class="db-hero-v">${due.length}</div>

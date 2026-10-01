@@ -768,9 +768,9 @@ function empCardHeadHtml(e) {
       <div class="ec-ids"><span>${t('الرقم المدني')}</span><b>${esc(e.id)}</b><span>${t('رقم الملف')}</span><b>${esc(e.fileNo || '—')}</b>
         <span>${t('الرقم الوظيفي')}</span><b>${esc(e.dpId || '—')}</b><span>${t('اكتمال المستندات')}</span><b>${comp.pct}%</b></div></div>
     <div class="ec-docs">${empCardDocs(e).map(d => {
-      const n = daysUntil(d.exp), cls = n === null ? '' : n < 0 ? 'bad' : n <= 90 ? 'warn' : 'ok';
+      const n = daysUntil(d.exp), cls = n === null ? '' : pamWaiting(e, d.key) ? 'warn' : n < 0 ? 'bad' : n <= 90 ? 'warn' : 'ok';
       return `<div class="ec-doc ${cls}"><span>${esc(d.label)}${d.no ? ` · <bdi dir="ltr">${esc(d.no)}</bdi>` : ''}</span><b>${d.exp ? fmtDate(d.exp) : '—'}</b>
-        <small>${esc(daysText(n) || t('مش متسجّل'))}</small></div>`;
+        <small>${esc(empDocText(e, d.key) || t('مش متسجّل'))}</small></div>`;
     }).join('')}</div>
     <div class="small muted" style="margin-top:4px">${t('آخر تعديل')}: ${fmtDateTime(e.lastUpdated)} ${esc(e.lastUpdatedBy || '')}</div>`;
 }
@@ -847,7 +847,7 @@ function empCardPrintBody(e, o) {
     ${kw ? sec(`🇰🇼 ${esc(t('بيانات العمالة الوطنية'))}`, kw) : ''}
     ${sec(`🪪 ${esc(t('المستندات والتواريخ'))}`, `<table class="rpt"><thead><tr><th class="txt">${t('المستند')}</th><th>${t('الرقم')}</th><th>${t('تاريخ الإصدار')}</th><th>${t('تاريخ الانتهاء')}</th><th>${t('الحالة')}</th></tr></thead>
       <tbody>${empCardDocs(e).map(d => `<tr><td class="txt"><b>${esc(d.label)}</b></td><td class="num">${esc(d.no || '—')}</td><td class="num">${fmtDate(d.issue) || '—'}</td>
-        <td class="num">${d.exp ? `<span class="pill ${tier(d.exp)}">${fmtDate(d.exp)}</span>` : '—'}</td><td>${esc(daysText(daysUntil(d.exp))) || `<span class="ec-none">${t('مش متسجّل')}</span>`}</td></tr>`).join('')}</tbody></table>`)}
+        <td class="num">${d.exp ? `<span class="pill ${tier(d.exp)}">${fmtDate(d.exp)}</span>` : '—'}</td><td>${esc(empDocText(e, d.key)) || `<span class="ec-none">${t('مش متسجّل')}</span>`}</td></tr>`).join('')}</tbody></table>`)}
     ${permits.length ? sec(`🪪 ${esc(t('التصاريح'))}`, `<table class="rpt"><thead><tr><th class="txt">${t('نوع التصريح')}</th><th>${t('الرقم')}</th><th class="txt">${t('العقد')}</th><th>${t('الإصدار')}</th><th>${t('الانتهاء')}</th><th>${t('الحالة')}</th></tr></thead>
       <tbody>${permits.map(p => `<tr><td class="txt"><b>${esc(permitLabel(p))}</b></td><td class="num">${esc(p.permitNo || '—')}</td><td class="txt">${esc(projectName(p.projectId)) || '—'}</td>
         <td class="num">${fmtDate(p.issueDate) || '—'}</td><td class="num"><span class="pill ${tier(p.expiryDate)}">${fmtDate(p.expiryDate)}</span></td><td>${esc(daysText(daysUntil(p.expiryDate)))}</td></tr>`).join('')}</tbody></table>`) : ''}
@@ -966,7 +966,7 @@ async function openProfileCard(id, tab = 'info') {
       <div data-pane="info" ${tab !== 'info' ? 'hidden' : ''}>${empCardInfoHtml(e)}</div>
       <div data-pane="docs" ${tab !== 'docs' ? 'hidden' : ''}>
         <table class="data"><thead><tr><th>المستند</th><th>الرقم</th><th>تاريخ الانتهاء</th><th>المتبقي</th><th class="write-only" data-p="employees.edit"></th></tr></thead><tbody>
-        ${EMP_DATE_FIELDS.filter(f => (!f.driverOnly || e.isDriver) && (f.key !== 'residencyExp' || empNeedsResidency(e) || e.residencyExp)).map(f => `<tr><td>${esc(t(f.label))}</td><td>${f.key === 'passportExp' ? esc(e.passportNo || '') : ''}</td><td>${datePill(e[f.key])}</td><td class="small">${esc(daysText(daysUntil(e[f.key])))}</td>
+        ${EMP_DATE_FIELDS.filter(f => (!f.driverOnly || e.isDriver) && (f.key !== 'residencyExp' || empNeedsResidency(e) || e.residencyExp)).map(f => `<tr><td>${esc(t(f.label))}</td><td>${f.key === 'passportExp' ? esc(e.passportNo || '') : ''}</td><td>${datePill(e[f.key])}</td><td class="small">${esc(empDocText(e, f.key))}</td>
           <td class="write-only" data-p="employees.edit"><button class="btn sm" data-renew="${f.key}">🔄 ${t('تجديد سريع')}</button></td></tr>`).join('')}
         </tbody></table>
         <div data-p="sensitive.documents"><h4>✍️ ${t('التوقيع')}</h4>
