@@ -326,9 +326,14 @@ def assign_owner(s, c, uid):
     c.seq = (s.scalar(select(func.max(M.Custody.seq)).where(M.Custody.prefix == c.prefix, M.Custody.id != c.id)) or 0) + 1
 
 
+def sees_all(ctx):
+    """«عرض عهد كل المستخدمين» (مدير النظام)، أو المحاسب (حسابات العهد)."""
+    return ctx is None or ctx.can("custody.all") or ctx.can("custody.accounts")
+
+
 def can_see(ctx, c):
-    """صاحب العهدة، أو صاحب «عرض عهد كل المستخدمين» (مدير النظام)."""
-    return ctx is None or ctx.can("custody.all") or c.ownerId == ctx.id
+    """صاحب العهدة، أو اللي بيشوف عهد الكل (sees_all)."""
+    return sees_all(ctx) or c.ownerId == ctx.id
 
 
 def user_names(s):
@@ -589,9 +594,9 @@ def reopen(s, c, when):
     """إلغاء تقفيل بتاريخه (فواتيره لسه بانتظار الحسابات): الفواتير بتتمسح، والبنود ترجع مفتوحة، والعهدة «تم الصرف».
     بيرجّع (عدد البنود، رسالة خطأ)."""
     invoices = s.scalars(select(M.Invoice).where(M.Invoice.custodyId == c.id, M.Invoice.closingDate == when)).all()
-    approved = [invoice_no(i) for i in invoices if i.status == "approved"]
-    if approved:
-        return 0, f"الحسابات اعتمدت {'، '.join(approved)} — مينفعش التقفيل يتلغي"
+    locked = [f"{invoice_no(i)} ({INVOICE_STATUS.get(i.status, i.status)})" for i in invoices if i.status not in INVOICE_OPEN]
+    if locked:                       # اتبعتت / معلّقة / معتمدة / اتحصّلت ← عند الحسابات (المرفوضة بترجع تتصلّح)
+        return 0, f"الفواتير دي عند الحسابات: {'، '.join(locked)} — مينفعش التقفيل يتلغي"
     later = s.scalar(select(func.max(M.CustodyLine.closedDate)).where(M.CustodyLine.custodyId == c.id, M.CustodyLine.closedDate > when))
     if later:                        # الدعم الإداري في التقفيلات اللي بعده متحسوب على أساسه
         return 0, f"ألغي التقفيل الأحدث الأول ({later.strftime('%d/%m/%Y')}) — الإلغاء بيبقى للأحدث بس"
@@ -602,6 +607,100 @@ def reopen(s, c, when):
     if n and c.status == "closed":
         c.status, c.closedDate = "disbursed", None
     return n, None
+
+
+# ---------------------------------------------------------------------------
+# حسابات العهد: حالة الفاتورة (المحاسب — custody.accounts)
+# ---------------------------------------------------------------------------
+INVOICE_STATUS = {"pending": "بانتظار الحسابات", "sent": "اتبعتت", "hold": "معلّقة", "rejected": "مرفوضة",
+                  "approved": "معتمدة", "collected": "اتحصّلت"}
+INVOICE_OPEN = ("pending", "rejected")       # التقفيل بتاعها لسه يتلغي (ماتبعتتش، أو اترفضت ولازم تتصلّح)
+INVOICE_FINAL = ("approved", "collected")
+INVOICE_ACTIONS = {"send": "إرسال", "hold": "تعليق", "reject": "رفض", "release": "رجوع", "approve": "اعتماد",
+                   "collect": "تحصيل", "undo": "تراجع"}
+
+
+def invoice_history(inv):
+    try:
+        return json.loads(inv.history or "[]")
+    except ValueError:
+        return []
+
+
+def invoice_action(inv, action, d, user):
+    """تغيير حالة فاتورة ← رسالة خطأ أو None. d = {ref, date, note}.
+    send: pending ← sent (مرجع وتاريخ — وعلى المبعوتة: تصحيح المرجع). hold / reject: بسبب، من pending أو sent (والرفض من
+    المعلّقة كمان). release: رجوع المعلّقة / المرفوضة لحالتها. approve: sent ← approved. collect: approved ← collected
+    (رقم وتاريخ). undo: خطوة لورا (اتحصّلت ← معتمدة ← اتبعتت ← بانتظار الحسابات)."""
+    no, today = invoice_no(inv), date.today()
+    ref, note = str(d.get("ref") or "").strip(), str(d.get("note") or "").strip()
+    when = db.parse_date(d.get("date")) or today
+    if d.get("date") and not db.parse_date(d.get("date")):
+        return "التاريخ مش صحيح"
+    if when > today:
+        return "التاريخ لسه ماجاش"
+    st, entry = inv.status, {"at": db.now_iso(), "user": user, "action": action}
+    if action == "send":
+        if st not in ("pending", "sent"):
+            return f"{no}: الإرسال للفاتورة اللي بانتظار الحسابات ({INVOICE_STATUS.get(st, st)})"
+        if not ref:
+            return "رقم المرجع مطلوب"
+        if len(ref) > 60:
+            return "رقم المرجع طويل (60 حرف بالكتير)"
+        if when < inv.closingDate:
+            return f"{no}: تاريخ الإرسال قبل تاريخ الفاتورة ({inv.closingDate.strftime('%d/%m/%Y')})"
+        inv.status, inv.sentRef, inv.sentDate, inv.sentBy, inv.note, inv.prevStatus = "sent", ref, when, user, None, None
+        entry.update(ref=ref, date=when.isoformat())
+    elif action in ("hold", "reject"):
+        if st not in (("pending", "sent") if action == "hold" else ("pending", "sent", "hold")):
+            return f"{no}: الفاتورة {INVOICE_STATUS.get(st, st)} — مينفعش {'تتعلّق' if action == 'hold' else 'تترفض'}"
+        if not note:
+            return "اكتب السبب"
+        if st != "hold":
+            inv.prevStatus = st
+        inv.status, inv.note = ("hold" if action == "hold" else "rejected"), note
+        entry.update(note=note)
+    elif action == "release":
+        if st not in ("hold", "rejected"):
+            return f"{no}: الفاتورة مش معلّقة ولا مرفوضة"
+        inv.status = inv.prevStatus if inv.prevStatus in ("pending", "sent") else ("sent" if inv.sentRef else "pending")
+        inv.note, inv.prevStatus = None, None
+        if note:
+            entry.update(note=note)
+    elif action == "approve":
+        if st != "sent":
+            return f"{no}: الاعتماد بعد الإرسال بالمرجع ({INVOICE_STATUS.get(st, st)})"
+        if inv.sentDate and when < inv.sentDate:
+            return f"{no}: تاريخ الاعتماد قبل تاريخ الإرسال ({inv.sentDate.strftime('%d/%m/%Y')})"
+        inv.status, inv.approvedDate, inv.approvedBy = "approved", when, user
+        entry.update(date=when.isoformat())
+    elif action == "collect":
+        if st != "approved":
+            return f"{no}: التحصيل بعد الاعتماد ({INVOICE_STATUS.get(st, st)})"
+        if not ref:
+            return "رقم سند التحصيل مطلوب"
+        if len(ref) > 60:
+            return "رقم السند طويل (60 حرف بالكتير)"
+        if inv.approvedDate and when < inv.approvedDate:
+            return f"{no}: تاريخ التحصيل قبل تاريخ الاعتماد ({inv.approvedDate.strftime('%d/%m/%Y')})"
+        inv.status, inv.collectedRef, inv.collectedDate, inv.collectedBy = "collected", ref, when, user
+        entry.update(ref=ref, date=when.isoformat())
+    elif action == "undo":
+        if st == "collected":
+            inv.status, inv.collectedRef, inv.collectedDate, inv.collectedBy = "approved", None, None, None
+        elif st == "approved":
+            inv.status, inv.approvedDate, inv.approvedBy = ("sent" if inv.sentRef else "pending"), None, None
+        elif st == "sent":
+            inv.status, inv.sentRef, inv.sentDate, inv.sentBy = "pending", None, None, None
+        else:
+            return f"{no}: مفيش خطوة تتراجع عنها ({INVOICE_STATUS.get(st, st)})"
+        if note:
+            entry.update(note=note)
+    else:
+        return "إجراء غير معروف"
+    entry["status"] = inv.status
+    inv.history = json.dumps(invoice_history(inv) + [entry], ensure_ascii=False)
+    return None
 
 
 def employee_cost(s, emp_id):
@@ -714,9 +813,9 @@ def dump(s, ctx):
     for inv in s.scalars(select(M.Invoice).order_by(M.Invoice.createdAt.desc(), M.Invoice.ccCode, M.Invoice.no.desc())):
         if inv.custodyId in visible:
             d = db.to_dict(inv)
-            d["number"] = invoice_no(inv)
+            d["number"], d["history"] = invoice_no(inv), invoice_history(inv)
             invoices.append(d)
-    see_all = ctx is None or ctx.can("custody.all")
+    see_all = sees_all(ctx)
     return {
         "custodies": out,
         "invoices": invoices,

@@ -539,7 +539,7 @@ def api_state():
         state.update(dump_permits(s, {e["id"] for e in holders["employees"]}, {v["id"] for v in holders["vehicles"]}))
         for cc in state.get("costCenters", []):                   # رمز المركز بيتحدد مرة واحدة ومايتغيّرش
             cc["codeLocked"] = bool(cc.get("code"))
-    if not u.can("custody.all"):                                  # عمليات عهد المستخدمين التانيين مش ليه
+    if not custody.sees_all(u):                                   # عمليات عهد المستخدمين التانيين مش ليه
         state["auditLog"] = [a for a in state.get("auditLog", []) if a.get("category") != "custody" or a.get("user") == u.display]
     for t in state.get("templates", []):     # خيارات التوقيع بتظهر بس لو القالب فيه مكانها
         path = os.path.join(TEMPLATE_DOCS, t["filename"])
@@ -3099,33 +3099,33 @@ def transfer_custody(cid):
         return jsonify({"ok": True, "number": custody.custody_no(c)})
 
 
-@app.post("/api/invoices/<iid>/approve")
-@require("custody.edit")
-def approve_invoice(iid):
-    """«اعتمدتها الحسابات» بتاريخ: {date} ← الفاتورة نهائية والتقفيل مايتلغيش."""
-    when = db.parse_date(body().get("date")) or datetime.now().date()
+@app.post("/api/invoices/action")
+@require("custody.view", "custody.accounts")
+def invoices_action():
+    """حسابات العهد — تغيير حالة فاتورة أو مجموعة: {ids: [...], action, ref, date, note}.
+    send (مرجع وتاريخ — لفاتورة أو مجموعة بنفس المرجع) · hold / reject (سبب) · release · approve · collect (رقم وتاريخ) · undo.
+    كله أو لا شيء: أي فاتورة مش في الحالة المناسبة بترجّع الطلب كله."""
+    d = body()
+    action, ids = d.get("action"), list(dict.fromkeys(str(i) for i in (d.get("ids") or []) if i))
+    if action not in custody.INVOICE_ACTIONS:
+        return err("إجراء غير معروف")
+    if not ids:
+        return err("اختار فاتورة واحدة على الأقل")
     with db.session_scope() as s:
-        inv = _invoice_or_404(s, iid)
-        if inv.status == "approved":
-            return err("الفاتورة معتمدة خلاص")
-        inv.status, inv.approvedDate, inv.approvedBy = "approved", when, uname()
-        db.log_audit(s, "custody_edit", f"اعتماد الحسابات للفاتورة {custody.invoice_no(inv)} ({inv.costCenter or '—'}) — "
-                                        f"{inv.total:g} د.ك بتاريخ {when.isoformat()}", uname())
-    return jsonify({"ok": True})
-
-
-@app.post("/api/invoices/<iid>/unapprove")
-@require("custody.delete")
-def unapprove_invoice(iid):
-    """رجوع عن «اعتمدتها الحسابات» (لو اتعلّمت بالغلط) ← بانتظار الحسابات تاني."""
-    with db.session_scope() as s:
-        inv = _invoice_or_404(s, iid)
-        if inv.status != "approved":
-            return err("الفاتورة مش معتمدة")
-        inv.status, inv.approvedDate, inv.approvedBy = "pending", None, None
-        db.log_audit(s, "custody_edit", f"إلغاء اعتماد الحسابات للفاتورة {custody.invoice_no(inv)} ({inv.costCenter or '—'})",
-                     uname())
-    return jsonify({"ok": True})
+        done = []
+        for iid in ids:
+            inv = _invoice_or_404(s, iid)
+            msg = custody.invoice_action(inv, action, d, uname())
+            if msg:
+                s.rollback()
+                return err(msg, 400, block=True)
+            done.append(inv)
+        extra = " — ".join(x for x in (f"المرجع {d.get('ref').strip()}" if action in ("send", "collect") and d.get("ref") else "",
+                                         f"بتاريخ {d.get('date')}" if d.get("date") and action in ("send", "approve", "collect") else "",
+                                         f"السبب: {d.get('note').strip()}" if d.get("note") else "") if x)
+        db.log_audit(s, "custody_edit", f"حسابات العهد — {custody.INVOICE_ACTIONS[action]} {len(done)} فاتورة: "
+                     + "، ".join(f"{custody.invoice_no(i)} ({i.total:g} د.ك)" for i in done) + (f" — {extra}" if extra else ""), uname())
+        return jsonify({"ok": True, "count": len(done), "status": done[0].status})
 
 
 @app.get("/api/invoices/<iid>.pdf")

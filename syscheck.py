@@ -136,9 +136,9 @@ def _waiting(s):
     out.append(_item("approvals", "طلبات الموافقة", OK if not n else WARN, "مفيش طلبات متأخرة" if not n else f"{n} طلب مستني موافقة من أكتر من 7 أيام",
                      "افتح «✋ طلبات الموافقة» ووافق أو ارفض."))
     month = (datetime.now() - timedelta(days=30)).date()
-    n = s.scalar(select(func.count()).select_from(M.Invoice).where(M.Invoice.status == "pending", M.Invoice.closingDate < month)) or 0
+    n = s.scalar(select(func.count()).select_from(M.Invoice).where(M.Invoice.status.in_(("pending", "hold")), M.Invoice.closingDate < month)) or 0
     out.append(_item("invoices", "فواتير بانتظار الحسابات", OK if not n else WARN, "مفيش فواتير متأخرة" if not n else f"{n} فاتورة بانتظار الحسابات من أكتر من 30 يوم",
-                     "راجعها مع الحسابات وعلّمها «اعتمدتها الحسابات» من العهد ← الفواتير."))
+                     "المحاسب يبعتها بالمرجع ويعتمدها (أو يرفضها بسبب) من العهد ← الفواتير."))
     n = s.scalar(select(func.count()).select_from(M.Trash)) or 0
     out.append(_item("trash", "سلة المحذوفات", OK, f"{n} عنصر (بيتحذفوا نهائي بعد 90 يوم)"))
     return out

@@ -20,7 +20,11 @@ const CUSTODY_TYPES = {
   // بعد تجديد الجواز: رسوم البطاقة المدنية (بند من غير مرحلة ← «تم» يدوي). doc = التاريخ اللي بيظهر جنب الموظف
   passport_transfer: { label: 'نقل بيانات الجواز',             kind: 'employee',  flow: 'gov',      kuwaiti: false, doc: 'passportExp' },
 };
-const INVOICE_STATUS = { pending: ['بانتظار الحسابات', 'orange'], approved: ['اعتمدتها الحسابات', 'green'] };
+// حالة الفاتورة عند الحسابات (custody.INVOICE_STATUS على السيرفر) — المحاسب بس (custody.accounts) اللي بيغيّرها
+const INVOICE_STATUS = { pending: ['بانتظار الحسابات', 'orange'], sent: ['اتبعتت', 'blue'], hold: ['معلّقة', 'yellow'], rejected: ['مرفوضة', 'red'],
+  approved: ['معتمدة', 'green'], collected: ['اتحصّلت', 'purple'] };
+const INVOICE_FINAL = ['approved', 'collected'];          // نهائية
+const INVOICE_OPEN = ['pending', 'rejected'];             // تقفيلها لسه يتلغي (ماتبعتتش، أو اترفضت ولازم تتصلّح)
 // بند التجديد بيحدّث تاريخ في بيانات الموظف (نفس custody.EXPIRY_FIELDS) ← الانتهاء الجديد بيتسجّل عليه قبل التقفيل
 const CUSTODY_EXPIRY_FIELDS = { residencyExp: 'الإقامة', workPermitExp: 'إذن العمل', healthCardExp: 'البطاقة الصحية' };
 function isoLocal(dt) { return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`; }
@@ -29,7 +33,8 @@ function addYearsISO(iso, n) { const [y, m, d] = String(iso).split('-').map(Numb
 function custodyExpiryBase(l) { return l.oldExpiry || ((IDX.employee[l.personId] || {})[l.updatesField]) || ''; }
 function invoiceStatusChip(inv) {
   const [l, col] = INVOICE_STATUS[inv.status] || [inv.status, 'grey'];
-  return `<span class="chip" style="background:var(--${col}-soft);color:var(--${col})">${esc(t(l))}${inv.status === 'approved' && inv.approvedDate ? ' · ' + fmtDate(inv.approvedDate) : ''}</span>`;
+  const when = { sent: inv.sentDate, approved: inv.approvedDate, collected: inv.collectedDate }[inv.status];
+  return `<span class="chip" style="background:var(--${col}-soft);color:var(--${col})">${esc(t(l))}${when ? ' · ' + fmtDate(when) : ''}</span>`;
 }
 /** إعدادات الفواتير: الشركة المُصدِرة، الدعم الإداري الافتراضي، ومراكز التكلفة اللي مالهاش دعم */
 function custodySettings() { return STATE.custodySettings || { issuerCompanyId: null, supportFee: 20, noSupportCostCenters: [] }; }
@@ -45,7 +50,7 @@ const custodyDirectTag = c => (c.carryToNumber
 /** رقم العهدة: رمز صاحبها وقت الطلب + مسلسله «AA-0001» (custody.custody_no على السيرفر) */
 function custodyNo(c) { return c.number || 'CUS-' + String(c.no).padStart(4, '0'); }
 /** العهد اللي ظاهرة في الشاشة: السيرفر بيبعت عهد المستخدم بس، وصاحب «عرض عهد كل المستخدمين» بيختار (عهدي / الكل / مستخدم) */
-function custodySeeAll() { return can('custody.all'); }
+function custodySeeAll() { return can('custody.all') || can('custody.accounts'); }
 function custodiesInView() {
   const all = STATE.custodies || [], o = UI.custody.owner || 'me';
   if (!custodySeeAll() || o === 'all') return all;
@@ -123,7 +128,9 @@ function custodianBalances() {
 
 /* ---------- الشاشة ---------- */
 function renderCustody() {
-  const U = UI.custody = Object.assign({ tab: 'list', q: '', status: '', type: '', custodian: '', iq: '', istatus: '', icc: '', owner: 'me' }, UI.custody || {});
+  // المحاسب (من غير عهد ليه) بيفتح على عهد الكل
+  const U = UI.custody = Object.assign({ tab: 'list', q: '', status: '', type: '', custodian: '', iq: '', istatus: '', icc: '', iag: '',
+    owner: can('custody.accounts') && !can('custody.edit') ? 'all' : 'me' }, UI.custody || {});
   if (U.tab === 'expenses' && !can('custody.expenses')) U.tab = 'list';
   const exTab = U.tab === 'expenses';            // 📊 لوحة المصروفات (expenses.js): كل العهد في النطاق — ليها مؤشراتها
   const all = custodiesInView();
@@ -131,6 +138,7 @@ function renderCustody() {
   // تقفيل مباشر مقفول ولسه مااتعوّضش ← المستلم صرفه من فلوس عهدة مفتوحة معاه
   const dues = sum(all.filter(c => c.direct && c.status === 'closed').map(c => custodyTotals(c).due));
   const pending = invoicesInView().filter(i => i.status === 'pending');
+  const stuck = invoicesInView().filter(i => ['hold', 'rejected'].includes(i.status)).length;      // معلّقة / مرفوضة
   const owners = STATE.custodyUsers || [];
   const kpi = [[all.filter(c => c.status === 'requested').length, 'طلبات لسه ماتصرفتش', 'orange'], [open.length, 'عهد مفتوحة', 'blue'],
     [fmtMoney(sum(open.map(x => x.received))), 'اتصرف للمستلمين', ''], [fmtMoney(sum(open.map(x => x.spent))), 'اتنفّذ فعلًا', ''],
@@ -142,16 +150,18 @@ function renderCustody() {
       <button class="btn primary write-only" data-p="custody.edit" id="cu-add">➕ ${t('طلب عهدة')}</button>
       <button class="btn write-only" data-p="custody.edit custody.direct" id="cu-direct" title="${esc(t('إجراء اتصرف عليه من فلوس عهدة لشخص مش في أي طلب'))}">🔒 ${t('تقفيل عهدة')}</button>
       <button class="btn" id="cu-plan">📅 ${t('خطة التجديدات')}</button>
+      <button class="btn" id="cu-rep">🖨️ ${t('تقارير العهد')}</button>
       <button class="btn" data-p="custody.fees" id="cu-fees">⚙️ ${t('جدول الرسوم')}</button>
       <button class="btn" data-p="custody.fees" id="cu-set">🧾 ${t('إعدادات الفواتير')}</button></div></div>
     ${exTab ? '' : `<div class="cu-kpis">${kpi.map(([v, l, c]) => `<div class="card cu-kpi"${c ? ` style="border-top:3px solid var(--${c})"` : ''}><b class="num">${esc(v)}</b><span>${esc(t(l))}</span></div>`).join('')}</div>`}
-    <div class="tabs" style="margin:14px 0 10px">${[['list', 'العهد'], ['invoices', 'الفواتير'], ['balances', 'أرصدة المستلمين'], ...(can('custody.expenses') ? [['expenses', '📊 المصروفات']] : [])].map(([k, l]) => `<button data-cutab="${k}" class="${U.tab === k ? 'active' : ''}">${esc(t(l))}${k === 'invoices' && pending.length ? ` <span class="cu-badge">${pending.length}</span>` : ''}</button>`).join('')}</div>
+    <div class="tabs" style="margin:14px 0 10px">${[['list', 'العهد'], ['invoices', 'الفواتير'], ['balances', 'أرصدة المستلمين'], ...(can('custody.expenses') ? [['expenses', '📊 المصروفات']] : [])].map(([k, l]) => `<button data-cutab="${k}" class="${U.tab === k ? 'active' : ''}">${esc(t(l))}${k === 'invoices' && pending.length ? ` <span class="cu-badge">${pending.length}</span>` : ''}${k === 'invoices' && stuck ? ` <span class="cu-badge" style="background:var(--red)" title="${esc(t('فواتير معلّقة أو مرفوضة'))}">${stuck}</span>` : ''}</button>`).join('')}</div>
     <div id="cu-pane">${exTab ? expensesHtml() : U.tab === 'balances' ? custodyBalancesHtml() : U.tab === 'invoices' ? custodyInvoicesHtml() : custodyListHtml()}</div>`;
   const upd = p => { Object.assign(UI.custody, p); saveUiStateToLocalStorage(); render(); };
   $$('[data-cutab]').forEach(b => b.onclick = () => upd({ tab: b.dataset.cutab }));
   const add = $('#cu-add'); if (add) add.onclick = () => openCustodyRequestModal();
   const dir = $('#cu-direct'); if (dir) dir.onclick = () => openCustodyRequestModal(null, { direct: true });
   $('#cu-plan').onclick = () => openRenewalPlanModal();
+  $('#cu-rep').onclick = () => openCustodyReportsModal();
   const fees = $('#cu-fees'); if (fees) fees.onclick = () => openFeeItemsModal();
   const set = $('#cu-set'); if (set) set.onclick = () => openCustodySettingsModal();
   const own = $('#cu-owner'); if (own) own.onchange = e => upd({ owner: e.target.value, custodian: '' });
@@ -162,9 +172,15 @@ function renderCustody() {
     iq.addEventListener('input', debounce(e => { UI.custody.iq = e.target.value; render(); const i = $('#cif-q'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 250));
     $('#cif-status').onchange = e => upd({ istatus: e.target.value });
     $('#cif-cc').onchange = e => upd({ icc: e.target.value });
-    $('#cif-clear').onclick = () => upd({ iq: '', istatus: '', icc: '' });
+    $('#cif-ag').onchange = e => upd({ iag: e.target.value });
+    $('#cif-clear').onclick = () => upd({ iq: '', istatus: '', icc: '', iag: '' });
     bindInvoiceActions(viewRoot(), render);
-    $$('tr[data-inv-cu]').forEach(tr => tr.onclick = ev => { if (!ev.target.closest('button')) openCustodyDetails(tr.dataset.invCu); });
+    $$('tr[data-inv-cu]').forEach(tr => tr.onclick = ev => { if (!ev.target.closest('button, input')) openCustodyDetails(tr.dataset.invCu); });
+    // المحاسب: تعليم مجموعة فواتير ← إرسال بمرجع واحد / اعتماد / تحصيل
+    $$('[data-inv-sel]').forEach(cb => cb.onchange = () => { cb.checked ? CU_INV_SEL.add(cb.dataset.invSel) : CU_INV_SEL.delete(cb.dataset.invSel); render(); });
+    const allBox = $('#cif-all');
+    if (allBox) allBox.onchange = () => { $$('[data-inv-sel]').forEach(cb => (allBox.checked ? CU_INV_SEL.add(cb.dataset.invSel) : CU_INV_SEL.delete(cb.dataset.invSel))); render(); };
+    $$('[data-inv-bulk]').forEach(b => b.onclick = () => openInvoiceActionModal([...CU_INV_SEL], b.dataset.invBulk, render));
     return;
   }
   if (U.tab === 'balances') {
@@ -212,58 +228,143 @@ function custodyBalancesHtml() {
       <td class="num"><b>${fmtMoney(sum(rows.map(b => b.remaining)))}</b></td><td class="num">${sum(rows.map(b => b.open))}</td><td class="num">${sum(rows.map(b => b.requested))}</td></tr></tfoot>` : ''}</table></div>`;
 }
 
-/* ---------- الفواتير: فاتورة لكل مركز تكلفة في كل تقفيل ---------- */
+/* ---------- الفواتير: فاتورة لكل مركز تكلفة في كل تقفيل — والمحاسب (custody.accounts) بيتابعها ----------
+   بانتظار الحسابات ← اتبعتت (برقم مرجع — للوكيل أو شركة مركز التكلفة) ← معتمدة ← اتحصّلت (برقم وتاريخ)،
+   و«معلّقة» / «مرفوضة» بسبب في أي وقت قبل الاعتماد (custody.invoice_action على السيرفر). */
+const CU_INV_SEL = new Set();                       // الفواتير المتعلّمة (إرسال / اعتماد / تحصيل مجموعة)
+const invoiceAccounts = () => can('custody.accounts');
+/** وكيل مركز التكلفة بتاع الفاتورة — أو null */
+function invoiceAgency(i) {
+  const cc = (STATE.costCenters || []).find(c => c.name === i.costCenter);
+  return cc ? (STATE.agencies || []).find(a => (a.costCenterIds || []).includes(cc.id)) || null : null;
+}
+/** الجهة اللي الفاتورة بتتبعتلها: الوكيل، وإلا شركة مركز التكلفة */
+function invoiceRecipient(i) { const a = invoiceAgency(i); return a ? agencyName(a) : companyName(i.billCompanyId) || i.costCenter || ''; }
+function invoiceRefHtml(i) {
+  return [i.sentRef && `<b class="num">${esc(i.sentRef)}</b> <span class="muted">${fmtDate(i.sentDate)}</span>`,
+    i.collectedRef && `💵 <b class="num">${esc(i.collectedRef)}</b> <span class="muted">${fmtDate(i.collectedDate)}</span>`].filter(Boolean).join('<br>') || '<span class="muted">—</span>';
+}
 function custodyInvoicesHtml() {
-  const U = UI.custody, q = norm(U.iq), all = invoicesInView();
+  const U = UI.custody, q = norm(U.iq), all = invoicesInView(), acc = invoiceAccounts();
   const cus = Object.fromEntries((STATE.custodies || []).map(c => [c.id, c]));
+  const agOf = i => (invoiceAgency(i) || {}).id || '';
   const list = all.filter(i => (!U.istatus || i.status === U.istatus) && (!U.icc || (i.costCenter || '') === U.icc)
-    && (!q || [i.number, i.ccCode, i.closingRef, i.createdBy, i.costCenter, companyName(i.billCompanyId), cus[i.custodyId] && custodyNo(cus[i.custodyId]), cus[i.custodyId] && cus[i.custodyId].custodian].some(v => norm(v).includes(q))));
-  return `<div class="filters"><input type="search" id="cif-q" placeholder="${esc(t('بحث برقم الفاتورة أو مركز التكلفة أو العهدة…'))}" value="${esc(U.iq)}">
+    && (!U.iag || (U.iag === '__none' ? !agOf(i) : agOf(i) === U.iag))
+    && (!q || [i.number, i.ccCode, i.closingRef, i.createdBy, i.costCenter, i.sentRef, i.collectedRef, i.note, companyName(i.billCompanyId), cus[i.custodyId] && custodyNo(cus[i.custodyId]), cus[i.custodyId] && cus[i.custodyId].custodian].some(v => norm(v).includes(q))));
+  [...CU_INV_SEL].forEach(id => { if (!list.some(i => i.id === id)) CU_INV_SEL.delete(id); });     // اللي اتفلتر برّه مايفضلش متعلّم
+  const sel = list.filter(i => CU_INV_SEL.has(i.id)), every = st => sel.length > 0 && sel.every(i => i.status === st);
+  const ags = (STATE.agencies || []).filter(a => all.some(i => agOf(i) === a.id));
+  const bulk = (a, st, label) => `<button class="btn sm${every(st) ? ' primary' : ''}" data-inv-bulk="${a}" ${every(st) ? '' : 'disabled'} title="${esc(t('للفواتير اللي حالتها'))}: ${esc(t(INVOICE_STATUS[st][0]))}">${label}</button>`;
+  return `<div class="filters"><input type="search" id="cif-q" placeholder="${esc(t('بحث برقم الفاتورة أو المرجع أو مركز التكلفة أو العهدة…'))}" value="${esc(U.iq)}">
       <select id="cif-status">${opt('', t('— كل الحالات —'), !U.istatus)}${Object.entries(INVOICE_STATUS).map(([k, [l]]) => opt(k, t(l), k === U.istatus)).join('')}</select>
       <select id="cif-cc">${opt('', t('— كل مراكز التكلفة —'), !U.icc)}${uniq(all.map(i => i.costCenter || '')).sort().map(x => opt(x, x || t('بدون مركز تكلفة'), x === U.icc)).join('')}</select>
+      <select id="cif-ag">${opt('', t('— كل الوكلاء —'), !U.iag)}${ags.map(a => opt(a.id, agencyName(a), a.id === U.iag)).join('')}${opt('__none', t('من غير وكيل'), U.iag === '__none')}</select>
       <button class="btn sm ghost" id="cif-clear">✕ ${t('مسح الفلاتر')}</button><span class="spacer"></span>${custodyLangSelect()}</div>
-    <div class="table-wrap"><table class="data"><thead><tr><th>${t('رقم الفاتورة')}</th><th>${t('التاريخ')}</th><th>${t('فاتورة إلى')}</th><th>${t('العهدة')}</th><th>${t('التقفيل')}</th><th>${t('الموظفين')}</th>
-      <th>${t('الرسوم الحكومية')}</th><th>${t('الدعم الإداري')}</th><th>${t('الإجمالي')}</th><th>${t('الحالة')}</th><th></th></tr></thead><tbody>
-    ${list.map(i => { const c = cus[i.custodyId]; return `<tr class="clickable" data-inv-cu="${esc(i.custodyId)}"><td class="num nowrap"><b>${esc(i.number)}</b></td><td class="num small nowrap">${fmtDate(i.closingDate)}</td>
-      <td>${i.ccCode ? `<span class="chip on num">${esc(i.ccCode)}</span> ` : ''}${esc(i.costCenter || t('بدون مركز تكلفة'))}<div class="small muted">${esc(companyName(i.billCompanyId) || '')}</div></td>
-      <td class="small">${c ? `${esc(custodyNo(c))} · ${esc(custodyTypeLabel(c.txType))}<div class="muted">${esc(c.custodian)}</div>` : '—'}</td>
-      <td class="small nowrap"><b class="num">${esc(i.closingRef || '—')}</b><div class="muted">${esc(i.createdBy || '')}</div></td>
+    ${acc ? `<div class="row cu-inv-bulk"><span class="small">${t('المتعلّم')}: <b>${sel.length}</b>${sel.length ? ` · <b>${fmtMoney(sum(sel.map(i => i.total)))}</b>` : ''}</span>
+      ${bulk('send', 'pending', '📤 ' + t('إرسال بالمرجع'))}${bulk('approve', 'sent', '✅ ' + t('اعتماد'))}${bulk('collect', 'approved', '💵 ' + t('تحصيل'))}
+      <span class="small muted">${t('علّم فاتورة أو أكتر من نفس الحالة — المرجع بيتسجّل على المجموعة كلها.')}</span></div>` : ''}
+    <div class="table-wrap"><table class="data"><thead><tr>${acc ? `<th style="width:30px"><input type="checkbox" id="cif-all" ${list.length && sel.length === list.length ? 'checked' : ''}></th>` : ''}<th>${t('رقم الفاتورة')}</th><th>${t('التاريخ')}</th><th>${t('فاتورة إلى')}</th><th>${t('العهدة')} / ${t('التقفيل')}</th><th>${t('الموظفين')}</th>
+      <th>${t('الرسوم الحكومية')}</th><th>${t('الدعم الإداري')}</th><th>${t('الإجمالي')}</th><th>${t('الحالة')} / ${t('المرجع')}</th><th></th></tr></thead><tbody>
+    ${list.map(i => { const c = cus[i.custodyId], ag = invoiceAgency(i); return `<tr class="clickable" data-inv-cu="${esc(i.custodyId)}">${acc ? `<td><input type="checkbox" data-inv-sel="${i.id}" ${CU_INV_SEL.has(i.id) ? 'checked' : ''}></td>` : ''}<td class="num nowrap"><b>${esc(i.number)}</b></td><td class="num small nowrap">${fmtDate(i.closingDate)}</td>
+      <td>${i.ccCode ? `<span class="chip on num">${esc(i.ccCode)}</span> ` : ''}${esc(i.costCenter || t('بدون مركز تكلفة'))}<div class="small muted">${esc(companyName(i.billCompanyId) || '')}${ag ? ` · ${t('الوكيل')}: ${esc(agencyName(ag))}` : ''}</div></td>
+      <td class="small">${c ? `<b class="num">${esc(i.closingRef || custodyNo(c))}</b> · ${esc(custodyTypeLabel(c.txType))}<div class="muted">${esc(c.custodian)}${i.createdBy ? ' · ' + esc(i.createdBy) : ''}</div>` : '—'}</td>
       <td class="num">${i.employees}</td><td class="num">${fmtMoney(i.govAmount)}</td><td class="num">${i.supportAmount ? fmtMoney(i.supportAmount) : '<span class="muted">—</span>'}</td>
-      <td class="num nowrap"><b>${fmtMoney(i.total)}</b></td><td>${invoiceStatusChip(i)}</td><td class="nowrap">${invoiceButtons(i)}</td></tr>`; }).join('')
-      || `<tr><td colspan="11" class="empty">${t('لا توجد فواتير — الفواتير بتطلع لما تقفل عهدة')}</td></tr>`}
-    </tbody>${list.length ? `<tfoot><tr><td colspan="5">${t('الإجمالي')} (${list.length})</td><td class="num">${sum(list.map(i => i.employees))}</td><td class="num">${fmtMoney(sum(list.map(i => i.govAmount)))}</td>
+      <td class="num nowrap"><b>${fmtMoney(i.total)}</b></td>
+      <td>${invoiceStatusChip(i)}${i.sentRef || i.collectedRef ? `<div class="small nowrap" style="margin-top:3px">${invoiceRefHtml(i)}</div>` : ''}
+        ${i.note ? `<div class="small" style="max-width:220px;color:var(--${i.status === 'rejected' ? 'red' : 'yellow'})">${esc(i.note)}</div>` : ''}</td>
+      <td class="nowrap">${invoiceButtons(i)}</td></tr>`; }).join('')
+      || `<tr><td colspan="${10 + (acc ? 1 : 0)}" class="empty">${t('لا توجد فواتير — الفواتير بتطلع لما تقفل عهدة')}</td></tr>`}
+    </tbody>${list.length ? `<tfoot><tr><td colspan="${4 + (acc ? 1 : 0)}">${t('الإجمالي')} (${list.length})</td><td class="num">${sum(list.map(i => i.employees))}</td><td class="num">${fmtMoney(sum(list.map(i => i.govAmount)))}</td>
       <td class="num">${fmtMoney(sum(list.map(i => i.supportAmount)))}</td><td class="num"><b>${fmtMoney(sum(list.map(i => i.total)))}</b></td><td colspan="2"></td></tr></tfoot>` : ''}</table></div>`;
 }
-/** أزرار الفاتورة: معاينة وطباعة، «اعتمدتها الحسابات» أو الرجوع عنها */
+/** أزرار الفاتورة: معاينة وطباعة، ومتابعة الحسابات (المحاسب بيغيّر الحالة — والباقي بيشوفوا الحالة وسجلها) */
 function invoiceButtons(i) {
   return `<button class="btn sm" data-inv-dl="${i.id}" title="${esc(t('معاينة وطباعة'))} — ${esc(i.number)}">📄 ${t('معاينة')}</button>
-    ${i.status === 'pending' && can('custody.edit') ? `<button class="btn sm primary" data-inv-ok="${i.id}">✅ ${t('اعتمدتها الحسابات')}</button>` : ''}
-    ${i.status === 'approved' && can('custody.delete') ? `<button class="btn sm ghost" data-inv-undo="${i.id}" title="${esc(t('إلغاء اعتماد الحسابات'))}">↩️</button>` : ''}`;
+    <button class="btn sm${invoiceAccounts() && i.status !== 'collected' ? ' primary' : ''}" data-inv-st="${i.id}" title="${esc(t('حالة الفاتورة عند الحسابات وسجلها'))}">🧾 ${t(invoiceAccounts() ? 'الحسابات' : 'المتابعة')}</button>`;
 }
 function bindInvoiceActions(root, after) {
   const find = id => (STATE.invoices || []).find(i => i.id === id);
   $$('[data-inv-dl]', root).forEach(b => b.onclick = ev => { ev.stopPropagation(); custodyPreview(`/api/invoices/${b.dataset.invDl}.pdf`); });
-  $$('[data-inv-ok]', root).forEach(b => b.onclick = ev => { ev.stopPropagation(); openInvoiceApproveModal(find(b.dataset.invOk), after); });
-  $$('[data-inv-undo]', root).forEach(b => b.onclick = async ev => {
-    ev.stopPropagation();
-    const i = find(b.dataset.invUndo);
-    if (!i || !await openConfirm(`${t('إلغاء اعتماد الحسابات للفاتورة')} ${i.number}؟ ${t('هترجع «بانتظار الحسابات».')}`, { danger: true, okLabel: t('إلغاء الاعتماد') })) return;
-    try { await persist('POST', `/api/invoices/${i.id}/unapprove`, {}, 'تم'); } catch (e) { /* ظاهر */ }
-    after();
-  });
+  $$('[data-inv-st]', root).forEach(b => b.onclick = ev => { ev.stopPropagation(); openInvoiceModal(find(b.dataset.invSt), after); });
 }
-function openInvoiceApproveModal(i, after) {
-  if (!i) return;
+const INVOICE_ACTIONS = { send: ['📤', 'إرسال بالمرجع'], hold: ['⏸', 'تعليق'], reject: ['✖', 'رفض'], release: ['▶️', 'رجوع الفاتورة لحالتها'], approve: ['✅', 'اعتماد'],
+  collect: ['💵', 'تحصيل'], undo: ['↩️', 'تراجع عن آخر خطوة'] };
+/** متابعة الفاتورة: حالتها، المرجع، سبب التعليق / الرفض، وسجل التغييرات — وأزرار المحاسب حسب الحالة */
+function openInvoiceModal(inv, after) {
+  if (!inv) return;
+  const m = openModal({ title: `🧾 ${esc(inv.number)}`, body: '<div id="iv-b"></div>', foot: '<div id="iv-f" class="row" style="width:100%;gap:8px;flex-wrap:wrap"></div>' });
+  const E = m.el;
+  const draw = () => {
+    const i = (STATE.invoices || []).find(x => x.id === inv.id);
+    if (!i) { m.close(); return; }
+    const acc = invoiceAccounts(), ag = invoiceAgency(i), c = (STATE.custodies || []).find(x => x.id === i.custodyId);
+    const kv = (l, v) => `<div><span>${esc(t(l))}</span>${v || '<span class="muted">—</span>'}</div>`;
+    const detail = h => [h.ref && `${t(h.action === 'collect' ? 'رقم السند' : 'المرجع')}: <b class="num">${esc(h.ref)}</b>`, h.date && fmtDate(h.date), h.note && esc(h.note)].filter(Boolean).join(' · ');
+    $('#iv-b', E).innerHTML = `<div class="kv">${kv('فاتورة إلى', esc(i.costCenter || t('بدون مركز تكلفة')))}${kv('الجهة المبعوت لها', `${esc(invoiceRecipient(i))}${ag ? ` <span class="chip">${t('وكيل')}</span>` : ''}`)}
+        ${kv('الإجمالي', `<b>${fmtMoney(i.total)}</b>`)}${kv('تاريخ الفاتورة', fmtDate(i.closingDate))}${kv('العهدة', c ? `${esc(custodyNo(c))} · ${esc(c.custodian)}` : '')}${kv('الحالة', invoiceStatusChip(i))}
+        ${kv('رقم المرجع', i.sentRef ? `<b class="num">${esc(i.sentRef)}</b> · ${fmtDate(i.sentDate)}` : '')}${kv('الاعتماد', i.approvedDate ? `${fmtDate(i.approvedDate)}${i.approvedBy ? ' · ' + esc(i.approvedBy) : ''}` : '')}
+        ${kv('التحصيل', i.collectedRef ? `<b class="num">${esc(i.collectedRef)}</b> · ${fmtDate(i.collectedDate)}` : '')}</div>
+      ${i.note ? `<div class="notice ${i.status === 'rejected' ? 'err' : 'warn'}" style="margin-top:10px"><b>${t(i.status === 'rejected' ? 'سبب الرفض' : 'سبب التعليق')}:</b> ${esc(i.note)}</div>` : ''}
+      ${i.status === 'rejected' ? `<div class="small muted" style="margin-top:6px">${t('الفاتورة المرفوضة: صاحب العهدة يلغي التقفيل من العهدة، يصلّح، ويقفّل تاني — وتطلع فاتورة جديدة.')}</div>` : ''}
+      <h4 class="cu-h">🕓 ${t('سجل الحالة')}</h4>
+      <div class="table-wrap"><table class="data"><thead><tr><th>${t('الوقت')}</th><th>${t('المستخدم')}</th><th>${t('الإجراء')}</th><th>${t('التفاصيل')}</th></tr></thead><tbody>
+        <tr><td class="small num nowrap">${fmtDateTime(i.createdAt)}</td><td class="small">${esc(i.createdBy || '')}</td><td>${t('طلعت من التقفيل')} <span class="num">${esc(i.closingRef || '')}</span></td><td></td></tr>
+        ${(i.history || []).map(h => `<tr><td class="small num nowrap">${fmtDateTime(h.at)}</td><td class="small">${esc(h.user || '')}</td><td>${esc(t((INVOICE_ACTIONS[h.action] || ['', h.action])[1]))}
+          ${h.status ? `<span class="small muted">← ${esc(t((INVOICE_STATUS[h.status] || [h.status])[0]))}</span>` : ''}</td><td class="small">${detail(h)}</td></tr>`).join('')}</tbody></table></div>`;
+    const B = (a, label, cls = '') => `<button class="btn ${cls}" data-act="${a}">${label}</button>`;
+    const hold = B('hold', '⏸ ' + t('تعليق')), reject = B('reject', '✖ ' + t('رفض'), 'danger');
+    const acts = !acc ? '' : ({
+      pending: B('send', '📤 ' + t('إرسال بالمرجع'), 'primary') + hold + reject,
+      sent: B('approve', '✅ ' + t('اعتماد'), 'primary') + B('send', '✏️ ' + t('تصحيح المرجع')) + hold + reject + B('undo', '↩️ ' + t('تراجع عن الإرسال'), 'ghost'),
+      hold: B('release', '▶️ ' + t('إلغاء التعليق'), 'primary') + reject,
+      rejected: B('release', '↩️ ' + t('رجوع عن الرفض')),
+      approved: B('collect', '💵 ' + t('تحصيل'), 'primary') + B('undo', '↩️ ' + t('تراجع عن الاعتماد'), 'ghost'),
+      collected: B('undo', '↩️ ' + t('تراجع عن التحصيل'), 'ghost'),
+    })[i.status] || '';
+    $('#iv-f', E).innerHTML = `${acts}${i.sentRef ? `<button class="btn" data-slip>🖨️ ${t('كشف الإرسال')}</button>` : ''}<span class="spacer"></span>
+      <button class="btn" data-pdf>📄 ${t('معاينة')}</button><button class="btn" data-close>${t('إغلاق')}</button>`;
+    $('[data-close]', E).onclick = () => m.close();
+    $('[data-pdf]', E).onclick = () => custodyPreview(`/api/invoices/${i.id}.pdf`);
+    const slip = $('[data-slip]', E); if (slip) slip.onclick = () => printInvoiceSlip(i.sentRef);
+    $$('[data-act]', E).forEach(b => b.onclick = () => openInvoiceActionModal([i.id], b.dataset.act, () => { draw(); if (after) after(); }));
+    translateDomText(E);
+  };
+  draw();
+}
+/** إجراء على فاتورة أو مجموعة: المرجع والتاريخ (إرسال / تحصيل)، السبب (تعليق / رفض) */
+function openInvoiceActionModal(ids, action, after) {
+  const list = ids.map(id => (STATE.invoices || []).find(i => i.id === id)).filter(Boolean);
+  if (!list.length || !INVOICE_ACTIONS[action]) return;
+  const [ico, label] = INVOICE_ACTIONS[action], one = list.length === 1 ? list[0] : null;
+  const needRef = ['send', 'collect'].includes(action), needDate = ['send', 'approve', 'collect'].includes(action), needNote = ['hold', 'reject'].includes(action);
+  const dateLabel = { send: 'تاريخ الإرسال', approve: 'تاريخ الاعتماد', collect: 'تاريخ التحصيل' }[action];
+  const hint = { send: 'المرجع بيتسجّل على كل الفواتير دي. بعد الإرسال التقفيل بتاعها مايتلغيش إلا لو اترفضت.',
+    hold: 'الفاتورة هتفضل معلّقة لحد ما تلغي التعليق، وصاحب العهدة هيشوف السبب.',
+    reject: 'صاحب العهدة هيشوف السبب، ويقدر يلغي التقفيل ويصلّح ويقفّل تاني.', approve: 'بعد الاعتماد الفاتورة نهائية.' }[action];
   const m = openModal({
-    title: `✅ ${t('اعتمدتها الحسابات')} — ${esc(i.number)}`, size: 'narrow',
-    body: `<div class="kv">${[['فاتورة إلى', esc(i.costCenter || t('بدون مركز تكلفة'))], ['الإجمالي', `<b>${fmtMoney(i.total)}</b>`], ['تاريخ الفاتورة', fmtDate(i.closingDate)]]
-        .map(([l, v]) => `<div><span>${esc(t(l))}</span>${v}</div>`).join('')}</div>
-      <div class="form" style="margin-top:10px"><label class="full">${t('تاريخ الاعتماد')}<input type="date" name="date" value="${todayISO()}"></label></div>
-      <div class="notice warn small" style="margin-top:8px">${t('بعد اعتماد الحسابات الفاتورة بتبقى نهائية، والتقفيل اللي طلعت منه مايتلغيش.')}</div>`,
-    foot: `<button class="btn primary" data-save>✅ ${t('اعتماد')}</button><button class="btn" data-close>${t('إلغاء')}</button>`,
+    title: `${ico} ${t(label)} — ${one ? esc(one.number) : `${list.length} ${t('فاتورة')}`}`, size: 'narrow',
+    body: `<div class="small" style="margin-bottom:8px;max-height:140px;overflow:auto">${list.map(i => `<div><b class="num">${esc(i.number)}</b> <span class="muted">${esc(i.costCenter || '')}</span> · ${fmtMoney(i.total)}</div>`).join('')}
+        ${one ? '' : `<div style="margin-top:4px"><b>${t('الإجمالي')}: ${fmtMoney(sum(list.map(i => i.total)))}</b> · ${t('إلى')}: ${esc(uniq(list.map(invoiceRecipient)).join('، '))}</div>`}</div>
+      <div class="form" id="ia-form">
+        ${needRef ? `<label class="full"><span class="req">${t(action === 'send' ? 'رقم المرجع' : 'رقم سند التحصيل')}</span><input name="ref" maxlength="60" dir="ltr" value="${esc(action === 'send' && one ? one.sentRef || '' : '')}"></label>` : ''}
+        ${needDate ? `<label class="full">${t(dateLabel)}<input type="date" name="date" value="${esc(action === 'send' && one && one.sentDate ? one.sentDate : todayISO())}" max="${todayISO()}"></label>` : ''}
+        ${needNote ? `<label class="full"><span class="req">${t('السبب')}</span><textarea name="note" rows="3"></textarea></label>`
+          : ['release', 'undo'].includes(action) ? `<label class="full">${t('ملاحظة (اختياري)')}<input name="note"></label>` : ''}
+        ${action === 'send' ? `<label class="check full"><input type="checkbox" name="slip" checked> 🖨️ ${t('اطبع كشف الإرسال بعد الحفظ')}</label>` : ''}</div>
+      ${hint ? `<div class="notice small" style="margin-top:8px">${t(hint)}</div>` : ''}`,
+    foot: `<button class="btn ${action === 'reject' ? 'danger' : 'primary'}" data-save>${ico} ${t(label)}</button><button class="btn" data-close>${t('إلغاء')}</button>`,
   });
+  const first = $('#ia-form input, #ia-form textarea', m.el); if (first) first.focus();
   $('[data-save]', m.el).onclick = async () => {
-    try { await persist('POST', `/api/invoices/${i.id}/approve`, formValues(m.el), 'تم الاعتماد'); m.close(); after(); } catch (e) { /* ظاهر */ }
+    const d = formValues($('#ia-form', m.el));
+    if (needRef && !String(d.ref || '').trim()) return openBlockAlert(t(action === 'send' ? 'رقم المرجع مطلوب' : 'رقم سند التحصيل مطلوب'));
+    if (needNote && !String(d.note || '').trim()) return openBlockAlert(t('اكتب السبب'));
+    try {
+      await persist('POST', '/api/invoices/action', { ids: list.map(i => i.id), action, ref: d.ref, date: d.date, note: d.note }, 'تم الحفظ');
+      m.close(); CU_INV_SEL.clear();
+      if (action === 'send' && d.slip) printInvoiceSlip(String(d.ref).trim());
+      if (after) after();
+    } catch (e) { /* ظاهر */ }
   };
 }
 function openCustodySettingsModal() {
@@ -857,17 +958,19 @@ function custodyClosingsHtml(c) {
   const dates = uniq([...Object.keys(by), ...invs.map(i => i.closingDate)]).sort();
   if (!dates.length) return '';
   return `<h4 class="cu-h">🔒 ${t('التقفيلات والفواتير')}</h4><div class="cu-closings">${dates.map(d => {
-    const ps = by[d] || [], list = invs.filter(i => i.closingDate === d).sort((a, b) => (a.ccCode || '').localeCompare(b.ccCode || '')), locked = list.some(i => i.status === 'approved');
+    const ps = by[d] || [], list = invs.filter(i => i.closingDate === d).sort((a, b) => (a.ccCode || '').localeCompare(b.ccCode || '')), locked = list.some(i => !INVOICE_OPEN.includes(i.status));
     const f = list[0] || {};
     return `<div class="cu-closing"><div><b>${t('تقفيل')} <span class="num">${esc(f.closingRef || '')}</span> · ${fmtDate(d)}</b>
         <div class="small muted">${f.createdBy ? `${t('بواسطة')} ${esc(f.createdBy)}${f.createdAt ? ' · ' + fmtDateTime(f.createdAt) : ''} · ` : ''}${linesOn(d)} ${t('إجراء')} · ${ps.length} ${t('شخص')} · ${list.length} ${t('فاتورة')} · ${fmtMoney(sum(list.map(i => i.total)))}</div></div>
       <span class="spacer"></span><button class="btn sm primary" data-closing="${d}">📄 ${t('الملخص والفواتير')}</button>
       <button class="btn sm" data-closing="${d}" data-layout="individual">👤 ${t('+ كشف فردي لكل موظف')}</button>
       ${can('custody.delete') && !locked && d === dates[dates.length - 1] ? `<button class="btn sm danger" data-reopen="${d}">↩️ ${t('إلغاء التقفيل')}</button>` : ''}
-      ${locked ? `<span class="small muted" title="${esc(t('الحسابات اعتمدت فاتورة من التقفيل ده'))}">🔐 ${t('نهائي')}</span>` : ''}
+      ${locked ? `<span class="small muted" title="${esc(t('فواتير التقفيل ده عند الحسابات (اتبعتت أو اتعتمدت) — مايتلغيش'))}">🔐 ${t('عند الحسابات')}</span>` : ''}
       <div class="cu-invoices">${list.map(i => `<div class="cu-invoice"><b class="num">${esc(i.number)}</b>${i.ccCode ? `<span class="chip on num">${esc(i.ccCode)}</span>` : ''}<span>${esc(i.costCenter || t('بدون مركز تكلفة'))}</span>
         <span class="small muted">${i.employees} ${t('موظف')}${i.supportAmount ? '' : ' · ' + t('من غير دعم إداري')}</span><b class="num">${fmtMoney(i.total)}</b>${invoiceStatusChip(i)}
-        <span class="spacer"></span>${invoiceButtons(i)}</div>`).join('')}</div></div>`; }).join('')}</div>`;
+        ${i.sentRef ? `<span class="small muted">${t('المرجع')}: <b class="num">${esc(i.sentRef)}</b></span>` : ''}
+        <span class="spacer"></span>${invoiceButtons(i)}
+        ${i.note ? `<div class="small" style="flex-basis:100%;color:var(--${i.status === 'rejected' ? 'red' : 'yellow'})">${t(i.status === 'rejected' ? 'سبب الرفض' : 'سبب التعليق')}: ${esc(i.note)}${i.status === 'rejected' ? ` — ${t('ألغي التقفيل، صلّح، وقفّل تاني.')}` : ''}</div>` : ''}</div>`).join('')}</div></div>`; }).join('')}</div>`;
 }
 /** تقفيل بالإجراء: كل إجراء «تم» بيتقفل لوحده (مش لازم الشخص يخلّص كل إجراءاته).
     الدعم الإداري مرة لكل موظف في العهدة — في أول تقفيل فيه إجراء ليه. */
@@ -886,7 +989,7 @@ function openCustodyCloseModal(c, after) {
         <label>${t('تاريخ التقفيل')}<input type="date" name="date" value="${todayISO() > lastClosed ? todayISO() : ''}" ${lastClosed ? `min="${lastClosed}"` : ''}></label>
         <label>${t('الملف')}<select name="layout">${opt('', t('الملخص + فاتورة لكل مركز تكلفة'), true)}${opt('individual', t('+ كشف فردي لكل موظف (ملحق)'), false)}</select></label>
         <label>${t('اختيار سريع')}<select id="cl-pick">${opt('', t('— اختيار —'), true)}${opt('__all', t('كل الجاهز'), false)}${opt('__none', t('مسح الاختيار'), false)}${items.map(i => opt(i, `${t('كل')} «${i}»`, false)).join('')}</select></label></div>
-      <div class="notice small" style="margin:8px 0">${t('كل إجراء «تم» بيتقفل لوحده — مش لازم الموظف يخلّص كل إجراءاته. التقفيل بيطلّع فاتورة لكل مركز تكلفة (الرسوم الحكومية + الدعم الإداري مرة واحدة لكل موظف في العهدة، في أول تقفيل فيه إجراء ليه). الفاتورة «بانتظار الحسابات» لحد ما تتعلّم «اعتمدتها الحسابات» — قبلها تقدر تلغي التقفيل (الأحدث بس)، وبعدها لأ.')}</div>
+      <div class="notice small" style="margin:8px 0">${t('كل إجراء «تم» بيتقفل لوحده — مش لازم الموظف يخلّص كل إجراءاته. التقفيل بيطلّع فاتورة لكل مركز تكلفة (الرسوم الحكومية + الدعم الإداري مرة واحدة لكل موظف في العهدة، في أول تقفيل فيه إجراء ليه). الفاتورة «بانتظار الحسابات» لحد ما المحاسب يبعتها بالمرجع — قبلها (أو لو اترفضت) تقدر تلغي التقفيل (الأحدث بس)، وبعدها لأ.')}</div>
       ${lastClosed ? `<div class="small muted" style="margin-bottom:6px">${t('آخر تقفيل للعهدة دي')}: ${fmtDate(lastClosed)} — ${t('التاريخ الجديد لازم يكون بعده.')}</div>` : ''}
       <div class="table-wrap"><table class="data"><thead><tr><th style="width:34px"><input type="checkbox" id="cl-all" checked></th><th>${t('الإجراء')}</th><th>${t('الجهة')}</th><th>${t('الرسوم الحكومية')}</th></tr></thead><tbody>
       ${[...groups.entries()].map(([cc, ps]) => `<tr class="cu-person"><td colspan="4">🧾 ${esc(cc)} <span class="small muted">(${ps.length})</span>${custodyNoSupport(ps[0].costCenter) ? ` <span class="chip">${t('من غير دعم إداري')}</span>` : ''}</td></tr>

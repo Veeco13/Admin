@@ -335,6 +335,7 @@ table.cu-lines tr.cu-closed td { background: var(--green-soft); }
 .cu-cl-sum { gap: 6px; flex-wrap: wrap; margin-top: 10px; }
 .cu-invoices { flex-basis: 100%; display: flex; flex-direction: column; gap: 4px; }
 .cu-invoice { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); }
+.cu-inv-bulk { gap: 8px; flex-wrap: wrap; align-items: center; margin: 0 0 8px; padding: 6px 10px; border: 1px dashed var(--border); border-radius: 10px; }
 .cu-badge { display: inline-block; min-width: 18px; padding: 0 5px; margin-inline-start: 4px; border-radius: 9px; background: var(--orange); color: #fff; font-size: 11px; line-height: 18px; text-align: center; }
 td.nowrap { white-space: nowrap; }
 .emp-license { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }

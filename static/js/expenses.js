@@ -33,7 +33,7 @@ const expCell = v => (v ? expNum(v) : '<span class="muted">—</span>');
 function expFilter(rows, F, months) {
   const set = months && new Set(months);
   return rows.filter(r => (!set || set.has((r.closingDate || '').slice(0, 7))) && (!F.company || (r.companyId || '') === F.company)
-    && (!F.cc || (F.cc === EXP_NONE ? !r.costCenter : r.costCenter === F.cc)) && (!F.type || r.txType === F.type) && (!F.approved || r.status === 'approved'));
+    && (!F.cc || (F.cc === EXP_NONE ? !r.costCenter : r.costCenter === F.cc)) && (!F.type || r.txType === F.type) && (!F.approved || INVOICE_FINAL.includes(r.status)));
 }
 function expTotals(invs) {
   return { n: invs.length, employees: sum(invs.map(i => i.employees)), gov: sum(invs.map(i => i.gov)), support: sum(invs.map(i => i.support)), total: sum(invs.map(i => i.total)) };
@@ -75,7 +75,7 @@ function expensesModel() {
   const plan = (typeof renewalPlan === 'function' ? renewalPlan('next') : []).filter(r => (!F.company || (empCompanyId(r.e) || '') === F.company)
     && (!F.cc || (F.cc === EXP_NONE ? !r.e.costCenter : r.e.costCenter === F.cc)) && (!F.type || r.tx === F.type));
   return { F, D, months, base, invs, lines, perMonth, G, T: expTotals(invs), cur: expTotals(ofMonth(curYm)), prev: expTotals(ofMonth(prevYm)),
-    pending: invs.filter(i => i.status === 'pending'), plan, expected: sum(plan.map(r => r.fees + r.support)) };
+    pending: invs.filter(i => !INVOICE_FINAL.includes(i.status)), plan, expected: sum(plan.map(r => r.fees + r.support)) };
 }
 function expCriteria(M) {
   const F = M.F;
@@ -142,7 +142,7 @@ function expensesHtml() {
       ${tile(fmtMoney(T.total), 'إجمالي الفترة', `${t('رسوم')} ${expNum(T.gov)} · ${t('دعم')} ${expNum(T.support)}`, 'green')}
       ${tile(T.n, 'فواتير الفترة', `${T.employees} ${t('إجراء موظف')}`)}
       ${tile(T.employees ? fmtMoney(Math.round(1000 * T.total / T.employees) / 1000) : '—', 'متوسط تكلفة الإجراء', t('الإجمالي ÷ عدد إجراءات الموظفين'))}
-      ${F.approved ? '' : tile(`${M.pending.length} · ${fmtMoney(sum(M.pending.map(i => i.total)))}`, 'بانتظار الحسابات', t('في الفترة'), 'orange')}
+      ${F.approved ? '' : tile(`${M.pending.length} · ${fmtMoney(sum(M.pending.map(i => i.total)))}`, 'لسه مااتعتمدتش', t('في الفترة'), 'orange')}
       ${tile(fmtMoney(D.held), 'الرصيد مع المستلمين', t('اتصرف ولسه ماتنفّذش — كل النطاق'), 'purple')}
       ${tile(fmtMoney(M.expected), 'متوقع الشهر الجاي', `${M.plan.length} ${t('تجديد')} — ${t('من خطة التجديدات')}`, '', 'ex-plan')}</div>`;
   if (!M.invs.length) return head + kpis + `<div class="card empty" style="margin-top:12px">${t(D.invoices.length ? 'مفيش فواتير بالفلاتر دي' : 'لسه مفيش فواتير — المصروفات بتظهر هنا بعد تقفيل العهد')}</div>`;

@@ -495,9 +495,20 @@ class Invoice(Base):
     supportFee: Mapped[float] = col("support_fee", Float, nullable=False, default=0)          # لكل موظف
     supportAmount: Mapped[float] = col("support_amount", Float, nullable=False, default=0)
     total: Mapped[float] = col("total", Float, nullable=False, default=0)
-    status: Mapped[str] = col("status", String(20), nullable=False, default="pending")       # pending | approved
+    # pending (بانتظار الحسابات) ← sent (اتبعتت بمرجع) ← approved (معتمدة) ← collected (اتحصّلت)، و hold / rejected بسبب
+    # في أي وقت قبل الاعتماد — custody.INVOICE_FLOW. المحاسب بس (custody.accounts) اللي بيغيّرها.
+    status: Mapped[str] = col("status", String(20), nullable=False, default="pending")
     approvedDate: Mapped[Optional[date]] = col("approved_date", Date)
     approvedBy: Mapped[Optional[str]] = col("approved_by", NAME)
+    sentRef: Mapped[Optional[str]] = col("sent_ref", Unicode(60), index=True)       # رقم المرجع (لفاتورة أو مجموعة)
+    sentDate: Mapped[Optional[date]] = col("sent_date", Date)
+    sentBy: Mapped[Optional[str]] = col("sent_by", NAME)
+    note: Mapped[Optional[str]] = col("note", TEXT)                                 # سبب التعليق / الرفض الحالي
+    prevStatus: Mapped[Optional[str]] = col("prev_status", String(20))              # الحالة قبل التعليق / الرفض
+    collectedRef: Mapped[Optional[str]] = col("collected_ref", Unicode(60))         # رقم سند التحصيل
+    collectedDate: Mapped[Optional[date]] = col("collected_date", Date)
+    collectedBy: Mapped[Optional[str]] = col("collected_by", NAME)
+    history: Mapped[Optional[str]] = col("history", TEXT)                           # JSON: سجل تغييرات الحالة
     createdBy: Mapped[Optional[str]] = col("created_by", NAME)
     createdAt: Mapped[Optional[datetime]] = col("created_at", DateTime)
 

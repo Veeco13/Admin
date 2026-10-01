@@ -477,10 +477,16 @@ def _issuer(s):
     return s.get(M.Company, co) if co else None
 
 
+STATUS_EN = {"pending": "Pending Accounts", "sent": "Sent", "hold": "On Hold", "rejected": "Rejected", "approved": "Approved",
+             "collected": "Collected"}
+
+
 def _status(ws, inv):
-    if inv.status == "approved":
-        return f"{_L(ws, 'Approved by Accounts', 'اعتمدتها الحسابات', ' · ')} — {_fmt(inv.approvedDate)}"
-    return _L(ws, "Pending Accounts Approval", "بانتظار اعتماد الحسابات", " · ")
+    """حالة الفاتورة عند الحسابات (custody.INVOICE_STATUS) بتاريخها ومرجعها."""
+    label = _L(ws, STATUS_EN.get(inv.status, inv.status), custody.INVOICE_STATUS.get(inv.status, inv.status), " · ")
+    when = {"sent": inv.sentDate, "approved": inv.approvedDate, "collected": inv.collectedDate}.get(inv.status)
+    ref = {"sent": inv.sentRef, "approved": inv.sentRef, "collected": inv.collectedRef}.get(inv.status)
+    return label + (f" — {_fmt(when)}" if when else "") + (f" — {_L(ws, 'Ref', 'المرجع', ' ')} {ref}" if ref else "")
 
 
 def _invoice_note(support):
@@ -531,7 +537,7 @@ def _invoice_sheet(ws, s, c, inv, lines, issuer, user):
         (("Status", "الحالة"), _status(ws, inv)),
     ], ("TOTAL DUE (KWD)", "إجمالي المستحق"), _count(ws, len(people), "Employees", "موظف"))
     ws.cell(row=row - 2, column=3).font = Font(name=FONT, size=10, bold=True,
-                                              color=PRIMARY if inv.status == "approved" else ACCENT)
+                                              color=PRIMARY if inv.status in custody.INVOICE_FINAL else ACCENT)
     head = row
     _table_head(ws, head, headers)
     first = head + 1
@@ -732,15 +738,16 @@ def _closing_summary(ws, s, c, rows, issuer, when, user, first=None):
     _table_head(ws, head, headers)
     for i, (inv, label, company, sheet) in enumerate(rows):
         r = head + 1 + i
-        status = f"{_L(ws, 'Approved', 'معتمدة', ' · ')}\n{_fmt(inv.approvedDate)}" if inv.status == "approved" \
-            else _L(ws, "Pending", "بانتظار الحسابات", " · ")
+        status = _L(ws, STATUS_EN.get(inv.status, inv.status), custody.INVOICE_STATUS.get(inv.status, inv.status), " · ")
+        if inv.status in custody.INVOICE_FINAL:
+            status += f"\n{_fmt(inv.collectedDate if inv.status == 'collected' else inv.approvedDate)}"
         _table_row(ws, r, [i + 1, custody.invoice_no(inv), label, _company(ws, company) if _lang(ws) != "both"
                            else (company.nameEn if company is not None else ""), status,
                            inv.employees, inv.govAmount, inv.supportAmount, f"=G{r}+H{r}"],
                    money_from=6, zebra=i % 2 == 1, left_cols=(3, 4))
         ws.cell(row=r, column=2).hyperlink = f"#'{sheet}'!A1"
         ws.cell(row=r, column=2).font = Font(name=FONT, size=10, bold=True, color=PRIMARY, underline="single")
-        ws.cell(row=r, column=5).font = Font(name=FONT, size=9, bold=True, color=PRIMARY if inv.status == "approved" else ACCENT)
+        ws.cell(row=r, column=5).font = Font(name=FONT, size=9, bold=True, color=PRIMARY if inv.status in custody.INVOICE_FINAL else ACCENT)
         ws.cell(row=r, column=6).number_format = "0"
     last = head + len(rows)
     tot = last + 1
