@@ -423,7 +423,7 @@ class Custody(Base):
     id: Mapped[str] = col("id", ID, primary_key=True)
     no: Mapped[int] = col("no", Integer, nullable=False, unique=True)              # رقم العهدة للعرض والطباعة
     txType: Mapped[str] = col("tx_type", String(30), nullable=False)
-    custodian: Mapped[str] = col("custodian", NAME, nullable=False)               # المستلم (أي اسم)
+    custodian: Mapped[str] = col("custodian", NAME, nullable=False)               # المستلم = صاحب العهدة (custody.short_name)
     companyId: Mapped[Optional[str]] = col("company_id", ID, fk("companies.id"))  # رأس الطباعة (اختياري)
     status: Mapped[str] = col("status", String(20), nullable=False, default="requested")   # requested | disbursed | closed | cancelled
     requestDate: Mapped[Optional[date]] = col("request_date", Date)

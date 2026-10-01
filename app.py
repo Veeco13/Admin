@@ -2813,9 +2813,6 @@ def save_custody(cid=None):
     tx = d.get("txType")
     if tx not in custody.TX_TYPES:
         return err("نوع الطلب غير معروف")
-    who = (d.get("custodian") or "").strip()
-    if not who:
-        return err("اسم المستلم مطلوب")
     co = d.get("companyId") or None
     if co and not me().company_ok(co):
         return forbidden(OUT_OF_SCOPE)
@@ -2843,7 +2840,8 @@ def save_custody(cid=None):
             c = M.Custody(id=db.new_id("cus"), no=custody.next_no(s), status="requested", createdBy=uname(), createdAt=db.now())
             custody.assign_owner(s, c, me().id)            # صاحبها ورقمها برمزه «AA-0001»
             s.add(c)
-        c.txType, c.custodian, c.companyId, c.notes = tx, who, co, (d.get("notes") or "").strip() or None
+        c.txType, c.companyId, c.notes = tx, co, (d.get("notes") or "").strip() or None
+        who = c.custodian = custody.short_name(s.get(M.User, c.ownerId)) or c.custodian        # المستلم = صاحب العهدة
         c.requestDate = db.parse_date(d.get("requestDate")) or datetime.now().date()
         s.flush()
         for x in lines:
@@ -2872,9 +2870,6 @@ def direct_custody():
     tx, today = d.get("txType"), datetime.now().date()
     if tx not in custody.TX_TYPES:
         return err("نوع المعاملة غير معروف")
-    who = (d.get("custodian") or "").strip()
-    if not who:
-        return err("اسم المستلم مطلوب")
     when = db.parse_date(d.get("date")) or today
     if when > today:
         return err("تاريخ التقفيل لسه ماجاش")
@@ -2898,7 +2893,8 @@ def direct_custody():
             return err("اكتب المبلغ الفعلي لكل إجراء اتعمل")
         c = M.Custody(id=db.new_id("cus"), no=custody.next_no(s), status="disbursed", direct=True, createdBy=uname(), createdAt=db.now())
         custody.assign_owner(s, c, me().id)
-        c.txType, c.custodian, c.notes, c.requestDate = tx, who, (d.get("notes") or "").strip() or None, when
+        c.txType, c.notes, c.requestDate = tx, (d.get("notes") or "").strip() or None, when
+        who = c.custodian                              # المستلم = صاحب التقفيل (assign_owner)
         c.requestedAmount = round(sum(x.planned or 0 for x in lines), 3)
         s.add(c)
         s.flush()
@@ -3093,6 +3089,17 @@ def transfer_custody(cid):
         if u.id == c.ownerId:
             return err("العهدة أصلًا بتاعة المستخدم ده")
         old_no, old_owner = custody.custody_no(c), custody.user_names(s).get(c.ownerId, "—")
+        # المستلم بيتغيّر مع المالك ← مستحقات التقفيل المباشر المربوطة بالمستلم القديم بتتفك (ولو اتصرفت خلاص ممنوع)
+        carrier = s.get(M.Custody, c.carryToId) if c.direct and c.carryToId else None
+        dues = custody.carried(s, c)
+        if (carrier is not None and carrier.status in custody.FUNDED) or (dues and c.status in custody.FUNDED):
+            return err("عليها مستحقات تقفيل مباشر اتصرفت — مينفعش تتنقل لمستخدم تاني")
+        for x, _ in dues:
+            x.carryToId = None
+        c.carryToId = None
+        custody.refresh_requested(s, c)
+        if carrier is not None:
+            custody.refresh_requested(s, carrier)
         custody.assign_owner(s, c, u.id)
         db.log_audit(s, "custody_edit", f"نقل ملكية عهدة {old_no} من {old_owner} إلى {u.displayName or u.username} — "
                                         f"رقمها الجديد {custody.custody_no(c)}", uname())
@@ -3906,6 +3913,8 @@ def _set_user_fields(s, u, d):
     for k in ("displayName", "jobTitle", "email", "phone"):
         if k in d:
             setattr(u, k, (d[k] or "").strip() or None)
+    if "displayName" in d and u.id:                        # المستلم في عهده = أول اسمين من اسمه
+        custody.sync_custodians(s, u.id)
     if (d.get("custodyCode") or "").strip():               # رمزه في أرقام العهد (AA-0001) — بيتحدد مرة واحدة ومايتغيّرش
         code, msg = custody.check_code(s, u.id, d["custodyCode"])
         if msg:

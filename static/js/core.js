@@ -1498,7 +1498,7 @@ function openUserEditModal(u, roles, done) {
     body: `<form class="form" id="user-form" autocomplete="off">
       <h4>${t('بيانات الحساب')}</h4>
       <label><span class="req">${t('اسم المستخدم (للدخول)')}</span><input name="username" value="${v('username')}" dir="ltr" ${isNew ? '' : 'disabled'}></label>
-      <label>${t('الاسم الظاهر')}<input name="displayName" value="${v('displayName')}"></label>
+      <label>${t('الاسم الظاهر')}<input name="displayName" value="${v('displayName')}" title="${esc(t('أول اسمين منه = اسم المستلم في عهده'))}"></label>
       <label>${t('الوظيفة')}<input name="jobTitle" value="${v('jobTitle')}" placeholder="${t('مثلًا: مندوب حكومي')}"></label>
       <label>${t('رمز العهد')} <span class="small muted">(${t('حروف إنجليزي — أرقام عهده: AA-0001')})</span><input name="custodyCode" value="${v('custodyCode')}" dir="ltr" maxlength="6" style="text-transform:uppercase" placeholder="${t('تلقائي')}" ${u.custodyCodeLocked ? 'disabled' : ''}>
         <span class="small muted">${u.custodyCodeLocked ? '🔒 ' + t('الرمز مايتغيّرش') : t('الرمز بيتحدد مرة واحدة ومش هيتغيّر بعد الحفظ.')}</span></label>

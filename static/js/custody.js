@@ -114,6 +114,8 @@ function custodyTotals(c) {
     closed: closed.length, itemsDone: ls.filter(l => l.done).length, items: ls.length, itemsClosed: ls.filter(l => l.closedDate).length };
 }
 /** أرصدة المستلمين: اتصرف له كام، ونفّذ كام، والباقي معاه (العهد اللي اتصرفت بس) */
+/** اسم المستلم = صاحب العهدة: الاسم الأول والثاني من «الاسم الظاهر» للمستخدم (custody.short_name على السيرفر) */
+function custodianSelf() { return String((STATE.me && (STATE.me.displayName || STATE.me.username)) || '').trim().split(/\s+/).slice(0, 2).join(' '); }
 function custodianBalances() {
   const by = {};
   custodiesInView().filter(c => c.status !== 'cancelled').forEach(c => {
@@ -399,6 +401,7 @@ function openCustodyRequestModal(id = null, preset = null) {
   // id ← {items: {رقم البند: المبلغ}، وللتقفيل المباشر: receipts: {البند: رقم الإيصال}، expiries: {البند: الانتهاء الجديد}}
   const S = { tx: old ? old.txType : (preset && preset.tx) || 'renewal', persons: new Map(), quick: '', dues: new Map() };
   const extra = (pid, k) => { const p = S.persons.get(pid); return p[k] || (p[k] = {}); };
+  const WHO = old ? old.custodian : custodianSelf();          // المستلم = صاحب الطلب (مابيتكتبش بالإيد)
   const snap = {};                                                                  // بيانات الشخص من العهدة القديمة
   if (old) custodyPersons(old).forEach(p => { snap[p.id] = p; S.persons.set(p.id, { items: Object.fromEntries(p.lines.map(l => [l.feeItemId, l.planned])) }); });
   if (!old && preset) (preset.persons || []).forEach(p => S.persons.set(p.id, { items: { ...p.items } }));   // من خطة التجديدات
@@ -408,13 +411,12 @@ function openCustodyRequestModal(id = null, preset = null) {
     title: direct ? '🔒 ' + t('تقفيل عهدة مباشر') : old ? `✏️ ${t('تعديل طلب العهدة')} ${esc(custodyNo(old))}` : '➕ ' + t('طلب عهدة'), size: 'wide',
     body: `<div class="form" id="cu-form">
         <label>${t('نوع المعاملة')}<select name="txType">${Object.entries(CUSTODY_TYPES).map(([k, v]) => opt(k, t(v.label), k === S.tx)).join('')}</select></label>
-        <label><span class="req">${t('المستلم')}</span><input name="custodian" list="dl-custodians" value="${esc(old ? old.custodian : '')}" placeholder="${esc(t('اسم المندوب'))}"></label>
+        <label>${t('المستلم')}<input value="${esc(WHO)}" disabled title="${esc(t('المستلم هو صاحب الطلب — اسمه الأول والثاني من «الاسم الظاهر» في حسابه'))}"></label>
         ${direct ? `<label><span class="req">${t('تاريخ التقفيل')}</span><input type="date" name="date" value="${todayISO()}" max="${todayISO()}"></label>
         <label>${t('الدعم الإداري لكل موظف (د.ك)')}<input type="number" step="0.001" min="0" name="adminFee" value="${esc(custodySettings().supportFee ?? 20)}"></label>`
           : `<label>${t('تاريخ الطلب')}<input type="date" name="requestDate" value="${esc(old ? old.requestDate || '' : todayISO())}"></label>`}
         <label class="full">${t('ملاحظات')}<input name="notes" value="${esc(old ? old.notes || '' : '')}"></label></div>
       ${direct ? `<div class="notice small" style="margin-top:8px">${t('للإجراء اللي المستلم صرف عليه من فلوس عهدة معاه لشخص مش في أي طلب: بيتسجّل ويتقفل على طول وتطلع فواتيره، ورصيد المستلم بينقص بالمبلغ — والمبلغ بيتضاف على أقرب طلب عهدة له.')}</div>` : ''}
-      <datalist id="dl-custodians">${uniq(custodiesInView().map(c => c.custodian)).map(x => `<option value="${esc(x)}">`).join('')}</datalist>
       <h4 class="cu-h">${t('الأشخاص')} <span class="small muted" id="cu-kind"></span></h4>
       <div class="row" style="gap:8px;flex-wrap:wrap"><input type="search" id="cu-q" placeholder="${esc(t('بحث بالاسم (عربي أو إنجليزي) أو الرقم المدني…'))}" style="flex:1;min-width:200px">
         <span id="cu-quick"></span><span class="small muted" id="cu-sel-n"></span></div>
@@ -473,7 +475,7 @@ function openCustodyRequestModal(id = null, preset = null) {
   const grand = () => sum([...S.persons.values()].flatMap(p => Object.values(p.items).map(val)));
   // الطلب: التقفيلات المباشرة المقفولة لنفس المستلم اللي لسه مااتضافتش لطلب (أو مضافة على الطلب ده) ← مبلغها بيتضاف عليه
   const dueList = () => {
-    const who = ($('[name="custodian"]', E).value || '').trim();
+    const who = WHO;
     return direct || !who ? [] : (STATE.custodies || []).filter(x => x.direct && x.status === 'closed' && (x.custodian || '').trim() === who
       && (!x.carryToId || (old && x.carryToId === old.id)));
   };
@@ -488,7 +490,7 @@ function openCustodyRequestModal(id = null, preset = null) {
     const ps = [...S.persons.entries()].filter(([, p]) => Object.keys(p.items).length);
     const cc = pid => (kind() === 'employee' ? IDX.employee[pid] : (STATE.candidates || []).find(c => c.id === pid) || {}).costCenter || '';
     const sup = (Number($('[name="adminFee"]', E).value) || 0) * ps.filter(([pid]) => !custodyNoSupport(cc(pid))).length;
-    const who = ($('[name="custodian"]', E).value || '').trim(), bal = (custodianBalances().find(b => b.name === who) || { remaining: 0 }).remaining;
+    const who = WHO, bal = (custodianBalances().find(b => b.name === who) || { remaining: 0 }).remaining;
     box.innerHTML = !ps.length ? '' : chip('الإجراءات', sum(ps.map(([, p]) => Object.keys(p.items).length))) + chip('الأشخاص', ps.length)
       + chip('الفواتير', uniq(ps.map(([pid]) => cc(pid))).length) + chip('الرسوم الحكومية', fmtMoney(g)) + chip('الدعم الإداري', fmtMoney(sup))
       + chip('إجمالي الفواتير', fmtMoney(g + sup), true)
@@ -576,13 +578,11 @@ function openCustodyRequestModal(id = null, preset = null) {
     S.tx = ev.target.value; S.persons.clear(); S.quick = ''; drawPick(); drawMatrix();
   };
   $('#cu-q', E).addEventListener('input', debounce(drawPick, 200));
-  $('[name="custodian"]', E).addEventListener('input', debounce(() => (direct ? drawSum() : drawDues()), 200));
   if (direct) $('[name="adminFee"]', E).addEventListener('input', drawSum);
   drawPick(); drawMatrix(); drawDues();
   const go = $('[data-go]', E);
   if (go) go.onclick = async () => {                       // 🔒 تقفيل مباشر
     const d = formValues($('#cu-form', E));
-    if (!d.custodian) return openBlockAlert(t('اسم المستلم مطلوب'));
     if (!d.date) return openBlockAlert(t('اختار تاريخ التقفيل'));
     if (d.date > todayISO()) return openBlockAlert(t('تاريخ التقفيل لسه ماجاش'));
     if (!S.persons.size) return openBlockAlert(t('اختار الشخص اللي اتعمل له الإجراء'));
@@ -598,8 +598,8 @@ function openCustodyRequestModal(id = null, preset = null) {
       receipts: Object.fromEntries(Object.entries(p.receipts || {}).filter(([fid]) => fid in p.items)),
       expiries: Object.fromEntries(exps.filter(r => r.pid === pid).map(r => [r.f.id, r.v])) }));
     const n = sum(persons.map(p => Object.keys(p.items).length));
-    if (!await openConfirm(`${t('تقفيل مباشر')}: ${n} ${t('إجراء')} — ${fmtMoney(grand())} — ${t('المستلم')}: ${esc(d.custodian)}.<br>${t('الفواتير هتطلع على طول، ورصيد المستلم هينقص بالمبلغ لحد ما يتضاف على أقرب طلب عهدة له. تكمل؟')}`, { okLabel: t('تقفيل وإصدار الفواتير') })) return;
-    const send = force => persist('POST', '/api/custodies/direct', { txType: S.tx, custodian: d.custodian, date: d.date, adminFee: d.adminFee, notes: d.notes, persons, force }, 'تم التقفيل');
+    if (!await openConfirm(`${t('تقفيل مباشر')}: ${n} ${t('إجراء')} — ${fmtMoney(grand())} — ${t('المستلم')}: ${esc(WHO)}.<br>${t('الفواتير هتطلع على طول، ورصيد المستلم هينقص بالمبلغ لحد ما يتضاف على أقرب طلب عهدة له. تكمل؟')}`, { okLabel: t('تقفيل وإصدار الفواتير') })) return;
+    const send = force => persist('POST', '/api/custodies/direct', { txType: S.tx, date: d.date, adminFee: d.adminFee, notes: d.notes, persons, force }, 'تم التقفيل');
     let res;
     try { res = await send(false); } catch (e) {
       if (e.data && e.data.block) return openBlockAlert(esc(e.message));
@@ -612,7 +612,6 @@ function openCustodyRequestModal(id = null, preset = null) {
   };
   $$('[data-save]', E).forEach(b => b.onclick = async () => {
     const d = formValues($('#cu-form', E));
-    if (!d.custodian) return openBlockAlert(t('اسم المستلم مطلوب'));
     const persons = [...S.persons.entries()].map(([pid, p]) => ({ id: pid, items: p.items })).filter(p => Object.keys(p.items).length);
     if (!persons.length) return openBlockAlert(t('اختار موظف واحد على الأقل وبند واحد على الأقل'));
     const open = persons.filter(p => Object.values(p.items).some(v => v === null || v === '')).length;

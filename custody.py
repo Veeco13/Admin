@@ -320,10 +320,35 @@ def user_code(s, uid):
     return u.custodyCode
 
 
+def short_name(u):
+    """اسم المستلم = الاسم الأول والثاني من «الاسم الظاهر» للمستخدم (وإلا اسم الدخول). المستلم هو صاحب العهدة نفسه —
+    مابيتكتبش بالإيد (نفس الشخص كان بيتسجّل باسمين فالأرصدة والمستحقات بتتقسم)."""
+    if u is None:
+        return ""
+    return " ".join((u.displayName or "").split()[:2]) or (u.username or "")
+
+
 def assign_owner(s, c, uid):
-    """العهدة بقت ملك المستخدم ده ← رقم جديد برمزه ومسلسله."""
+    """العهدة بقت ملك المستخدم ده ← رقم جديد برمزه ومسلسله، وهو المستلم."""
     c.ownerId, c.prefix = uid, user_code(s, uid)
     c.seq = (s.scalar(select(func.max(M.Custody.seq)).where(M.Custody.prefix == c.prefix, M.Custody.id != c.id)) or 0) + 1
+    c.custodian = short_name(s.get(M.User, uid)) or c.custodian
+
+
+def sync_custodians(s, uid):
+    """«الاسم الظاهر» للمستخدم اتغيّر ← اسم المستلم في كل عهده بيتحدّث معاه."""
+    name = short_name(s.get(M.User, uid))
+    if name:
+        s.query(M.Custody).filter(M.Custody.ownerId == uid, M.Custody.custodian != name).update({"custodian": name}, synchronize_session=False)
+
+
+def refresh_requested(s, c):
+    """«المطلوب» في طلب لسه ماتصرفش = بنوده + مستحقات التقفيل المباشر المضافة عليه."""
+    if c.direct or c.status != "requested":
+        return
+    s.flush()
+    planned = sum(ln.planned or 0 for ln in s.scalars(select(M.CustodyLine).where(M.CustodyLine.custodyId == c.id)))
+    c.requestedAmount = round(planned + sum(a for _, a in carried(s, c)), 3)
 
 
 def sees_all(ctx):
