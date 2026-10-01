@@ -84,6 +84,15 @@ class Project(Base):
     contractNo: Mapped[Optional[str]] = col("contract_no", SHORT)                   # رقم العقد الحكومي
     agencyId: Mapped[Optional[str]] = col("agency_id", ID, fk("agencies.id"))       # الوكالة اللي العقد تابع لها
     startDate: Mapped[Optional[date]] = col("start_date", Date)                     # بداية الترخيص
+    # العقد عند الجهة المالكة (نماذج التصاريح): البدء، الانتهاء، التمديد، فريق العمل المسؤول ورمزه، والجزء الثابت من
+    # رقم شهادة الفحص («ET31/26/…/» + كود العربية)
+    clientStartDate: Mapped[Optional[date]] = col("client_start_date", Date)
+    clientEndDate: Mapped[Optional[date]] = col("client_end_date", Date)
+    clientExtDate: Mapped[Optional[date]] = col("client_ext_date", Date)
+    clientTeam: Mapped[Optional[str]] = col("client_team", NAME)
+    clientTeamEn: Mapped[Optional[str]] = col("client_team_en", NAME)
+    clientTeamCode: Mapped[Optional[str]] = col("client_team_code", SHORT)
+    clearancePrefix: Mapped[Optional[str]] = col("clearance_prefix", SHORT)
 
 
 class CostCenter(Base):
@@ -115,6 +124,16 @@ class Vehicle(Base):
     affairsProjectId: Mapped[Optional[str]] = col("affairs_project_id", ID, fk("projects.id"))
     # مع مين / المستخدم: الموظف في driverId (أي موظف)، أو اسم حر هنا لو اللي معاه العربية مش موظف متسجّل
     userName: Mapped[Optional[str]] = col("user_name", NAME)
+    # بيانات نماذج التصاريح (permit_forms.py): اللون، الشكل (قاطرة / وانيت…)، الشاصي، سنة الصنع، النوع بالإنجليزي،
+    # وكود العربية عند الجهة (آخر رقم شهادة الفحص)
+    color: Mapped[Optional[str]] = col("color", SHORT)
+    color2: Mapped[Optional[str]] = col("color2", SHORT)
+    shape: Mapped[Optional[str]] = col("shape", SHORT)
+    shapeEn: Mapped[Optional[str]] = col("shape_en", SHORT)
+    chassisNo: Mapped[Optional[str]] = col("chassis_no", SHORT)
+    modelYear: Mapped[Optional[str]] = col("model_year", SHORT)
+    modelEn: Mapped[Optional[str]] = col("model_en", NAME)
+    permitCode: Mapped[Optional[str]] = col("permit_code", SHORT)
 
 
 class Employee(Base):
@@ -525,6 +544,11 @@ class Agency(Base):
     nameAr: Mapped[str] = col("name_ar", NAME, nullable=False)
     nameEn: Mapped[Optional[str]] = col("name_en", NAME)
     position: Mapped[int] = col("position", Integer, nullable=False, default=0)
+    # نماذج التصاريح: اسم المقاول زي ما هو في عقود الجهة، المعتمدين (JSON أسماء)، والمناديب (JSON أرقام مدنية — الأول افتراضي)
+    contractorAr: Mapped[Optional[str]] = col("contractor_ar", NAME)
+    contractorEn: Mapped[Optional[str]] = col("contractor_en", NAME)
+    signatories: Mapped[Optional[str]] = col("signatories", TEXT)
+    mandoubs: Mapped[Optional[str]] = col("mandoubs", TEXT)
 
 
 class AgencyCostCenter(Base):

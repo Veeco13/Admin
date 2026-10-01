@@ -634,6 +634,14 @@ table.data td.empty, .empty { padding: 28px 16px; line-height: 1.6; }
 .pdf-frame { height: min(78vh, calc(92vh - 150px)); }
 .notice { border-inline-start: 3px solid currentColor; }
 
+/* ---------- نماذج التصاريح (permit_forms.js): جدول السيارات بخانات تتعدّل، وقايمة النماذج المرقّمة ---------- */
+table.pf-veh td { padding: 4px 5px; }
+table.pf-veh input { border: 1px solid var(--border); background: var(--surface); border-radius: 6px; padding: 5px 7px; font-size: 13px; }
+.pf-form { display: flex; align-items: center; gap: 12px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 6px; flex-wrap: wrap; }
+.pf-form > b.num { flex: none; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; background: var(--primary-soft); color: var(--primary); }
+.pf-form label.small { display: inline-flex; align-items: center; gap: 5px; }
+.pf-form input[type="date"], .pf-form select { border: 1px solid var(--border); background: var(--surface); border-radius: 6px; padding: 4px 7px; }
+
 /* ---------- رسائل «تم الحفظ» والأخطاء: أيقونة ولون ثابت ---------- */
 #toast { display: flex; align-items: center; gap: 8px; background: var(--text); color: var(--surface); box-shadow: 0 8px 24px rgba(0,0,0,.22); font-weight: 500; }
 #toast .ic { flex: none; width: 1.3em; height: 1.3em; }

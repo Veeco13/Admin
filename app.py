@@ -45,6 +45,7 @@ import lunx_restore
 import models as M
 import perms
 import pdf_forms
+import permit_forms
 
 APP_VERSION = "v353-flask.4"
 
@@ -528,8 +529,10 @@ def api_state():
         links = {}
         for r in s.scalars(select(M.AgencyCostCenter)):
             links.setdefault(r.agencyId, []).append(r.costCenterId)
-        state["agencies"] = [{**db.to_dict(a), "costCenterIds": links.get(a.id, [])}
+        state["agencies"] = [{**db.to_dict(a), "costCenterIds": links.get(a.id, []),
+                              "signatories": _json_list(a.signatories), "mandoubs": _json_list(a.mandoubs)}
                              for a in s.scalars(select(M.Agency).order_by(M.Agency.position, M.Agency.nameAr))]
+        state["permitFormsAvailable"] = permit_forms.available()
         see_sal = u.can("sensitive.salary")
         emp_ids = {e["id"] for e in state["employees"]} if u.can("employees.view") else set()
         state["letters"] = [letters.to_api(x, see_sal) for x in s.scalars(select(M.HrLetter).order_by(M.HrLetter.createdAt.desc()))
@@ -1990,6 +1993,7 @@ def save_agency(aid=None):
             a = M.Agency(id=db.new_id("ag"), companyId=cid, position=n + 1, nameAr=name)
             s.add(a)
         a.nameAr, a.nameEn = name, (d.get("nameEn") or "").strip() or None
+        _agency_form_fields(s, a, d)
         s.flush()
         if "costCenterIds" in d:                     # مراكز التكلفة التابعة ليها (المراكز نفسها مابتتغيّرش)
             s.query(M.AgencyCostCenter).filter(M.AgencyCostCenter.agencyId == a.id).delete()
@@ -1998,6 +2002,130 @@ def save_agency(aid=None):
                     s.add(M.AgencyCostCenter(agencyId=a.id, costCenterId=ccid))
         db.log_company_history(s, cid, "agency_saved", f"{'تعديل' if aid else 'إضافة'} وكالة: {name}", uname())
         return jsonify({"ok": True, "id": a.id})
+
+
+def _json_list(text):
+    try:
+        v = json.loads(text or "[]")
+        return [str(x) for x in v if str(x).strip()] if isinstance(v, list) else []
+    except ValueError:
+        return []
+
+
+def _agency_form_fields(s, a, d):
+    """بيانات نماذج التصاريح على الوكالة: اسم المقاول عند الجهة، المعتمدين (أسماء)، والمناديب (موظفين — الأول افتراضي)."""
+    for k in ("contractorAr", "contractorEn"):
+        if k in d:
+            setattr(a, k, (d[k] or "").strip() or None)
+    if "signatories" in d:
+        names = list(dict.fromkeys(str(x).strip() for x in (d["signatories"] or []) if str(x).strip()))
+        a.signatories = json.dumps(names, ensure_ascii=False) if names else None
+    if "mandoubs" in d:
+        ids = [i for i in dict.fromkeys(str(x).strip() for x in (d["mandoubs"] or [])) if i and s.get(M.Employee, i) is not None]
+        a.mandoubs = json.dumps(ids) if ids else None
+
+
+# ---------------------------------------------------------------------------
+# نماذج تصاريح السيارات (permit_forms.py): معاينة وطباعة بس، بالبيانات اللي المستخدم راجعها في النافذة
+# ---------------------------------------------------------------------------
+VEHICLE_FORM_FIELDS = ("color", "color2", "shape", "shapeEn", "chassisNo", "modelYear", "modelEn", "permitCode")
+PROJECT_FORM_FIELDS = ("clientStartDate", "clientEndDate", "clientExtDate", "clientTeam", "clientTeamEn", "clientTeamCode", "clearancePrefix")
+
+
+@app.post("/api/permit-forms/<kind>/pdf")
+@require("permits.view")
+def permit_forms_pdf(kind):
+    """نماذج تصاريح السيارات PDF: {forms: [clearance | checklist | undertaking | request | ratqa], data: {…}}.
+    data = اللي ظاهر في النافذة (متملّي من البرنامج والمستخدم عدّل اللي عايزه) — vehicles: [{id, plate, …}].
+    كل نموذج بيتسجّل في سجل تصاريح كل عربية."""
+    d = body()
+    forms, data = d.get("forms") or [], d.get("data") or {}
+    msg = permit_forms.check(kind, forms, data)
+    if msg:
+        return err(msg)
+    if not permit_forms.available():
+        return err("قوالب نماذج التصاريح مش موجودة على السيرفر (forms/permits)", 501)
+    names = dict(permit_forms.FORMS[kind])
+    with db.session_scope() as s:
+        ids = []
+        for v in data.get("vehicles") or []:
+            if v.get("id"):                              # عربية من البرنامج ← لازم تبقى في نطاق المستخدم
+                _, e = _permit_holder(s, "vehicle", v["id"], "view")
+                if e:
+                    return e
+                ids.append(v["id"])
+        try:
+            pdf = permit_forms.render(kind, forms, data)
+        except RuntimeError as ex:
+            return err(str(ex), 501)
+        label = f"{permit_forms.KINDS[kind]} — " + "، ".join(names[f] for f in forms)
+        for vid in dict.fromkeys(ids):
+            _plog(s, "vehicle", vid, None, "form", f"نموذج: {label}")
+        plates = "، ".join(str(v.get("plate") or "") for v in data.get("vehicles") or [])
+        db.log_audit(s, "permit_print", f"طباعة نماذج تصاريح السيارات: {label} — {plates}"[:900], uname())
+    name = names[forms[0]] if len(forms) == 1 else f"نماذج {permit_forms.KINDS[kind]}"
+    return send_file(io.BytesIO(pdf), mimetype="application/pdf", as_attachment=False, download_name=f"{name}.pdf")
+
+
+@app.put("/api/permit-forms/data")
+@require("permits.edit")
+def permit_forms_save():
+    """«حفظ التعديلات في البيانات» من نافذة النماذج: {vehicles: [{id, color, shape, …}], project: {id, clientStartDate, …},
+    agency: {id, contractorAr, contractorEn}, mandoub: {id, phone}} — كل جزء بصلاحية قسمه، وكله أو لا شيء."""
+    d, u = body(), me()
+    with db.session_scope() as s:
+        done = []
+        vs = [v for v in d.get("vehicles") or [] if v.get("id")]
+        if vs:
+            if not u.can("vehicles.edit"):
+                return forbidden("حفظ بيانات السيارات محتاج صلاحية «تعديل السيارات»")
+            for x in vs:
+                v = s.get(M.Vehicle, x["id"])
+                if v is None:
+                    return err("السيارة غير موجودة", 404)
+                if not opt_company_ok(v.companyId):
+                    return forbidden(OUT_OF_SCOPE)
+                new = {k: (str(x[k]).strip() or None) if x.get(k) is not None else None for k in VEHICLE_FORM_FIELDS if k in x}
+                if any(getattr(v, k) != val for k, val in new.items()):
+                    db.apply(v, new)
+                    done.append(f"السيارة {v.plate}")
+        pr, ag = d.get("project") or {}, d.get("agency") or {}
+        if pr.get("id") or ag.get("id"):
+            if not u.can("companies.edit"):
+                return forbidden("حفظ بيانات العقد محتاج صلاحية «تعديل الشركات»")
+        if pr.get("id"):
+            p = s.get(M.Project, pr["id"])
+            if p is None:
+                return err("العقد غير موجود", 404)
+            if not u.company_ok(p.companyId):
+                return forbidden(OUT_OF_SCOPE)
+            before = db.to_dict(p)
+            db.apply(p, {k: (pr[k] or None) for k in PROJECT_FORM_FIELDS if k in pr})
+            if db.to_dict(p) != before:
+                done.append(f"العقد {p.nameAr}")
+        if ag.get("id"):
+            a = s.get(M.Agency, ag["id"])
+            if a is None:
+                return err("الوكالة غير موجودة", 404)
+            if not u.company_ok(a.companyId):
+                return forbidden(OUT_OF_SCOPE)
+            before = (a.contractorAr, a.contractorEn)
+            _agency_form_fields(s, a, {k: ag[k] for k in ("contractorAr", "contractorEn") if k in ag})
+            if (a.contractorAr, a.contractorEn) != before:
+                done.append(f"الوكالة {a.nameAr}")
+        mb = d.get("mandoub") or {}
+        if mb.get("id") and "phone" in mb:
+            e = s.get(M.Employee, mb["id"])
+            phone = str(mb.get("phone") or "").strip() or None
+            if e is not None and e.phone != phone:
+                if not u.can("employees.edit") or not emp_ok(s, e.id):
+                    return forbidden("حفظ تليفون المندوب محتاج صلاحية «تعديل الموظفين»")
+                e.phone, e.lastUpdated, e.lastUpdatedBy = phone, db.now(), uname()
+                db.push_timeline(s, e.id, "edit", f"تعديل الهاتف: {phone or '—'} (من نماذج التصاريح)", uname())
+                done.append(f"تليفون {e.name}")
+        if done:
+            db.log_audit(s, "permit_edit", "نماذج التصاريح — حفظ بيانات: " + "، ".join(done), uname())
+    return jsonify({"ok": True, "saved": done})
 
 
 @app.delete("/api/agencies/<aid>")

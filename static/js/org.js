@@ -336,7 +336,15 @@ function openProjectModal(companyId, p) {
       <label>${t('الرقم المدني للترخيص')}<input name="fileNumber" value="${esc(p.fileNumber || '')}" inputmode="numeric"></label>
       <label>${t('إدارة العمل')}<input name="laborOffice" value="${esc(p.laborOffice || '')}"></label>
       <label>${t('تاريخ البداية')}<input type="date" name="startDate" value="${esc(p.startDate || '')}"></label>
-      <label>${t('تاريخ النهاية')}<input type="date" name="expiryDate" value="${esc(p.expiryDate || '')}"></label></div>`,
+      <label>${t('تاريخ النهاية')}<input type="date" name="expiryDate" value="${esc(p.expiryDate || '')}"></label>
+      <h4 data-kinds="gov,sub">📄 ${t('العقد عند الجهة المالكة (نماذج التصاريح)')}</h4>
+      <label data-kinds="gov,sub">${t('تاريخ بدء العقد')}<input type="date" name="clientStartDate" value="${esc(p.clientStartDate || '')}"></label>
+      <label data-kinds="gov,sub">${t('تاريخ انتهاء العقد')}<input type="date" name="clientEndDate" value="${esc(p.clientEndDate || '')}"></label>
+      <label data-kinds="gov,sub">${t('تمديد العقد حتى')}<input type="date" name="clientExtDate" value="${esc(p.clientExtDate || '')}"></label>
+      <label data-kinds="gov,sub">${t('فريق العمل المسؤول')}<input name="clientTeam" value="${esc(p.clientTeam || '')}"></label>
+      <label data-kinds="gov,sub">${t('فريق العمل (إنجليزي)')}<input name="clientTeamEn" value="${esc(p.clientTeamEn || '')}" dir="ltr"></label>
+      <label data-kinds="gov,sub">${t('رمز فريق العمل')}<input name="clientTeamCode" value="${esc(p.clientTeamCode || '')}" dir="ltr"></label>
+      <label data-kinds="gov,sub" title="${esc(t('رقم الشهادة = الجزء ده + كود السيارة'))}">${t('الجزء الثابت من رقم شهادة الفحص')}<input name="clearancePrefix" value="${esc(p.clearancePrefix || '')}" dir="ltr" placeholder="ET31/26/NAME/"></label></div>`,
     foot: `<button class="btn primary" data-save>حفظ</button><button class="btn" data-close>إلغاء</button>`,
   });
   const kind = $('[name=kind]', m.el), co = $('[name=companyId]', m.el);
@@ -358,9 +366,16 @@ function openAgencyModal(companyId, a) {
   a = a || {};
   const sel = new Set(a.costCenterIds || []);
   const m = openModal({
-    title: a.id ? t('تعديل وكالة') : t('إضافة وكالة'), size: 'narrow',
+    title: a.id ? t('تعديل وكالة') : t('إضافة وكالة'),
     body: `<div class="form"><label class="full"><span class="req">${t('اسم الوكالة (عربي)')}</span><input name="nameAr" value="${esc(a.nameAr || '')}"></label>
-      <label class="full">${t('اسم الوكالة (إنجليزي)')}<input name="nameEn" value="${esc(a.nameEn || '')}" dir="ltr"></label></div>
+      <label class="full">${t('اسم الوكالة (إنجليزي)')}<input name="nameEn" value="${esc(a.nameEn || '')}" dir="ltr"></label>
+      <h4>📄 ${t('نماذج التصاريح')}</h4>
+      <label class="full">${t('اسم المقاول في عقود الجهة (عربي)')}<input name="contractorAr" value="${esc(a.contractorAr || '')}"></label>
+      <label class="full">${t('اسم المقاول في عقود الجهة (إنجليزي)')}<input name="contractorEn" value="${esc(a.contractorEn || '')}" dir="ltr"></label>
+      <label class="full">${t('المعتمدين (اسم في كل سطر — الأول هو الافتراضي)')}<textarea name="signatoriesText" rows="3">${esc((a.signatories || []).join('\n'))}</textarea></label>
+      <label class="full">${t('المناديب (الأول هو الأساسي)')}<input id="ag-mb-add" list="ag-mb-list" placeholder="${esc(t('اختار موظف من القايمة…'))}" autocomplete="off">
+        <datalist id="ag-mb-list">${scopedEmployees().filter(e => !empEnded(e)).map(e => `<option value="${esc(e.id + ' — ' + e.name)}">`).join('')}</datalist></label>
+      <div class="full" id="ag-mb"></div></div>
       <h4 class="cu-h">${t('مراكز التكلفة التابعة للوكالة')}</h4>
       <div class="cu-pick-list" style="max-height:240px">${STATE.costCenters.map(c => `<label class="${sel.has(c.id) ? 'on' : ''}"><input type="checkbox" data-agcc="${c.id}" ${sel.has(c.id) ? 'checked' : ''}>
         <b>${esc(c.code || '')}</b> ${esc(c.name)} <span class="small muted">${esc(c.nameEn || '')}</span></label>`).join('')}</div>
@@ -368,9 +383,27 @@ function openAgencyModal(companyId, a) {
     foot: `<button class="btn primary" data-save>حفظ</button><button class="btn" data-close>إلغاء</button>`,
   });
   $$('[data-agcc]', m.el).forEach(cb => cb.onchange = () => cb.closest('label').classList.toggle('on', cb.checked));
+  // المناديب: موظفين من القايمة، والأول هو الأساسي (الافتراضي في النماذج)
+  let mandoubs = (a.mandoubs || []).filter(id => IDX.employee[id]);
+  const drawMandoubs = () => {
+    $('#ag-mb', m.el).innerHTML = mandoubs.map((id, i) => `<span class="chip ${i ? '' : 'on'}" style="margin:0 0 4px 4px">${i ? '' : '★ '}${esc(IDX.employee[id].name)}
+      ${i ? `<button type="button" class="btn sm ghost" data-mb-top="${id}" title="${esc(t('اجعله الأساسي'))}">★</button>` : ''}<button type="button" class="btn sm ghost" data-mb-rm="${id}">✕</button></span>`).join('')
+      || `<span class="small muted">${t('مفيش مناديب متسجّلين')}</span>`;
+    $$('[data-mb-rm]', m.el).forEach(b => b.onclick = () => { mandoubs = mandoubs.filter(x => x !== b.dataset.mbRm); drawMandoubs(); });
+    $$('[data-mb-top]', m.el).forEach(b => b.onclick = () => { mandoubs = [b.dataset.mbTop, ...mandoubs.filter(x => x !== b.dataset.mbTop)]; drawMandoubs(); });
+  };
+  $('#ag-mb-add', m.el).addEventListener('change', ev => {
+    const hit = /^(\d+)\s+—\s/.exec(ev.target.value.trim());
+    if (hit && IDX.employee[hit[1]] && !mandoubs.includes(hit[1])) { mandoubs.push(hit[1]); drawMandoubs(); }
+    ev.target.value = '';
+  });
+  drawMandoubs();
   $('[data-save]', m.el).onclick = async () => {
     const d = formValues($('.form', m.el));
     if (!d.nameAr) return openBlockAlert(t('اسم الوكالة مطلوب'));
+    d.signatories = String(d.signatoriesText || '').split('\n').map(x => x.trim()).filter(Boolean);
+    delete d.signatoriesText;
+    d.mandoubs = mandoubs;
     d.companyId = companyId;
     d.costCenterIds = $$('[data-agcc]', m.el).filter(x => x.checked).map(x => x.dataset.agcc);
     await persist(a.id ? 'PUT' : 'POST', a.id ? '/api/agencies/' + a.id : '/api/agencies', d, 'تم الحفظ');
@@ -535,7 +568,17 @@ function openVehicleModal(id) {
       <label>${t('مع مين / المستخدم')}<input name="withWhom" list="dl-veh-user" value="${esc(withWhom)}" placeholder="${esc(t('اختار موظف أو اكتب اسم'))}" autocomplete="off">
         <datalist id="dl-veh-user">${people.map(e => `<option value="${esc(personLabel(e))}">`).join('')}</datalist></label>
       <label title="${esc(t('الرخصة (الدفتر) والتأمين بينتهوا في نفس التاريخ'))}">${t('انتهاء الرخصة والتأمين')}<input type="date" name="insuranceExpiry" value="${esc(v.insuranceExpiry || '')}"></label>
-      <label class="full">${t('ملاحظات')}<input name="notes" value="${esc(v.notes || '')}"></label></div>
+      <label class="full">${t('ملاحظات')}<input name="notes" value="${esc(v.notes || '')}"></label>
+      <h4>📄 ${t('بيانات نماذج التصاريح')}</h4>
+      <label>${t('شكل المركبة')}<input name="shape" list="dl-veh-shape" value="${esc(v.shape || '')}" placeholder="${esc(t('قاطرة، وانيت، جيب…'))}">
+        <datalist id="dl-veh-shape">${Object.keys(VEHICLE_SHAPES).map(x => `<option value="${esc(x)}">`).join('')}</datalist></label>
+      <label>${t('الشكل (إنجليزي)')}<input name="shapeEn" value="${esc(v.shapeEn || '')}" dir="ltr" placeholder="TRUCK HEAD"></label>
+      <label>${t('اللون')}<input name="color" value="${esc(v.color || '')}"></label>
+      <label>${t('اللون الثاني')}<input name="color2" value="${esc(v.color2 || '')}"></label>
+      <label>${t('سنة الصنع')}<input name="modelYear" value="${esc(v.modelYear || '')}" inputmode="numeric"></label>
+      <label>${t('النوع / السنة (إنجليزي)')}<input name="modelEn" value="${esc(v.modelEn || '')}" dir="ltr" placeholder="Hino/ 2021"></label>
+      <label>${t('رقم الشاصي')}<input name="chassisNo" value="${esc(v.chassisNo || '')}" dir="ltr"></label>
+      <label title="${esc(t('كود السيارة عند الجهة — آخر جزء في رقم شهادة الفحص'))}">${t('كود السيارة (شهادة الفحص)')}<input name="permitCode" value="${esc(v.permitCode || '')}" dir="ltr" placeholder="006"></label></div>
       <div class="small muted" id="v-user-hint">${t('مع مين: اختار أي موظف من القايمة، أو اكتب اسم حر لو اللي معاه العربية مش موظف متسجّل. الربط مابيعلّمش على الموظف «سائق».')}</div>`,
     foot: `${id ? '<button class="btn danger write-only" data-p="vehicles.delete" data-del>🗑️ حذف</button><span class="spacer"></span>' : ''}<button class="btn primary write-only" data-p="vehicles.edit" data-save>حفظ</button><button class="btn" data-close>إلغاء</button>`,
   });
@@ -556,6 +599,7 @@ function openVehicleModal(id) {
     const w = (d.withWhom || '').trim(), hit = /^(\d+)\s+—\s/.exec(w);
     delete d.withWhom;
     if (hit && IDX.employee[hit[1]]) { d.driverId = hit[1]; d.userName = ''; } else { d.driverId = ''; d.userName = w; }
+    if (d.shape && !d.shapeEn && VEHICLE_SHAPES[d.shape]) d.shapeEn = VEHICLE_SHAPES[d.shape];
     const dup = STATE.vehicles.find(x => x.plate === d.plate && x.id !== id);
     if (dup) return openBlockAlert(t('رقم اللوحة مسجّل بالفعل'));
     try { await persist(id ? 'PUT' : 'POST', id ? '/api/vehicles/' + id : '/api/vehicles', d, 'تم الحفظ'); m.close(); } catch (e) { if (e.data && e.data.block) openBlockAlert(e.message); }
