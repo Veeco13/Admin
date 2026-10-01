@@ -88,10 +88,8 @@ def settings(s):
     except ValueError:
         d = {}
     issuer = d.get("issuerCompanyId")
-    if not issuer or s.get(M.Company, issuer) is None:            # الافتراضي: «Abraaj Energy …»
-        companies = s.scalars(select(M.Company).order_by(M.Company.id)).all()
-        issuer = next((c.id for c in companies if (c.nameEn or "").lower().startswith("abraaj energy")),
-                      companies[0].id if companies else None)
+    if not issuer or s.get(M.Company, issuer) is None:            # لسه ماتحددتش في «إعدادات الفواتير» ← أول شركة
+        issuer = s.scalar(select(M.Company.id).order_by(M.Company.id))
     fee = num(d.get("supportFee"))
     no_support = d.get("noSupportCostCenters")
     if no_support is None:                                         # الافتراضي: مركز التكلفة اللي اسمه اسم الشركة نفسها

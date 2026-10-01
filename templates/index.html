@@ -3,7 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Lunx — أبراج انرجي</title>
+  <title>LUNX</title>
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='brand/lunx-mark.svg') }}">
+  <link rel="alternate icon" type="image/png" href="{{ url_for('static', filename='brand/favicon.png') }}">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;600&display=swap">
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}?v={{ asset_ver }}">
@@ -17,7 +19,7 @@
 </head>
 <body>
   <header class="topbar no-print">
-    <div class="brand"><div class="logo">L</div><span>Lunx</span><small>أبراج انرجي</small></div>
+    <div class="brand"><svg class="logo-mark" viewBox="0 0 54 54" aria-hidden="true"><rect width="54" height="54" rx="13" fill="var(--logo-bg)"/><path d="M17 13v28h20" fill="none" stroke="var(--logo-fg)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="36" cy="18" r="4.5" fill="var(--accent)"/></svg><span class="wordmark">LUN<b>X</b></span><small id="org-name">{{ org_name }}</small></div>
     <div class="search-wrap">
       <input id="global-search" type="search" placeholder="بحث شامل: اسم، رقم مدني، جواز، لوحة، شركة…" autocomplete="off">
       <div id="search-results" class="search-results" hidden></div>

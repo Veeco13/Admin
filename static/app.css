@@ -1,16 +1,19 @@
-/* Lunx — الأنماط: متغيرات الألوان، الوضع الداكن/الفاتح، RTL، الطباعة */
+/* LUNX — الأنماط: متغيرات الألوان، الوضع الداكن/الفاتح، RTL، الطباعة.
+   هوية المنتج (مش هوية العميل): Deep teal #0F5B66 + sand #E3A857 على خلفية هادية. ألوان الحالات (أحمر / برتقالي / أخضر…) بمعناها. */
 [hidden] { display: none !important; }   /* hidden يكسب دايمًا (حتى على .form label اللي عليها display:flex) */
 :root {
-  --bg: #f4f6f5;
+  --bg: #f5f8f8;
   --surface: #ffffff;
-  --surface-2: #f0f3f2;
-  --border: #dde3e1;
-  --text: #17231f;
-  --muted: #5f6f69;
-  --primary: #1f5c4a;
-  --primary-2: #163f32;
-  --primary-soft: #e3efea;
-  --accent: #c8963e;
+  --surface-2: #eef3f3;
+  --border: #dce5e6;
+  --text: #12262b;
+  --muted: #5b6f73;
+  --primary: #0f5b66;
+  --primary-2: #0b4650;
+  --primary-soft: #e3f0f1;
+  --on-primary: #ffffff;                         /* النص فوق لون الهوية */
+  --accent: #e3a857;
+  --logo-bg: #0f5b66; --logo-fg: #ffffff;        /* علامة LUNX */
   --red: #c0392b;   --red-soft: #fbe7e5;
   --orange: #d9730d; --orange-soft: #fdeede;
   --yellow: #b58a00; --yellow-soft: #fbf3d6;
@@ -20,21 +23,23 @@
   --grey: #7d8a86;   --grey-soft: #eceff0;
   --shadow: 0 1px 2px rgba(0,0,0,.05), 0 4px 14px rgba(0,0,0,.05);
   --radius: 12px;
-  --hero-bg: #163f32;
+  --hero-bg: #0f5b66;
   --viz-1: #2a78d6; --viz-2: #eb6834;            /* ألوان سلاسل الرسوم (لوحة المصروفات): الرسوم / الدعم */
   --font: "IBM Plex Sans Arabic", "Cairo", "IBM Plex Sans", "Segoe UI", Tahoma, sans-serif;
   color-scheme: light;
 }
 :root[data-theme="dark"] {
-  --bg: #0f1614;
-  --surface: #17211e;
-  --surface-2: #1e2a26;
-  --border: #2c3a36;
-  --text: #e6eeeb;
-  --muted: #9aaba5;
-  --primary: #4fb28f;
-  --primary-2: #3c9477;
-  --primary-soft: #1d3a31;
+  --bg: #0e1719;
+  --surface: #152124;
+  --surface-2: #1c2b2f;
+  --border: #2a3c40;
+  --text: #e4eeef;
+  --muted: #9ab0b4;
+  --primary: #5cc0ce;
+  --primary-2: #48a9b7;
+  --primary-soft: #17363c;
+  --on-primary: #0b2226;
+  --logo-bg: #5cc0ce; --logo-fg: #0b2226;
   --red: #ff6b5e;   --red-soft: #3a1f1c;
   --orange: #ff9f4a; --orange-soft: #3a2a1a;
   --yellow: #f2c94c; --yellow-soft: #36301a;
@@ -43,7 +48,7 @@
   --purple: #b48cf0; --purple-soft: #2b2140;
   --grey: #97a39f;   --grey-soft: #25302d;
   --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 14px rgba(0,0,0,.25);
-  --hero-bg: #184535;
+  --hero-bg: #124a54;
   --viz-1: #3987e5; --viz-2: #d95926;
   color-scheme: dark;
 }
@@ -56,15 +61,19 @@ button, input, select, textarea { font: inherit; color: inherit; }
 /* ---------- الشريط العلوي ---------- */
 .topbar {
   position: sticky; top: 0; z-index: 40; display: flex; align-items: center; gap: 10px;
-  padding: 8px 16px; background: var(--primary-2); color: #fff; box-shadow: var(--shadow);
+  padding: 8px 16px; background: var(--surface); color: var(--text); border-bottom: 1px solid var(--border);
 }
-:root[data-theme="dark"] .topbar { background: #0b110f; border-bottom: 1px solid var(--border); }
-.brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 17px; white-space: nowrap; }
-.brand .logo { width: 30px; height: 30px; border-radius: 8px; background: var(--accent); display: grid; place-items: center; color: #1b1b1b; font-weight: 800; }
-.brand small { font-weight: 400; opacity: .75; font-size: 12px; }
+/* هوية LUNX: العلامة + الاسم (كابيتال متباعد، وحرف X بلون الهوية)، وجنبه اسم الجهة المرخّص لها (إعداد) */
+.brand { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
+.logo-mark { width: 30px; height: 30px; flex-shrink: 0; display: block; }
+.wordmark { font-family: "IBM Plex Sans", "Segoe UI", Arial, sans-serif; font-weight: 600; font-size: 16px; letter-spacing: .32em; margin-inline-end: -.32em; direction: ltr; color: var(--text); }
+.wordmark b { font-weight: inherit; color: var(--primary); }
+.brand small { font-size: 12px; color: var(--muted); border-inline-start: 1px solid var(--border); padding-inline-start: 10px; margin-inline-start: 6px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+.brand small:empty { display: none; }
 .search-wrap { position: relative; flex: 1; max-width: 520px; margin-inline: auto; }
-.search-wrap input { width: 100%; padding: 8px 14px; border-radius: 999px; border: 0; background: rgba(255,255,255,.14); color: #fff; outline: none; }
-.search-wrap input::placeholder { color: rgba(255,255,255,.7); }
+.search-wrap input { width: 100%; padding: 8px 14px; border-radius: 999px; border: 1px solid transparent; background: var(--surface-2); color: var(--text); outline: none; }
+.search-wrap input:focus { border-color: var(--primary); background: var(--surface); }
+.search-wrap input::placeholder { color: var(--muted); }
 .search-results {
   position: absolute; top: calc(100% + 6px); inset-inline: 0; background: var(--surface); color: var(--text);
   border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); max-height: 60vh; overflow: auto; z-index: 60;
@@ -73,9 +82,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .search-results .item { padding: 8px 12px; cursor: pointer; display: flex; justify-content: space-between; gap: 8px; }
 .search-results .item:hover, .search-results .item.active { background: var(--primary-soft); }
 .tb-btn {
-  position: relative; background: rgba(255,255,255,.1); border: 0; color: #fff; border-radius: 8px; padding: 6px 10px; cursor: pointer; white-space: nowrap;
+  position: relative; background: transparent; border: 1px solid transparent; color: var(--text); border-radius: 8px; padding: 6px 10px; cursor: pointer; white-space: nowrap;
 }
-.tb-btn:hover { background: rgba(255,255,255,.2); }
+.tb-btn:hover { background: var(--surface-2); border-color: var(--border); }
 .tb-btn .count { position: absolute; top: -5px; inset-inline-end: -5px; background: var(--red); color: #fff; font-size: 11px; border-radius: 999px; padding: 0 5px; min-width: 18px; text-align: center; }
 
 /* ---------- التخطيط ---------- */
@@ -113,7 +122,7 @@ main#content { flex: 1; padding: 18px 22px 60px; min-width: 0; }
 .kpi-card.green .v { color: var(--green); } .kpi-card.blue .v { color: var(--blue); }
 .btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); background: var(--surface); padding: 7px 12px; border-radius: 8px; cursor: pointer; white-space: nowrap; }
 .btn:hover { background: var(--surface-2); }
-.btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.btn.primary { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
 .btn.primary:hover { background: var(--primary-2); }
 .btn.danger { color: var(--red); border-color: var(--red); }
 .btn.danger.solid { background: var(--red); color: #fff; }
@@ -208,7 +217,7 @@ table.data tr.sel td { background: var(--primary-soft); }
 .progress > i { display: block; height: 100%; background: var(--primary); }
 /* بطاقة الموظف: الرأس، وكروت المستندات، وأقسام البيانات، وقوايم الزراير */
 .ec-head { display: grid; grid-template-columns: auto 1fr auto; gap: 16px; align-items: center; padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px; background: linear-gradient(135deg, var(--primary-soft), var(--surface) 70%); }
-.ec-head .avatar { width: 64px; height: 64px; font-size: 24px; border-radius: 14px; background: var(--primary); color: #fff; }
+.ec-head .avatar { width: 64px; height: 64px; font-size: 24px; border-radius: 14px; background: var(--primary); color: var(--on-primary); }
 .ec-head h2 { margin: 0; font-size: 20px; }
 .ec-head .en { color: var(--muted); direction: ltr; text-align: start; font-size: 12.5px; letter-spacing: .3px; }
 .ec-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
@@ -339,7 +348,7 @@ table.data td.out, table.data td.warn-cell { background: var(--orange-soft); }
 .ms-val small { color: var(--muted); }
 .ms-caret { font-style: normal; color: var(--muted); font-size: 10px; }
 .ms.on .ms-btn { border-color: var(--primary); background: var(--primary-soft); color: var(--primary); }
-.ms-more { background: var(--primary); color: #fff; border-radius: 9px; padding: 0 6px; font-size: 11px; line-height: 17px; }
+.ms-more { background: var(--primary); color: var(--on-primary); border-radius: 9px; padding: 0 6px; font-size: 11px; line-height: 17px; }
 .ms-pop { position: fixed; z-index: 150; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 10px;
   box-shadow: var(--shadow); padding: 8px; display: flex; flex-direction: column; gap: 6px; max-height: min(380px, 70vh); }
 .ms-pop .ms-q { border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 8px; padding: 6px 9px; font: inherit; }
@@ -528,6 +537,13 @@ table.ex-matrix td.ex-cc { padding-inline-start: 26px; }
 .kw-step.done { background: var(--green-soft); }
 .kw-step.lock { opacity: .6; }
 .kw-n { font-size: 18px; line-height: 1.3; }
+/* صفحة «عن البرنامج» وصفحة الدخول: هوية LUNX */
+.about { display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; padding: 6px 0 10px; }
+.about .logo-mark { width: 64px; height: 64px; }
+.about .wordmark { font-size: 26px; }
+.about .tagline { color: var(--muted); }
+.about .tagline-en { color: var(--muted); font-size: 12px; direction: ltr; }
+.about .kv { width: 100%; margin-top: 8px; text-align: start; }
 /* تقرير جودة البيانات */
 .dq{border:1px solid var(--border);border-radius:8px;margin:6px 0;padding:6px 10px}.dq summary{cursor:pointer;padding:2px 0}.dq table{margin-top:6px}
 /* عهدة التجديد: الانتهاء الجديد (مطلوب قبل التقفيل) */

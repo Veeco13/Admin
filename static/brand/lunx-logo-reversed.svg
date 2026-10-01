@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 250 54" width="250" height="54" role="img" aria-label="LUNX">
+  <rect width="54" height="54" rx="13" fill="#FFFFFF"/>
+  <path d="M17 13v28h20" fill="none" stroke="#0F5B66" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="36" cy="18" r="4.5" fill="#E3A857"/>
+  <text x="74" y="38" font-family="'IBM Plex Sans', 'Segoe UI', Arial, sans-serif" font-size="32" font-weight="600" letter-spacing="9" fill="#FFFFFF">LUNX</text>
+</svg>

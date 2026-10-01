@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Lunx — لوحة تحكم الموارد البشرية والعمليات الحكومية
+LUNX — إدارة الشؤون الإدارية والحكومية للشركات (منتج مستقل — اسم العميل إعداد «اسم الجهة» مش مكتوب في البرنامج)
 شركة أبراج انرجي ومجموعة شركاتها التابعة
 
 Flask + SQLAlchemy. الواجهة صفحة واحدة (SPA) في static/ ، والـ API هنا.
@@ -292,6 +292,24 @@ def forbidden(msg="العملية دي غير متاحة"):
     return jsonify({"error": msg}), 403
 
 
+# اسم الجهة المرخّص لها (العميل): إعداد في meta — بيظهر جنب LUNX في الشريط العلوي وفي صفحة الدخول «مرخّص لـ…».
+# هوية المنتج (LUNX) ثابتة، وهوية العميل في مستنداته المطبوعة بس (شعار واسم كل شركة).
+ORG_KEYS = {"name": "org_name", "nameEn": "org_name_en"}
+
+
+def org_info(s):
+    return {k: db.get_meta(s, key) or "" for k, key in ORG_KEYS.items()}
+
+
+@app.context_processor
+def _brand_context():
+    try:
+        with db.session_scope(commit=False) as s:
+            return {"org_name": org_info(s)["name"], "asset_ver": ASSET_VER}
+    except Exception:                               # صفحة الدخول ماتقعش لو القاعدة لسه بتتجهّز
+        return {"org_name": "", "asset_ver": ASSET_VER}
+
+
 def login_required(f):
     @wraps(f)
     def w(*a, **kw):
@@ -501,6 +519,7 @@ def api_state():
                      else {"custodies": [], "invoices": [], "feeItems": [], "custodySettings": None})
         state["valueTranslations"] = value_i18n.merged(s)       # الجنسيات والمهن للتقارير الإنجليزية
         state["exportPasswordSet"] = bool(u.isAdmin and db.get_meta(s, EXPORT_KEY))
+        state["org"] = org_info(s)                                           # اسم الجهة (جنب LUNX)
         state["backupStatus"] = backup.status(s) if u.isAdmin else None      # تنبيه لو النسخة التلقائية وقفت
         state["sysCheck"] = syscheck.summary(s) if u.isAdmin else None       # ❌ الفحص الدوري ← في الجرس
         state["approvals"] = approvals.visible(s, u, emp_ok)                # طلبات الموافقة (المستني + اللي اتقرر قريب)
@@ -4167,6 +4186,20 @@ def api_expenses():
         return jsonify(custody.expenses(s, me()))
 
 
+@app.put("/api/org")
+@admin_required
+def set_org():
+    """اسم الجهة المرخّص لها: {name, nameEn} — بيظهر جنب LUNX وفي صفحة الدخول (من «عن البرنامج»)."""
+    d = body()
+    with db.session_scope() as s:
+        for k, key in ORG_KEYS.items():
+            if k in d:
+                db.set_meta(s, key, (d.get(k) or "").strip()[:120])
+        info = org_info(s)
+        db.log_audit(s, "settings_org", f"اسم الجهة: {info['name'] or '—'} / {info['nameEn'] or '—'}", uname())
+    return jsonify({"ok": True, **info})
+
+
 @app.get("/api/system-check")
 @app.post("/api/system-check")
 @admin_required
@@ -4364,5 +4397,5 @@ if __name__ == "__main__":
     url = f"http://localhost:{port}"
     if host == "0.0.0.0" and lan_ip():
         url += f"  ·  على الشبكة: http://{lan_ip()}:{port}"
-    print(f"Lunx {APP_VERSION} [{db.engine.dialect.name}] → {url}")
+    print(f"LUNX {APP_VERSION} [{db.engine.dialect.name}] → {url}")
     app.run(host=host, port=port, debug=bool(os.environ.get("DEBUG")))

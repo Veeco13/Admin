@@ -1,5 +1,5 @@
 /* =====================================================================
-   Lunx — CORE / STATE
+   LUNX — CORE / STATE
    ===================================================================== */
 'use strict';
 
@@ -741,12 +741,12 @@ addEventListener('scroll', msFollow, true);
    رأس: شعار الشركة واسمها + عنوان التقرير + بيانات الطباعة، وبعدين المعايير والملخص والجدول وخانات التوقيع.
    رأس الجدول بيتكرر في كل صفحة، وترقيم «صفحة X من Y» في هامش الصفحة (@page). */
 const REPORT_CSS = `
-  :root{--ink:#1d2623;--muted:#66736f;--line:#d3dbd8;--head:#1f4d40;--band:#f1f5f3;--zebra:#f8faf9}
+  :root{--ink:#12262b;--muted:#5b6f73;--line:#d3dedf;--head:#0f5b66;--band:#eef4f4;--zebra:#f7fafa}
   *{box-sizing:border-box} html{-webkit-print-color-adjust:exact;print-color-adjust:exact}
   body{margin:0;font-family:"IBM Plex Sans Arabic","Cairo","Segoe UI",Tahoma,sans-serif;font-size:10.5px;color:var(--ink);background:#e7ecea}
-  .toolbar{position:sticky;top:0;z-index:5;display:flex;gap:8px;align-items:center;padding:8px 16px;background:#163f32;color:#fff;font-size:13px}
+  .toolbar{position:sticky;top:0;z-index:5;display:flex;gap:8px;align-items:center;padding:8px 16px;background:#0b4650;color:#fff;font-size:13px}
   .toolbar button{font:inherit;border:0;border-radius:6px;padding:6px 14px;cursor:pointer;background:rgba(255,255,255,.14);color:#fff}
-  .toolbar button.primary{background:#fff;color:#163f32;font-weight:600} .toolbar .sp{flex:1} .toolbar small{opacity:.75}
+  .toolbar button.primary{background:#fff;color:#0b4650;font-weight:600} .toolbar .sp{flex:1} .toolbar small{opacity:.75}
   .sheet{background:#fff;margin:14px auto;padding:12mm 10mm;box-shadow:0 2px 14px rgba(0,0,0,.14)}
   .sheet.land{width:297mm} .sheet.port{width:210mm}
   .rpt-head{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:14px;padding-bottom:10px;border-bottom:2px solid var(--head)}
@@ -792,7 +792,7 @@ function openReportWindow({ title, subtitle = '', company = null, meta = [], cri
   const w = window.open('', '_blank');
   if (!w) { toast('المتصفح منع نافذة الطباعة', 'err'); return; }
   const en = LANG === 'en', dir = en ? 'ltr' : 'rtl';
-  const group = t(($('.brand small') || {}).textContent || 'Lunx');
+  const group = orgName() || 'LUNX';
   const brand = company
     ? `${company.logoUrl ? `<img src="${esc(location.origin + company.logoUrl)}" alt="">` : `<div class="mark">${esc((company.nameAr || '?').trim()[0])}</div>`}
        <div><div class="ar">${esc(en ? (company.nameEn || company.nameAr) : company.nameAr)}</div>${!en && company.nameEn ? `<div class="en">${esc(company.nameEn)}</div>` : ''}</div>`
@@ -1202,7 +1202,7 @@ function setView(v, args) {
 }
 function renderNav() {
   $('#navrail').innerHTML = VIEWS.map(v => `<button data-view="${v.id}" class="${VIEW === v.id ? 'active' : ''}"><span class="ico">${v.ico}</span><span>${esc(t(v.label))}</span></button>`).join('')
-    + `<div class="ver">Lunx ${esc(STATE.version)}</div>`;
+    + `<div class="ver">LUNX ${esc(STATE.version)}</div>`;
   $$('#navrail button').forEach(b => b.onclick = () => { VIEW_ARGS = {}; setView(b.dataset.view); });
   applyNavVisibility();
 }
@@ -1231,8 +1231,33 @@ function bindAlertBar() {
   const b1 = $('#bk-now'); if (b1) b1.onclick = openBackupsModal;
   const b2 = $('#bk-dismiss'); if (b2) b2.onclick = () => { lsSet('mv_backup_reminder_dismiss', todayISO()); render(); };
 }
+/* ---------- هوية المنتج LUNX + اسم الجهة المرخّص لها (إعداد — STATE.org) ---------- */
+const LUNX_TAGLINE = { ar: 'إدارة الشؤون الإدارية والحكومية للشركات', en: 'Corporate Administrative & Government Affairs' };
+function orgName() { const o = (STATE && STATE.org) || {}; return (LANG === 'en' && o.nameEn) || o.name || o.nameEn || ''; }
+function lunxMarkHtml() {
+  return `<svg class="logo-mark" viewBox="0 0 54 54" aria-hidden="true"><rect width="54" height="54" rx="13" fill="var(--logo-bg)"/>
+    <path d="M17 13v28h20" fill="none" stroke="var(--logo-fg)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="36" cy="18" r="4.5" fill="var(--accent)"/></svg>`;
+}
+/** «عن البرنامج»: الهوية والإصدار واسم الجهة — ومدير النظام بيعدّل اسم الجهة من هنا */
+function openAboutModal() {
+  const o = STATE.org || {}, admin = can('admin');
+  const m = openModal({
+    title: t('عن البرنامج'), size: 'narrow',
+    body: `<div class="about">${lunxMarkHtml()}<span class="wordmark">LUN<b>X</b></span>
+        <div class="tagline">${esc(LUNX_TAGLINE.ar)}</div><div class="tagline-en">${esc(LUNX_TAGLINE.en)}</div>
+        <div class="kv"><div><span>${t('الإصدار')}</span><span class="num" dir="ltr">${esc(STATE.version || '')}</span></div>
+          <div><span>${t('مرخّص لـ')}</span><b>${esc(orgName() || '—')}</b></div></div></div>
+      ${admin ? `<h4>${t('اسم الجهة')} <span class="small muted">(${t('بيظهر جنب LUNX وفي صفحة الدخول')})</span></h4>
+        <div class="form" id="org-form"><label class="full">${t('بالعربي')}<input name="name" maxlength="120" value="${esc(o.name || '')}"></label>
+          <label class="full">${t('بالإنجليزي')}<input name="nameEn" maxlength="120" dir="ltr" value="${esc(o.nameEn || '')}"></label></div>` : ''}`,
+    foot: `${admin ? `<button class="btn primary" data-save>💾 ${t('حفظ')}</button>` : ''}<span class="spacer"></span><button class="btn" data-close>${t('إغلاق')}</button>`,
+  });
+  const sv = $('[data-save]', m.el);
+  if (sv) sv.onclick = async () => { try { await persist('PUT', '/api/org', formValues($('#org-form', m.el)), 'تم الحفظ'); m.close(); } catch (e) { /* ظاهر */ } };
+}
 function render() {
   if (!STATE) return;
+  const on = $('#org-name'); if (on) on.textContent = orgName();
   if (VIEW === 'costcenters') { VIEW = 'companies'; UI.co.tab = 'costcenters'; }   // مراكز التكلفة بقت تبويب جوه الشركات
   renderNav();
   const v = VIEWS.find(x => x.id === VIEW) || VIEWS[0];
@@ -1260,11 +1285,12 @@ function renderUserMenu() {
     ${canTrash() ? `<button data-a="trash">🗑️ ${t('سلة المحذوفات')}</button>` : ''}
     <button data-a="viewperms">👁️ ${t('إعدادات العرض')}</button>
     <button data-a="password">🔒 ${t('تغيير كلمة المرور')}</button>
+    <button data-a="about">ℹ️ ${t('عن البرنامج')}</button>
     <button data-a="logout">🚪 ${t('تسجيل الخروج')}</button>`;
   $$('button', m).forEach(b => b.onclick = () => {
     m.hidden = true;
     ({ backup: openBackupsModal, trash: openTrashModal, approvals: openApprovalsModal, users: () => openUsersModal(), viewperms: renderViewSettingsModal, exportpw: openExportPasswordModal, dq: openDataQualityModal, syscheck: () => openSystemCheckModal(), importx: () => openImportExtraModal(),
-       password: openPasswordModal, logout: () => location.href = '/logout' })[b.dataset.a]();
+       password: openPasswordModal, about: openAboutModal, logout: () => location.href = '/logout' })[b.dataset.a]();
   });
 }
 function renderViewSettingsModal() {

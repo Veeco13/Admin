@@ -3,28 +3,33 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>تسجيل الدخول — Lunx</title>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;600;700&display=swap">
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+  <title>تسجيل الدخول — LUNX</title>
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='brand/lunx-mark.svg') }}">
+  <link rel="alternate icon" type="image/png" href="{{ url_for('static', filename='brand/favicon.png') }}">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;600;700&family=IBM+Plex+Sans:wght@400;600&display=swap">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}?v={{ asset_ver }}">
   <script>try{var th=localStorage.getItem('mv_theme');if(th)document.documentElement.dataset.theme=th;}catch(e){}</script>
   <style>
     body { display: grid; place-items: center; min-height: 100vh; }
-    .login { width: min(380px, 92vw); }
-    .login h1 { margin: 0 0 4px; font-size: 22px; }
-    .login form { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
+    .login { width: min(400px, 92vw); padding: 28px 26px 20px; }
+    .login form { display: flex; flex-direction: column; gap: 12px; margin-top: 18px; }
     .login input { border: 1px solid var(--border); background: var(--surface); border-radius: 8px; padding: 10px 12px; }
+    .login input:focus { outline: none; border-color: var(--primary); }
+    .login .lic { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); text-align: center; font-size: 12px; color: var(--muted); }
   </style>
 </head>
 <body>
   <div class="card login">
-    <div class="brand" style="color:var(--text)"><div class="logo">L</div><h1>Lunx</h1></div>
-    <div class="muted">شركة أبراج انرجي ومجموعة شركاتها التابعة</div>
+    <div class="about"><svg class="logo-mark" viewBox="0 0 54 54" aria-hidden="true"><rect width="54" height="54" rx="13" fill="var(--logo-bg)"/><path d="M17 13v28h20" fill="none" stroke="var(--logo-fg)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="36" cy="18" r="4.5" fill="var(--accent)"/></svg><span class="wordmark">LUN<b>X</b></span>
+      <div class="tagline">إدارة الشؤون الإدارية والحكومية للشركات</div>
+      <div class="tagline-en">Corporate Administrative &amp; Government Affairs</div></div>
     <form method="post">
       {% if error %}<div class="notice err">{{ error }}</div>{% endif %}
       <input name="username" placeholder="اسم المستخدم" autofocus required>
       <input name="password" type="password" placeholder="كلمة المرور" required>
       <button class="btn primary" style="justify-content:center">دخول</button>
     </form>
+    {% if org_name %}<div class="lic">مرخّص لـ: <b>{{ org_name }}</b></div>{% endif %}
   </div>
 </body>
 </html>
