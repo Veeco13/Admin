@@ -527,6 +527,7 @@ class PermitType(Base):
     # و sameExpiry ← بينتهي مع تاريخه وعلى نفس عقده. من غير FK (مرجع لنفس الجدول — الترتيب في الاستعادة مايفرقش)
     requiresTypeId: Mapped[Optional[str]] = col("requires_type_id", ID)
     sameExpiry: Mapped[Optional[bool]] = col("same_expiry", Boolean)
+    renewWindowDays: Mapped[Optional[int]] = col("renew_window_days", Integer)       # بيتجدد في آخر كام يوم قبل انتهاؤه (30)
 
 
 class PermitPlace(Base):
@@ -560,6 +561,19 @@ class Permit(Base):
     createdBy: Mapped[Optional[str]] = col("created_by", NAME)
     updatedAt: Mapped[Optional[datetime]] = col("updated_at", DateTime)
     updatedBy: Mapped[Optional[str]] = col("updated_by", NAME)
+
+
+class PermitLog(Base):
+    """سجل التصاريح لكل صاحب تصريح (موظف أو عربية): إضافة، تعديل، حذف، مرفق، طباعة، نموذج — زي سجل الموظف."""
+    __tablename__ = "permit_log"
+    id: Mapped[int] = col("id", Integer, primary_key=True, autoincrement=True)
+    holderKind: Mapped[str] = col("holder_kind", String(10), nullable=False)     # employee | vehicle
+    holderId: Mapped[str] = col("holder_id", ID, nullable=False, index=True)     # الرقم المدني أو رقم العربية
+    permitId: Mapped[Optional[str]] = col("permit_id", ID)                       # من غير FK (التصريح ممكن يتمسح)
+    action: Mapped[str] = col("action", String(20), nullable=False)              # add | edit | delete | file | print | form
+    label: Mapped[Optional[str]] = col("label", TEXT)
+    date: Mapped[Optional[datetime]] = col("date", DateTime)
+    user: Mapped[Optional[str]] = col("user", NAME)
 
 
 class PermitPlaceLink(Base):
@@ -657,5 +671,5 @@ class ApprovalRequest(Base):
 
 
 # النسخ الاحتياطي: العهد والفواتير والوكالات والتصاريح والخطابات ودفعات الاستيراد والسلة والطلبات كمان
-ALL_MODELS.extend([FeeItem, Custody, CustodyLine, Invoice, Agency, AgencyCostCenter, PermitType, PermitPlace, Permit, PermitPlaceLink,
+ALL_MODELS.extend([FeeItem, Custody, CustodyLine, Invoice, Agency, AgencyCostCenter, PermitType, PermitPlace, Permit, PermitPlaceLink, PermitLog,
                    HrLetter, ImportBatch, ImportChange, Trash, ApprovalRequest])

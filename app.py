@@ -1801,6 +1801,11 @@ def _permit_holder(s, kind, hid, action):
     return f"السيارة {v.plate}", None
 
 
+def _plog(s, kind, hid, pid, action, label):
+    """سجل التصاريح لصاحب التصريح (بطاقة التصاريح ← «السجل»)."""
+    s.add(M.PermitLog(holderKind=kind, holderId=hid, permitId=pid, action=action, label=label, date=db.now(), user=uname()))
+
+
 def _permit_of(s, pid, action):
     """التصريح وصاحبه ← (التصريح، اسم صاحبه، رد خطأ أو None)."""
     p = s.get(M.Permit, pid)
@@ -1845,7 +1850,7 @@ def permit_holders(s, u):
         dn = names.get(v.driverId, (v.userName, v.userName))                  # مع مين: الموظف أو الاسم الحر
         vehs.append({"id": v.id, "plate": v.plate, "model": v.model, "vehicleType": v.vehicleType, "companyId": v.companyId,
                      "ownerCompanyId": v.ownerCompanyId, "costCenter": v.costCenter, "driverName": dn[0], "driverNameEn": dn[1],
-                     "projectId": v.projectId,
+                     "projectId": v.projectId, "affairsProjectId": v.affairsProjectId,
                      "insuranceExpiry": db.ser(v.insuranceExpiry), "govLicenseExpiry": db.ser(v.govLicenseExpiry)})
     return {"employees": emps, "vehicles": vehs}
 
@@ -2029,6 +2034,7 @@ def _write_permit(s, p, kind, hid, who, v):
     label = (f"{'إضافة' if new else 'تعديل'} {v['tp'].nameAr}{' رقم ' + v['pno'] if v['pno'] else ''} لـ {who} — "
              f"ينتهي {v['expiry'].strftime('%d/%m/%Y')}")
     db.log_audit(s, "permit_add" if new else "permit_edit", label, uname())
+    _plog(s, kind, hid, p.id, "add" if new else "edit", label)
     if kind == "employee":
         db.push_timeline(s, hid, "permit", label, uname())
     if not new:
@@ -2048,6 +2054,7 @@ def _sync_children(s, p, tp, who):
         label = (f"تعديل {ktp.nameAr}{' رقم ' + k.permitNo if k.permitNo else ''} لـ {who} مع «{tp.nameAr}» — "
                  f"ينتهي {k.expiryDate.strftime('%d/%m/%Y')}")
         db.log_audit(s, "permit_edit", label, uname())
+        _plog(s, k.holderKind, k.employeeId if k.holderKind == "employee" else k.vehicleId, k.id, "edit", label)
         if k.holderKind == "employee":
             db.push_timeline(s, k.employeeId, "permit", label, uname())
         n += 1 + _sync_children(s, k, ktp, who)
@@ -2133,6 +2140,7 @@ def delete_permit(pid):
         if names:
             label += f" (ومعاه: {'، '.join(names)})"
         db.log_audit(s, "permit_delete", label + " — اتنقل لسلة المحذوفات", uname())
+        _plog(s, p.holderKind, p.employeeId if p.holderKind == "employee" else p.vehicleId, p.id, "delete", label + " — اتنقل لسلة المحذوفات")
         if p.holderKind == "employee":
             db.push_timeline(s, p.employeeId, "permit", label, uname())
             aff = s.scalar(select(M.EmployeeAffiliation).where(M.EmployeeAffiliation.employeeId == p.employeeId)
@@ -2143,6 +2151,34 @@ def delete_permit(pid):
         trash.trash_permit(s, p, f"{tp.nameAr if tp else 'تصريح'}{' ' + p.permitNo if p.permitNo else ''}"
                                  f"{' + ' + ' + '.join(names) if names else ''} — {who}", company, uname(), [k.id for k in kids])
     return jsonify({"ok": True, "trash": True})
+
+
+@app.get("/api/permits/log/<kind>/<hid>")
+@login_required
+def permit_log(kind, hid):
+    """سجل تصاريح موظف أو عربية (الأحدث الأول) — بطاقة التصاريح."""
+    with db.session_scope(commit=False) as s:
+        _, e = _permit_holder(s, kind, hid, "view")
+        if e:
+            return e
+        rows = s.scalars(select(M.PermitLog).where(M.PermitLog.holderKind == kind, M.PermitLog.holderId == hid)
+                         .order_by(M.PermitLog.date.desc(), M.PermitLog.id.desc()).limit(500))
+        return jsonify({"log": [db.to_dict(r) for r in rows]})
+
+
+@app.post("/api/permits/log")
+@login_required
+def add_permit_log():
+    """طباعة بطاقة التصاريح أو نموذج تصريح ← سطر في سجل صاحبه: {holderKind, holderId, action: print|form, label}."""
+    d = body()
+    kind, hid = d.get("holderKind"), d.get("holderId")
+    action = d.get("action") if d.get("action") in ("print", "form") else "print"
+    with db.session_scope() as s:
+        who, e = _permit_holder(s, kind, hid, "view")
+        if e:
+            return e
+        _plog(s, kind, hid, d.get("permitId") or None, action, (d.get("label") or "طباعة").strip()[:300])
+    return jsonify({"ok": True})
 
 
 @app.post("/api/permits/<pid>/file")
@@ -2166,6 +2202,7 @@ def upload_permit_file(pid):
         p.filePath, p.fileName = db.rel_file(path), f.filename
         p.updatedAt, p.updatedBy = db.now(), uname()
         db.log_audit(s, "permit_file", f"رفع مرفق تصريح لـ {who}: {f.filename}", uname())
+        _plog(s, p.holderKind, p.employeeId if p.holderKind == "employee" else p.vehicleId, p.id, "file", f"رفع مرفق تصريح لـ {who}: {f.filename}")
     return jsonify({"ok": True})
 
 
@@ -2178,6 +2215,7 @@ def delete_permit_file(pid):
             return e
         if p.filePath:
             db.log_audit(s, "permit_file", f"حذف مرفق تصريح من {who}: {p.fileName}", uname())
+            _plog(s, p.holderKind, p.employeeId if p.holderKind == "employee" else p.vehicleId, p.id, "file", f"حذف مرفق تصريح من {who}: {p.fileName}")
         _drop_permit_file(p)
     return jsonify({"ok": True})
 
@@ -2226,6 +2264,11 @@ def _applies_to(r, d):
     before = r.requiresTypeId
     r.requiresTypeId = d.get("requiresTypeId") or None
     r.sameExpiry = bool(r.requiresTypeId and d.get("sameExpiry"))
+    try:
+        days = int(d.get("renewWindowDays"))
+    except (TypeError, ValueError):
+        days = None
+    r.renewWindowDays = days if days and 1 <= days <= 365 else 30
     if r.requiresTypeId and r.requiresTypeId != before:          # تصاريحه الموجودة تتربط بأساسي من نفس الشخص
         s = object_session(r)
         s.flush()

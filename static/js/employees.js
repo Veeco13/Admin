@@ -792,7 +792,7 @@ function empCardInfoHtml(e) {
     ${card(secs.work, work, true)}
     ${card(secs.edu, '', !secs.money)}${secs.money ? card(secs.money) : ''}
     ${isKuwaitiStaff(e) ? `<section class="ec-card wide">${kuwaitiInfoHtml(e, field)}</section>` : ''}
-    ${permits.length ? `<section class="ec-card"><h4>🪪 ${t('التصاريح')}</h4><div class="row" style="flex-wrap:wrap;gap:6px">${permits.map(p => `<span class="chip ${can('permits.view') ? 'clickable' : ''}" data-open-permit="${p.id}" style="color:var(--${permitValid(p) ? 'green' : 'red'})">${esc(permitLabel(p))}${p.permitNo ? ` <span class="num">${esc(p.permitNo)}</span>` : ''} · ${fmtDate(p.expiryDate)}</span>`).join('')}</div></section>` : ''}
+    ${permits.length ? `<section class="ec-card"><h4>🪪 ${t('التصاريح')}${can('permits.view') ? ` <button type="button" class="btn sm ghost" data-permit-card style="margin-inline-start:auto">${t('بطاقة التصاريح')} ›</button>` : ''}</h4><div class="row" style="flex-wrap:wrap;gap:6px">${permits.map(p => `<span class="chip ${can('permits.view') ? 'clickable' : ''}" data-open-permit="${p.id}" style="color:var(--${permitValid(p) ? 'green' : 'red'})">${esc(permitLabel(p))}${p.permitNo ? ` <span class="num">${esc(p.permitNo)}</span>` : ''} · ${fmtDate(p.expiryDate)}</span>`).join('')}</div></section>` : ''}
     ${vehicles.length ? `<section class="ec-card"><h4>🚗 ${t('السيارات')}</h4>${vehicles.map(v => `<div>🚗 <b class="num">${esc(v.plate)}</b> <span class="muted">${esc(v.model || '')}</span></div>`).join('')}</section>` : ''}
     ${e.notes ? `<section class="ec-card wide"><h4>📝 ${t('ملاحظات')}</h4><div style="white-space:pre-line">${esc(e.notes)}</div></section>` : ''}</div>`;
 }
@@ -881,14 +881,7 @@ function openEmployeeCardPrint(e) {
 /** نافذة فرعية من بطاقة الموظف (التعديل، الحالة، المرحلة، الخطابات، التوقيع…): لما كل النوافذ تتقفل (بعد الحفظ أو
     الإلغاء) البطاقة بترجع على نفس التبويب ببياناتها الجديدة — إلا لو اتفتحت تاني أو المستخدم راح لشاشة تانية */
 function returnToCardWhenDone(id, tab) {
-  const root = $('#modal-root'), view = VIEW;
-  const obs = new MutationObserver(() => {
-    if (root.querySelector(`[data-card="${CSS.escape(id)}"]`)) { obs.disconnect(); return; }   // النافذة رجّعتها بنفسها
-    if (root.children.length) return;
-    obs.disconnect();
-    if (VIEW === view && IDX.employee[id]) openProfileCard(id, tab);
-  });
-  obs.observe(root, { childList: true });
+  returnWhenModalsClosed(`[data-card="${CSS.escape(id)}"]`, () => { if (IDX.employee[id]) openProfileCard(id, tab); });
 }
 async function openProfileCard(id, tab = 'info') {
   const e = IDX.employee[id];
@@ -966,6 +959,7 @@ async function openProfileCard(id, tab = 'info') {
   $$('[data-renew]', m.el).forEach(b => b.onclick = () => sub(() => openQuickRenewModal(e.id, b.dataset.renew)));
   const up = $('#emp-upload', m.el); if (up) up.onclick = () => uploadFileForEmployee(e.id, m.el);
   $$('[data-open-permit]', m.el).forEach(c => c.onclick = () => { if (!can('permits.view')) return; m.close(); setView('permits', { focusPermit: c.dataset.openPermit }); });
+  const pcb = $('[data-permit-card]', m.el); if (pcb) pcb.onclick = () => sub(() => openPermitHolderCard('employee', e.id));
   // القايمة المفتوحة بتتقفل بالضغط برّاها (وفتح قايمة بيقفل التانية)
   m.el.addEventListener('click', ev => $$('details.ec-menu[open]', m.el).forEach(d => { if (!d.contains(ev.target)) d.open = false; }));
   $$('[data-a]', m.el).forEach(b => b.onclick = async () => {

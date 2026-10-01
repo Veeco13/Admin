@@ -69,13 +69,13 @@ function permitDefaultProject(h) { const pr = h && IDX.project[h.projectId]; ret
 function permitCaps(kind, h, projectId) {
   if (!h) return [];
   const out = [];
-  if (kind === 'employee') { if (h.residencyExp) out.push({ l: t('الإقامة'), d: h.residencyExp }); }
+  if (kind === 'employee') { if (h.residencyExp) out.push({ l: t('الإقامة'), d: h.residencyExp, src: 'residency' }); }
   else {
-    if (h.insuranceExpiry) out.push({ l: t('التأمين'), d: h.insuranceExpiry });
-    if (h.govLicenseExpiry) out.push({ l: t('الدفتر'), d: h.govLicenseExpiry });
+    if (h.insuranceExpiry) out.push({ l: t('التأمين'), d: h.insuranceExpiry, src: 'insurance' });
+    if (h.govLicenseExpiry) out.push({ l: t('الدفتر'), d: h.govLicenseExpiry, src: 'license' });
   }
   const pr = IDX.project[projectId];
-  if (permitProjectOk(pr) && pr.expiryDate) out.push({ l: `${t('العقد')} ${projectName(pr.id)}`, d: pr.expiryDate });
+  if (permitProjectOk(pr) && pr.expiryDate) out.push({ l: `${t('العقد')} ${projectName(pr.id)}`, d: pr.expiryDate, src: 'contract' });
   return out.sort((a, b) => a.d.localeCompare(b.d));
 }
 /* ---------- التصريح المعتمد على تصريح تاني (الرتقة والعبدلي ← KOC) ---------- */
@@ -147,7 +147,7 @@ function holderCurrentPermits(kind, hid, typeId) {
   return permitsOf(kind, hid).filter(p => p.typeId === typeId && permitCurrent(p)).sort((a, b) => String(a.expiryDate || '').localeCompare(String(b.expiryDate || '')));
 }
 /** كارت بيانات صاحب التصريح — للعرض بس (بيتعدّل من مركزه) */
-function holderCardHtml(kind, h) {
+function holderCardHtml(kind, h, extra = '') {
   if (!h) return '';
   const f = (l, v) => `<div><span>${esc(t(l))}</span>${v || '<span class="muted">—</span>'}</div>`;
   const body = kind === 'employee'
@@ -157,7 +157,7 @@ function holderCardHtml(kind, h) {
     : f('رقم اللوحة', `<b class="num">${esc(h.plate)}</b>`) + f('نوع المركبة', esc(t(VEHICLE_TYPES[h.vehicleType] || ''))) + f('الموديل', esc(h.model || ''))
       + f('الشركة', esc(companyName(h.companyId)) + (h.ownerCompanyId && h.ownerCompanyId !== h.companyId ? `<div class="small muted">🔑 ${t('المالك الفعلي')}: ${esc(companyName(h.ownerCompanyId))}</div>` : ''))
       + f('مركز التكلفة', esc(ccLabel(h.costCenter))) + f('مع مين', esc(holderDriver(h)));
-  return `<div class="kv">${body}</div>
+  return `<div class="kv">${body}${extra}</div>
     <div class="small muted" style="margin-top:4px">ℹ️ ${t(kind === 'employee' ? 'البيانات من مركز الإقامات والموظفين — للعرض بس' : 'البيانات من مركز السيارات — للعرض بس')}</div>`;
 }
 
@@ -536,6 +536,192 @@ function openPermitModal(id, kind0, preset) {
   };
 }
 
+/* ---------- 🪪 بطاقة التصاريح (لكل موظف أو عربية) ----------
+   بيانات صاحب التصريح (للعرض)، كارت لكل نوع بحالته و«📅 التجديد» (ينفع يتجدد إمتى، ولو اتجدد هيطلع لحد إمتى وهتكسب
+   قد إيه، ومين مقصّر المدة: الإقامة / العقد / التأمين / الدفتر)، والتصاريح الحالية والقديمة والمرفقات، و«السجل»
+   (permit_log)، وطباعة البطاقة، وقايمة «نماذج التصاريح» (هتتملى لما النماذج توصل). */
+const RESIDENCY_RENEW_DAYS = 90;          // الإقامة بتتجدد في آخر 90 يوم قبل انتهاؤها (مش قبل كده)
+const PERMIT_LOG_ICONS = { add: '➕', edit: '✏️', delete: '🗑️', file: '📎', print: '🖨️', form: '📄' };
+function permitWindowDays(typeId) { const tp = IDX.permitType[typeId]; return (tp && tp.renewWindowDays) || 30; }
+/** المدة بين تاريخين بالشهور والأيام («3 شهور و1 يوم») */
+function permitGainText(from, to) {
+  const [y1, m1, d1] = from.split('-').map(Number), [y2, m2, d2] = to.split('-').map(Number);
+  let months = (y2 - y1) * 12 + (m2 - m1), days = d2 - d1;
+  if (days < 0) { months -= 1; days += new Date(y2, m2 - 1, 0).getDate(); }
+  const years = Math.floor(months / 12);
+  months %= 12;
+  const unit = (n, ar, en) => (LANG === 'en' ? `${n} ${n === 1 ? en : en + 's'}` : `${n} ${t(ar)}`);
+  return [years ? unit(years, 'سنة', 'year') : '', months ? unit(months, 'شهر', 'month') : '', days ? unit(days, 'يوم', 'day') : '']
+    .filter(Boolean).join(LANG === 'en' ? ', ' : ` ${t('و')}`) || t('أقل من يوم');
+}
+/** التجديد لتصريح حالي: [{ico, text, tone}] — tone: ok | warn | bad | '' */
+function permitRenewLines(p) {
+  const kind = p.holderKind, h = permitHolder(p), req = permitReqType(p.typeId), today = todayISO(), out = [];
+  const left = daysUntil(p.expiryDate);
+  out.push({ ico: '⏳', text: `${t('بينتهي')} ${fmtDate(p.expiryDate)} (${daysText(left)})`, tone: left < 0 ? 'bad' : left <= 30 ? 'warn' : '' });
+  if (req) {                                   // الرتقة: بيتجدد مع الـ KOC بتاعه
+    const par = permitParent(p), nw = permitDepRenew(p), rn = permitTypeName(req);
+    out.push(nw ? { ico: '✅', text: `${rn} ${t('اتجدد لحد')} ${fmtDate(nw.expiryDate)} — ${t('ينفع يتجدد دلوقتي على الجديد')}`, tone: 'ok' }
+      : { ico: '🔗', text: `${t('بيتجدد مع')} ${rn}${par ? ` (${t('ينتهي')} ${fmtDate(par.expiryDate)})` : ''} — ${t('جدّد')} ${rn} ${t('الأول')}` });
+    return out;
+  }
+  const win = permitWindowDays(p.typeId), from = addDays(p.expiryDate, -win);
+  out.push(today >= from ? { ico: '✅', text: `${t('ينفع يتجدد دلوقتي')} (${t('آخر')} ${win} ${t('يوم')})`, tone: 'ok' }
+    : { ico: '📅', text: `${t('ينفع يتجدد من')} ${fmtDate(from)} (${t('آخر')} ${win} ${t('يوم')})` });
+  const cs = permitCaps(kind, h, p.projectId), cap = cs[0];
+  if (cap && cap.d > p.expiryDate) out.push({ ico: '➕', text: `${t('لو اتجدد هيطلع لحد')} ${fmtDate(cap.d)} (${cap.l}) — ${t('هتكسب')} ${permitGainText(p.expiryDate, cap.d)}`, tone: 'ok' });
+  else if (cap) out.push({ ico: '⚠️', text: `${t('التجديد مش هيزوّد حاجة')}: ${cap.l} ${t('لحد')} ${fmtDate(cap.d)} — ${t('جدّد')} ${cap.l} ${t('الأول')}`, tone: 'warn' });
+  // الحد اللي مقصّر المدة (الإقامة / التأمين / الدفتر) والعقد بعده ← يتجدد الأول
+  const contract = cs.find(c => c.src === 'contract');
+  if (cap && cap.src !== 'contract' && contract && contract.d > cap.d) {
+    out.push({ ico: '💡', text: `${t('المدة محدودة بـ')}${cap.l} — ${t('جدّد')} ${cap.l} ${t('الأول والتصريح يطلع لحد نهاية العقد')} ${fmtDate(contract.d)} (${t('يعني')} ${permitGainText(p.expiryDate, contract.d)})`, tone: 'warn' });
+  }
+  return out;
+}
+/** الإقامة (الموظف): بتنتهي إمتى وتتجدد من إمتى (آخر 90 يوم) — التصريح مايعدّيهاش */
+function permitResidencyLines(h) {
+  if (!h || !h.residencyExp) return [];
+  const from = addDays(h.residencyExp, -RESIDENCY_RENEW_DAYS), left = daysUntil(h.residencyExp);
+  return [{ ico: '🪪', text: `${t('الإقامة بتنتهي')} ${fmtDate(h.residencyExp)} (${daysText(left)})`, tone: left < 0 ? 'bad' : left <= 30 ? 'warn' : '' },
+    todayISO() >= from ? { ico: '✅', text: `${t('الإقامة ينفع تتجدد دلوقتي')} (${t('آخر')} ${RESIDENCY_RENEW_DAYS} ${t('يوم')})`, tone: 'ok' }
+      : { ico: '📅', text: `${t('الإقامة ينفع تتجدد من')} ${fmtDate(from)} (${t('آخر')} ${RESIDENCY_RENEW_DAYS} ${t('يوم')})` }];
+}
+function permitLinesHtml(lines) {
+  return `<ul class="pc-renew">${lines.map(x => `<li class="${x.tone}"><span>${x.ico}</span>${esc(x.text)}</li>`).join('')}</ul>`;
+}
+/** بيانات صاحب التصريح (للعرض) + الإقامة والعقد / التأمين والدفتر وملف الشؤون */
+function permitHolderInfoHtml(kind, h) {
+  const f = (l, v) => `<div><span>${esc(t(l))}</span>${v || '<span class="muted">—</span>'}</div>`;
+  const extra = kind === 'employee'
+    ? f('الإقامة', h.residencyExp ? datePill(h.residencyExp) : '') + f('العقد المسجّل عليه', esc(permitProjectLabel(h.projectId)))
+    : f('التأمين', h.insuranceExpiry ? datePill(h.insuranceExpiry) : '') + f('الدفتر', h.govLicenseExpiry ? datePill(h.govLicenseExpiry) : '')
+      + f('ملف الشؤون', esc(projectName(h.affairsProjectId))) + f('عقد العربية', esc(permitProjectLabel(h.projectId)));
+  return holderCardHtml(kind, h, extra);
+}
+function permitStatusChip(p) {
+  const d = daysUntil(p.expiryDate);
+  return permitNeedsCancel(p) ? `<span class="chip" style="background:var(--red-soft);color:var(--red)">⚠️ ${t('لازم يتلغي')}</span>`
+    : d < 0 ? `<span class="chip" style="background:var(--red-soft);color:var(--red)">${t('منتهي')}</span>`
+    : permitDepRenew(p) ? `<span class="chip" style="background:var(--green-soft);color:var(--green)">🔄 ${t('جاهز للتجديد')}</span>`
+    : d <= 30 ? `<span class="chip" style="background:var(--orange-soft);color:var(--orange)">${t('خلال 30 يوم')}</span>`
+    : `<span class="chip" style="background:var(--green-soft);color:var(--green)">${t('ساري')}</span>`;
+}
+/** نافذة من البطاقة (فتح تصريح، إضافة، تجديد، مرفق): لما تتقفل البطاقة بترجع — زي بطاقة الموظف */
+function returnToPermitCard(kind, hid, tab) {
+  returnWhenModalsClosed(`[data-pcard="${CSS.escape(kind + ':' + hid)}"]`, () => { if (holderOf(kind, hid)) openPermitHolderCard(kind, hid, tab); });
+}
+function openPermitHolderCard(kind, hid, tab = 'current') {
+  const h = holderOf(kind, hid);
+  if (!h) return toast(t(kind === 'employee' ? 'الموظف ده مش ظاهر عندك' : 'السيارة دي مش ظاهرة عندك'), 'err');
+  const all = permitsOf(kind, hid), cur = all.filter(permitCurrent).sort((a, b) => permitLabel(a).localeCompare(permitLabel(b), 'ar'));
+  const old = all.filter(permitSuperseded).sort((a, b) => String(b.expiryDate).localeCompare(String(a.expiryDate)));
+  const files = all.filter(p => p.fileUrl), types = permitTypesFor(kind), edit = can('permits.edit');
+  const tile = tp => {
+    const ps = holderCurrentPermits(kind, hid, tp.id), p = ps[ps.length - 1];
+    if (!p) return `<div class="pc-tile none"><div class="pc-tile-h"><b>${esc(permitTypeName(tp))}</b></div><div class="muted small">${t('مفيش تصريح')}</div>
+      ${edit ? `<button class="btn sm write-only" data-p="permits.edit" data-pc-add="${tp.id}">➕ ${t('إضافة')}</button>` : ''}</div>`;
+    const d = daysUntil(p.expiryDate), cls = permitNeedsCancel(p) || d < 0 ? 'bad' : d <= 30 || permitDepRenew(p) ? 'warn' : 'ok';
+    return `<div class="pc-tile ${cls}"><div class="pc-tile-h"><b>${esc(permitTypeName(tp))}</b>${permitStatusChip(p)}</div>
+      <div class="small"><span class="muted">${t('رقم')}</span> <b class="num" dir="ltr">${esc(p.permitNo || '—')}</b>${ps.length > 1 ? ` <span class="chip">+${ps.length - 1}</span>` : ''}</div>
+      <div class="small muted">${esc(permitProjectLabel(p.projectId, false) || t('من غير عقد'))}</div>
+      ${permitLinesHtml(permitRenewLines(p))}
+      <div class="row" style="gap:4px;margin-top:6px"><button class="btn sm" data-pc-open="${p.id}">${t('فتح')}</button>
+        ${edit ? `<button class="btn sm write-only" data-p="permits.edit" data-pc-renew="${p.id}">🔄 ${t('تجديد')}</button>` : ''}
+        ${p.fileUrl ? `<button class="btn sm" data-pc-file="${p.id}" title="${esc(t('عرض المرفق'))}">📎</button>` : ''}</div></div>`;
+  };
+  const row = (p, oldRow) => `<tr class="clickable${oldRow ? ' muted' : ''}" data-pc-open="${p.id}"><td>${esc(permitLabel(p))}</td><td class="num" dir="ltr">${esc(p.permitNo || '')}</td>
+    <td>${esc(projectName(p.projectId)) || '—'}</td><td>${esc(p.issuer || '')}</td><td>${fmtDate(p.issueDate)}</td>
+    <td>${oldRow ? fmtDate(p.expiryDate) : datePill(p.expiryDate) + permitFlagsHtml(p)}</td><td>${p.fileUrl ? `<button class="btn sm" data-pc-file="${p.id}">📎</button>` : ''}</td></tr>`;
+  const table = (list, oldRows) => list.length ? `<div class="table-wrap"><table class="data"><thead><tr><th>${t('النوع')}</th><th>${t('الرقم')}</th><th>${t('العقد')}</th><th>${t('الجهة المانحة')}</th><th>${t('الإصدار')}</th><th>${t('الانتهاء')}</th><th></th></tr></thead>
+    <tbody>${list.map(p => row(p, oldRows)).join('')}</tbody></table></div>` : `<div class="empty">${t('لا يوجد')}</div>`;
+  const m = openModal({
+    title: `${PERMIT_HOLDERS[kind].ico} ${t('بطاقة التصاريح')} — ${esc(holderName(kind, h))}`, size: 'wide',
+    body: `<div class="pc-top">${permitHolderInfoHtml(kind, h)}${kind === 'employee' && h.residencyExp ? `<div class="pc-res">${permitLinesHtml(permitResidencyLines(h))}</div>` : ''}</div>
+      <div class="pc-tiles">${types.map(tile).join('')}</div>
+      <div class="tabs" style="margin-top:12px">${[['current', `${t('التصاريح الحالية')} (${cur.length})`], ['old', `${t('التصاريح القديمة')} (${old.length})`],
+        ['files', `📎 ${t('المرفقات')} (${files.length})`], ['log', `🕘 ${t('السجل')}`]].map(([k, l]) => `<button data-pc-tab="${k}" class="${k === tab ? 'active' : ''}">${esc(l)}</button>`).join('')}</div>
+      <div data-pc-pane="current" ${tab !== 'current' ? 'hidden' : ''}>${table(cur, false)}</div>
+      <div data-pc-pane="old" ${tab !== 'old' ? 'hidden' : ''}>${table(old, true)}<div class="small muted" style="margin-top:6px">${t('التصاريح اللي اتجدّدت — للتاريخ بس، مالهاش تنبيهات.')}</div></div>
+      <div data-pc-pane="files" ${tab !== 'files' ? 'hidden' : ''}>${files.length ? `<div class="row" style="flex-wrap:wrap;gap:6px">${files.map(p => `<button class="btn sm" data-pc-file="${p.id}">📎 ${esc(permitLabel(p))}${p.permitNo ? ' ' + esc(p.permitNo) : ''}${permitSuperseded(p) ? ` <span class="small muted">(${t('مُجدَّد')})</span>` : ''}</button>`).join('')}</div>`
+        : `<div class="empty">${t('مفيش مرفقات')}</div>`}</div>
+      <div data-pc-pane="log" ${tab !== 'log' ? 'hidden' : ''}><div id="pc-log"><div class="muted">${t('جاري التحميل…')}</div></div></div>`,
+    foot: `${edit ? `<button class="btn primary write-only" data-p="permits.edit" data-pc-add="">➕ ${t('إضافة تصريح')}</button>` : ''}
+      <button class="btn" data-pc-print>🖨️ ${t('طباعة بطاقة التصاريح')}</button>
+      <details class="ec-menu"><summary class="btn">📄 ${t('نماذج التصاريح')} ▾</summary><div><div class="small muted" style="padding:8px 10px;max-width:260px">${t('لسه مفيش نماذج — هتتضاف هنا لما تبعتها، وهتتملى من بيانات البطاقة.')}</div></div></details>
+      <span class="spacer"></span><button class="btn" data-close>${t('إغلاق')}</button>`,
+  });
+  const E = m.el;
+  E.dataset.pcard = `${kind}:${hid}`;
+  const curTab = () => ($('[data-pc-tab].active', E) || {}).dataset?.pcTab || tab;
+  const sub = fn => { const tb = curTab(); m.close(); fn(); returnToPermitCard(kind, hid, tb); };
+  let logLoaded = false;
+  const loadLog = async () => {
+    if (logLoaded) return;
+    logLoaded = true;
+    try {
+      const r = await api('GET', `/api/permits/log/${kind}/${encodeURIComponent(hid)}`);
+      $('#pc-log', E).innerHTML = r.log.length ? `<ul class="timeline">${r.log.map(x => `<li><span class="muted small">${fmtDateTime(x.date)} · ${esc(x.user || '')}</span><br>${PERMIT_LOG_ICONS[x.action] || '•'} ${esc(x.label || '')}</li>`).join('')}</ul>`
+        : `<div class="empty">${t('مفيش حاجة متسجّلة لسه')}</div>`;
+    } catch (e) { $('#pc-log', E).innerHTML = `<div class="notice err">${esc(e.message)}</div>`; }
+  };
+  $$('[data-pc-tab]', E).forEach(b => b.onclick = () => {
+    $$('[data-pc-tab]', E).forEach(x => x.classList.toggle('active', x === b));
+    $$('[data-pc-pane]', E).forEach(p => { p.hidden = p.dataset.pcPane !== b.dataset.pcTab; });
+    if (b.dataset.pcTab === 'log') loadLog();
+  });
+  if (tab === 'log') loadLog();
+  E.addEventListener('click', ev => $$('details.ec-menu[open]', E).forEach(d => { if (!d.contains(ev.target)) d.open = false; }));
+  $$('[data-pc-open]', E).forEach(el => el.onclick = ev => { if (ev.target.closest('[data-pc-file]')) return; sub(() => openPermitModal(el.dataset.pcOpen)); });
+  $$('[data-pc-renew]', E).forEach(b => b.onclick = () => {
+    const p = IDX.permit[b.dataset.pcRenew];
+    sub(() => openPermitModal(null, kind, { holderId: hid, typeId: p.typeId, issuer: p.issuer, placeIds: p.placeIds, projectId: p.projectId, renewOf: p.id }));
+  });
+  $$('[data-pc-add]', E).forEach(b => b.onclick = () => sub(() => openPermitAddModal(kind, { holderId: hid, typeId: b.dataset.pcAdd || undefined })));
+  $$('[data-pc-file]', E).forEach(b => b.onclick = ev => {
+    ev.stopPropagation();
+    const p = IDX.permit[b.dataset.pcFile];
+    if (p && p.fileUrl) openFileViewer(p.fileUrl, p.fileName || t('مرفق التصريح'));
+  });
+  $('[data-pc-print]', E).onclick = () => printPermitHolderCard(kind, hid);
+}
+/** طباعة بطاقة التصاريح: A4 طولي زي بطاقة الموظف (شعار الشركة، من غير توقيعات) + آخر 15 سطر في السجل */
+async function printPermitHolderCard(kind, hid) {
+  const h = holderOf(kind, hid);
+  if (!h) return;
+  let log = [];
+  try { log = (await api('GET', `/api/permits/log/${kind}/${encodeURIComponent(hid)}`)).log.slice(0, 15); } catch (_) { /* السجل اختياري في الطباعة */ }
+  const cur = permitsOf(kind, hid).filter(permitCurrent).sort((a, b) => permitLabel(a).localeCompare(permitLabel(b), 'ar'));
+  const tier = d => (TIERS[tierOf(d)] || {}).cls || '';
+  const sec = (title, body) => `<section class="ec-sec"><h3>${title}</h3>${body}</section>`;
+  const name = holderName(kind, h);
+  const fields = kind === 'employee'
+    ? [['الرقم المدني', `<span class="num">${esc(h.id)}</span>`], ['الجنسية', esc(personNat(h))], ['المهنة', esc(personProf(h))], ['الشركة', esc(companyName(h.companyId))],
+       ['مركز التكلفة', esc(ccLabel(h.costCenter))], ['رقم الملف', h.fileNo ? `<span class="num">${esc(h.fileNo)}</span>` : ''],
+       ['الإقامة', h.residencyExp ? `<span class="pill ${tier(h.residencyExp)}">${fmtDate(h.residencyExp)}</span>` : ''], ['العقد المسجّل عليه', esc(permitProjectLabel(h.projectId))]]
+    : [['رقم اللوحة', `<span class="num">${esc(h.plate)}</span>`], ['نوع المركبة', esc(t(VEHICLE_TYPES[h.vehicleType] || ''))], ['الموديل', esc(h.model || '')],
+       ['الشركة', esc(companyName(h.companyId))], ['مع مين', esc(holderDriver(h))], ['مركز التكلفة', esc(ccLabel(h.costCenter))],
+       ['التأمين', h.insuranceExpiry ? `<span class="pill ${tier(h.insuranceExpiry)}">${fmtDate(h.insuranceExpiry)}</span>` : ''], ['ملف الشؤون', esc(projectName(h.affairsProjectId))]];
+  const res = kind === 'employee' ? permitResidencyLines(h) : [];
+  const body = `<style>${EMP_CARD_PRINT_CSS} .pc-renew{margin:0;padding:0;list-style:none;font-size:9.5px;line-height:1.5} .pc-renew li span{margin-inline-end:4px}</style>
+    <div class="ec-id"><div class="ec-av">${esc(kind === 'employee' ? initials(h.name) : '🚗')}</div>
+      <div><div class="ec-name">${esc(name)}</div>${kind === 'employee' && h.nameEn ? `<div class="ec-en">${esc(h.nameEn)}</div>` : ''}
+        <div class="ec-tags">${cur.map(p => `<span class="ec-tag">${esc(permitLabel(p))} · ${fmtDate(p.expiryDate)}</span>`).join('') || `<span class="ec-tag">${t('مفيش تصاريح حالية')}</span>`}</div></div>
+      <table class="ec-keys">${(kind === 'employee' ? [['الرقم المدني', h.id], ['رقم الملف', h.fileNo]] : [['رقم اللوحة', h.plate], ['الموديل', h.model]])
+        .map(([l, v]) => `<tr><th>${esc(t(l))}</th><td>${esc(v || '—')}</td></tr>`).join('')}</table></div>
+    ${sec(`${PERMIT_HOLDERS[kind].ico} ${esc(t(kind === 'employee' ? 'بيانات الموظف' : 'بيانات السيارة'))}`, empKvTable(fields))}
+    ${res.length ? sec(`🪪 ${esc(t('الإقامة'))}`, permitLinesHtml(res)) : ''}
+    ${sec(`🪪 ${esc(t('التصاريح الحالية'))}`, cur.length ? `<table class="rpt"><thead><tr><th class="txt">${t('النوع')}</th><th>${t('الرقم')}</th><th class="txt">${t('العقد')}</th><th>${t('الإصدار')}</th><th>${t('الانتهاء')}</th><th class="txt">${t('التجديد')}</th></tr></thead>
+      <tbody>${cur.map(p => `<tr><td class="txt"><b>${esc(permitLabel(p))}</b></td><td class="num">${esc(p.permitNo || '—')}</td><td class="txt">${esc(projectName(p.projectId)) || '—'}</td>
+        <td class="num">${fmtDate(p.issueDate) || '—'}</td><td class="num"><span class="pill ${tier(p.expiryDate)}">${fmtDate(p.expiryDate)}</span></td>
+        <td class="txt">${permitLinesHtml(permitRenewLines(p).slice(1))}</td></tr>`).join('')}</tbody></table>` : `<div class="ec-none">${t('مفيش تصاريح حالية')}</div>`)}
+    ${log.length ? sec(`🕘 ${esc(t('سجل التصاريح'))} (${t('آخر')} ${log.length})`, `<table class="rpt"><thead><tr><th>${t('التاريخ')}</th><th class="txt">${t('العملية')}</th><th>${t('بواسطة')}</th></tr></thead>
+      <tbody>${log.map(x => `<tr><td class="num">${fmtDateTime(x.date)}</td><td class="txt">${PERMIT_LOG_ICONS[x.action] || '•'} ${esc(x.label || '')}</td><td>${esc(x.user || '')}</td></tr>`).join('')}</tbody></table>`) : ''}`;
+  openReportWindow({ title: t('بطاقة التصاريح'), subtitle: name, company: IDX.company[h.companyId] || null, landscape: false,
+    meta: [[t(kind === 'employee' ? 'الرقم المدني' : 'رقم اللوحة'), kind === 'employee' ? h.id : h.plate]], body });
+  printLog(`${t('بطاقة التصاريح')}: ${name}`, 'permit');
+  api('POST', '/api/permits/log', { holderKind: kind, holderId: hid, action: 'print', label: `طباعة بطاقة التصاريح` }).catch(() => {});
+}
+
 /* ---------- قسم التصاريح: قايمتين (الموظفين / السيارات) ---------- */
 /** تصاريح نوع واحد (صاحبها ظاهر للمستخدم). الحالية بس إلا لو withOld، والموظفين اللي خدمتهم انتهت مخفيين إلا لو withEnded */
 function allPermits(kind, withEnded, withOld) {
@@ -565,10 +751,10 @@ function permitsFiltered(kind, F) {
 function permitRowHtml(kind, p, showPlaces) {
   const h = permitHolder(p), old = permitSuperseded(p);
   const holderCells = kind === 'employee'
-    ? `<td><b>${esc(holderName(kind, h))}</b>${empEnded(h) ? ' ' + statusPill(h.employmentStatus) : ''}<div class="small muted num">${esc(h.id)}</div></td>
+    ? `<td><a href="#" class="pc-link" data-holder="${esc(h.id)}" title="${esc(t('بطاقة التصاريح'))}"><b>${esc(holderName(kind, h))}</b></a>${empEnded(h) ? ' ' + statusPill(h.employmentStatus) : ''}<div class="small muted num">${esc(h.id)}</div></td>
        <td>${esc(personNat(h))}<div class="small muted">${esc(personProf(h))}</div></td>
        <td>${esc(companyName(h.companyId))}<div class="small muted">${esc(ccLabel(h.costCenter))}</div></td>`
-    : `<td><b class="num">${esc(h.plate)}</b><div class="small muted">${esc([t(VEHICLE_TYPES[h.vehicleType] || ''), h.model].filter(Boolean).join(' · '))}</div></td>
+    : `<td><a href="#" class="pc-link" data-holder="${esc(h.id)}" title="${esc(t('بطاقة التصاريح'))}"><b class="num">${esc(h.plate)}</b></a><div class="small muted">${esc([t(VEHICLE_TYPES[h.vehicleType] || ''), h.model].filter(Boolean).join(' · '))}</div></td>
        <td>${esc(companyName(h.companyId))}<div class="small muted">${esc(ccLabel(h.costCenter))}</div></td>
        <td>${esc(holderDriver(h)) || '<span class="muted">—</span>'}</td>`;
   return `<tr class="clickable${old ? ' muted' : ''}" data-id="${p.id}">${holderCells}<td>${esc(permitLabel(p))}${old ? ` <span class="chip">${t('مُجدَّد')}</span>` : ''}${p.projectId ? `<div class="small muted">${esc(projectName(p.projectId))}</div>` : ''}</td><td class="num" dir="ltr" style="white-space:nowrap">${esc(p.permitNo || '')}</td>
@@ -596,7 +782,7 @@ function permitMatrixHtml(kind, rows) {
   const types = permitTypesFor(kind);
   const head = kind === 'employee' ? ['الموظف', 'الشركة / مكان الشغل'] : ['اللوحة', 'الشركة / مكان الشغل'];
   return `<div class="table-wrap"><table class="data"><thead><tr>${head.map(x => `<th>${t(x)}</th>`).join('')}${types.map(tp => `<th style="text-align:center">${esc(permitTypeName(tp))}</th>`).join('')}</tr></thead>
-    <tbody>${rows.map(({ h, cells }) => `<tr><td><b class="${kind === 'vehicle' ? 'num' : ''}">${esc(holderName(kind, h))}</b>${kind === 'employee' && empEnded(h) ? ' ' + statusPill(h.employmentStatus) : ''}
+    <tbody>${rows.map(({ h, cells }) => `<tr><td><a href="#" class="pc-link" data-holder="${esc(h.id)}" title="${esc(t('بطاقة التصاريح'))}"><b class="${kind === 'vehicle' ? 'num' : ''}">${esc(holderName(kind, h))}</b></a>${kind === 'employee' && empEnded(h) ? ' ' + statusPill(h.employmentStatus) : ''}
         <div class="small muted num">${esc(kind === 'employee' ? h.id : [t(VEHICLE_TYPES[h.vehicleType] || ''), h.model].filter(Boolean).join(' · '))}</div></td>
       <td>${esc(companyName(h.companyId))}<div class="small muted">${esc(ccLabel(h.costCenter))}</div></td>
       ${cells.map((c, i) => c.length
@@ -677,6 +863,7 @@ function renderPermits() {
     const p = (STATE.permits || []).find(x => x.id === b.dataset.permitFile);
     if (p && p.fileUrl) openFileViewer(p.fileUrl, p.fileName || t('مرفق التصريح'));
   });
+  $$('[data-holder]', viewRoot()).forEach(a => a.onclick = ev => { ev.preventDefault(); ev.stopPropagation(); openPermitHolderCard(kind, a.dataset.holder); });
   $$('tr[data-id]', viewRoot()).forEach(tr => tr.onclick = () => openPermitModal(tr.dataset.id));
   $$('[data-pid]', viewRoot()).forEach(td => td.onclick = () => openPermitModal(td.dataset.pid));
   $$('[data-add]', viewRoot()).forEach(td => td.onclick = () => {
@@ -804,7 +991,7 @@ function openPermitListsModal(tab) {
   const permits = STATE.permits || [];
   const types = STATE.permitTypes || [], places = STATE.permitPlaces || [];
   const used = (kind, id) => kind === 'types' ? permits.filter(p => p.typeId === id).length : permits.filter(p => (p.placeIds || []).includes(id)).length;
-  const cond = r => r.requiresTypeId ? `${t('محتاج')} ${esc(permitTypeName(IDX.permitType[r.requiresTypeId]))} ${t('ساري')}${r.sameExpiry ? ' · ' + t('بينتهي معاه') : ''}` : '<span class="muted">—</span>';
+  const cond = r => `${r.requiresTypeId ? `${t('محتاج')} ${esc(permitTypeName(IDX.permitType[r.requiresTypeId]))} ${t('ساري')}${r.sameExpiry ? ' · ' + t('بينتهي معاه') : ''}<br>` : ''}<span class="muted">${t('بيتجدد في آخر')} ${r.renewWindowDays || 30} ${t('يوم')}</span>`;
   const table = (kind, rows) => `<table class="data"><thead><tr><th>${t('الاسم (عربي)')}</th><th>${t('الاسم (إنجليزي)')}</th>${kind === 'types' ? `<th>${t('لمين')}</th><th>${t('الجهة المانحة الافتراضية')}</th><th>${t('الشرط')}</th>` : ''}<th>${t('التصاريح')}</th><th></th></tr></thead><tbody>
     ${rows.map(r => `<tr><td><b>${esc(r.nameAr)}</b></td><td dir="ltr">${esc(r.nameEn || '')}</td>${kind === 'types' ? `<td>${esc(t(PERMIT_APPLIES[r.appliesTo || '']))}</td><td>${esc(r.defaultIssuer || '—')}</td><td class="small">${cond(r)}</td>` : ''}<td class="num">${used(kind, r.id)}</td>
       <td style="white-space:nowrap"><button class="btn sm" data-edit="${kind}:${r.id}">✏️</button> <button class="btn sm danger" data-del="${kind}:${r.id}">🗑️</button></td></tr>`).join('')
@@ -840,7 +1027,8 @@ function openPermitListItemModal(kind, id, after) {
       ${kind === 'types' ? `<label class="full">${t('لمين')}<select name="appliesTo">${Object.entries(PERMIT_APPLIES).map(([k, l]) => opt(k, t(l), k === (r.appliesTo || ''))).join('')}</select></label>
       <label class="full">${t('الجهة المانحة الافتراضية')}<input name="defaultIssuer" value="${esc(r.defaultIssuer || '')}" placeholder="${esc(t('بتتملى لوحدها في التصريح الجديد (وتتعدّل)'))}"></label>
       <label class="full" title="${esc(t('التصريح ده مايطلعش غير لو صاحبه معاه تصريح ساري من النوع ده (زي الرتقة والعبدلي مع الـ KOC)'))}">${t('مطلوب قبله تصريح ساري من نوع')}<select name="requiresTypeId">${opt('', t('— مفيش —'), !r.requiresTypeId)}${(STATE.permitTypes || []).filter(x => x.id !== id).map(x => opt(x.id, permitTypeName(x), x.id === r.requiresTypeId)).join('')}</select></label>
-      <label class="check full"><input type="checkbox" name="sameExpiry" ${r.sameExpiry ? 'checked' : ''}> ${t('بينتهي مع تاريخه وعلى نفس عقده')}</label>` : ''}</div>`,
+      <label class="check full"><input type="checkbox" name="sameExpiry" ${r.sameExpiry ? 'checked' : ''}> ${t('بينتهي مع تاريخه وعلى نفس عقده')}</label>
+      <label class="full" title="${esc(t('بطاقة التصاريح بتقول «ينفع يتجدد من…» على أساسه'))}">${t('بيتجدد قبل الانتهاء بـ (يوم)')}<input type="number" name="renewWindowDays" min="1" max="365" value="${esc(r.renewWindowDays || 30)}"></label>` : ''}</div>`,
     foot: `<button class="btn primary" data-save>${t('حفظ')}</button><button class="btn" data-close>${t('إلغاء')}</button>`,
   });
   $('[name=nameAr]', m.el).focus();

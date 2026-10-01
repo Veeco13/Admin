@@ -476,6 +476,27 @@ function openModal({ title, body, foot = '', size = '', onClose }) {
   return { el: ov.querySelector('.modal'), close };
 }
 function closeAllModals() { $('#modal-root').innerHTML = ''; }
+/** نافذة اتفتحت من بطاقة (موظف / تصاريح) مكانها: لما كل النوافذ تتقفل (بعد الحفظ أو الإلغاء) البطاقة بترجع ببياناتها
+    الجديدة. الطلبات متكدّسة — آخر بطاقة بترجع الأول وبعدها اللي قبلها. marker = البطاقة نفسها (لو النافذة رجّعتها
+    بنفسها الطلب بيخلص)، والانتقال لشاشة تانية بيلغي الكل. */
+const CARD_RETURNS = [];
+let CARD_OBS = null;
+function returnWhenModalsClosed(marker, reopen) {
+  CARD_RETURNS.push({ marker, reopen, view: VIEW });
+  if (CARD_OBS) return;
+  const root = $('#modal-root');
+  const stop = () => { CARD_OBS.disconnect(); CARD_OBS = null; };
+  CARD_OBS = new MutationObserver(() => {
+    while (CARD_RETURNS.length && root.querySelector(CARD_RETURNS[CARD_RETURNS.length - 1].marker)) CARD_RETURNS.pop();
+    if (!CARD_RETURNS.length) return stop();
+    if (root.children.length) return;
+    const r = CARD_RETURNS.pop();
+    if (VIEW !== r.view) { CARD_RETURNS.length = 0; return stop(); }
+    r.reopen();
+    if (!CARD_RETURNS.length) stop();
+  });
+  CARD_OBS.observe(root, { childList: true });
+}
 function openConfirm(message, { okLabel = 'تأكيد', danger = false } = {}) {
   return new Promise(resolve => {
     let done = false;

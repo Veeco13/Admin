@@ -497,3 +497,17 @@ table.kids input:not([type=checkbox]), table.kids select { width: 100%; min-widt
 /* عهدة التجديد: الانتهاء الجديد (مطلوب قبل التقفيل) */
 .cu-exp input[type=date] { width: 140px; }
 .cu-exp.need input[type=date] { border-color: var(--orange); background: var(--orange-soft); }
+/* بطاقة التصاريح (موظف / عربية) */
+.pc-top { display: grid; grid-template-columns: 1fr auto; gap: 14px; align-items: start; }
+.pc-res { border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; background: var(--surface); min-width: 240px; }
+.pc-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin-top: 12px; }
+.pc-tile { border: 1px solid var(--border); border-top: 3px solid var(--grey); border-radius: 12px; padding: 10px 12px; background: var(--surface); }
+.pc-tile.ok { border-top-color: var(--green); } .pc-tile.warn { border-top-color: var(--orange); } .pc-tile.bad { border-top-color: var(--red); }
+.pc-tile.none { background: var(--bg); }
+.pc-tile-h { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-bottom: 4px; }
+.pc-renew { list-style: none; margin: 6px 0 0; padding: 0; font-size: 12px; line-height: 1.6; }
+.pc-renew li span { margin-inline-end: 4px; }
+.pc-renew li.ok { color: var(--green); } .pc-renew li.warn { color: var(--orange); } .pc-renew li.bad { color: var(--red); }
+a.pc-link { color: inherit; text-decoration: none; border-bottom: 1px dashed var(--muted); }
+a.pc-link:hover { color: var(--primary); border-bottom-color: var(--primary); }
+@media (max-width: 760px) { .pc-top { grid-template-columns: 1fr; } }
