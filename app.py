@@ -4060,6 +4060,18 @@ def api_data_quality():
 # ---------------------------------------------------------------------------
 # الخطابات والشهادات (letters.py) — القسم 26
 # ---------------------------------------------------------------------------
+@app.get("/api/employees/<emp_id>/cost")
+@require("employees.view", "sensitive.salary")
+def employee_cost(emp_id):
+    """💰 تكلفة معاملات الموظف من بنود العهد (كل العهد — مش عهد المستخدم بس) — تبويب «التكلفة» في بطاقة الموظف."""
+    with db.session_scope(commit=False) as s:
+        if s.get(M.Employee, emp_id) is None:
+            return err("الموظف غير موجود", 404)
+        if not emp_ok(s, emp_id):
+            return forbidden(OUT_OF_SCOPE)
+        return jsonify(custody.employee_cost(s, emp_id))
+
+
 @app.get("/api/employees/<emp_id>/letter-defaults")
 @require("employees.view", "sensitive.salary")
 def letter_defaults(emp_id):

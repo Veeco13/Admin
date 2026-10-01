@@ -852,6 +852,7 @@ function empCardPrintBody(e, o) {
       <tbody>${permits.map(p => `<tr><td class="txt"><b>${esc(permitLabel(p))}</b></td><td class="num">${esc(p.permitNo || '—')}</td><td class="txt">${esc(projectName(p.projectId)) || '—'}</td>
         <td class="num">${fmtDate(p.issueDate) || '—'}</td><td class="num"><span class="pill ${tier(p.expiryDate)}">${fmtDate(p.expiryDate)}</span></td><td>${esc(daysText(daysUntil(p.expiryDate)))}</td></tr>`).join('')}</tbody></table>`) : ''}
     ${vehicles.length ? sec(`🚗 ${esc(t('السيارات'))}`, empKvTable(vehicles.map(v => ['رقم اللوحة', `<span class="num">${esc(v.plate)}</span> <small class="ec-sub">${esc(v.model || '')}</small>`]))) : ''}
+    ${o.cost ? sec(`💰 ${esc(t('تكلفة المعاملات (من العهد)'))}`, empCostTable(o.cost, true)) : ''}
     ${o.notes && e.notes ? sec(`📝 ${esc(t('ملاحظات'))}`, `<div style="border:1px solid var(--line);padding:6px 8px;white-space:pre-line">${esc(e.notes)}</div>`) : ''}`;
 }
 function printEmployeeCard(e, o = {}) {
@@ -859,25 +860,65 @@ function printEmployeeCard(e, o = {}) {
   openReportWindow({ title: t('بطاقة بيانات موظف'), subtitle: name, company: IDX.company[empCompanyId(e)] || null, landscape: false,
     meta: [[t('الرقم المدني'), e.id]], body: empCardPrintBody(e, o) });
 }
-/** قبل الطباعة: اللغة، والتصاريح والملاحظات، والبيانات المالية (مقفولة افتراضيًا — للي معاه الصلاحية بس) */
+/** قبل الطباعة: اللغة، والتصاريح والملاحظات، والبيانات المالية وتكلفة المعاملات (مقفولين افتراضيًا — للي معاه الصلاحية بس) */
 function openEmployeeCardPrint(e) {
   const money = can('sensitive.salary') || can('sensitive.bank');
+  const costP = can('sensitive.salary') ? empCost(e.id).catch(() => null) : null;     // بتتجهّز من دلوقتي ← نافذة الطباعة تفتح على طول
   const hasPermits = permitsOf('employee', e.id).some(permitCurrent);
   const m = openModal({
     title: `🖨️ ${t('طباعة بطاقة الموظف')}`, size: 'narrow',
     body: `<div class="form"><label class="full">${t('لغة الطباعة')}<select name="lang">${opt('ar', 'العربية', LANG !== 'en')}${opt('en', 'English', LANG === 'en')}</select></label>
       ${hasPermits ? `<label class="check full"><input type="checkbox" name="permits" checked> 🪪 ${t('التصاريح')}</label>` : ''}
       ${e.notes ? `<label class="check full"><input type="checkbox" name="notes"> 📝 ${t('الملاحظات')}</label>` : ''}
-      ${money ? `<label class="check full"><input type="checkbox" name="money"> 💰 ${t('البيانات المالية (الراتب والبنك)')}</label>` : ''}</div>
+      ${money ? `<label class="check full"><input type="checkbox" name="money"> 💰 ${t('البيانات المالية (الراتب والبنك)')}</label>` : ''}
+      ${costP ? `<label class="check full"><input type="checkbox" name="cost"> 🧾 ${t('تكلفة المعاملات (من العهد)')}</label>` : ''}</div>
       <div class="small muted" style="margin-top:8px">${t('A4 طولي — معاينة وطباعة بس.')}</div>`,
     foot: `<button class="btn primary" data-go>🖨️ ${t('معاينة وطباعة')}</button><button class="btn" data-close>${t('إلغاء')}</button>`,
   });
-  $('[data-go]', m.el).onclick = () => {
+  $('[data-go]', m.el).onclick = async () => {
     const d = formValues(m.el);
+    const cost = d.cost && costP ? await costP : null;
     m.close();
-    withLang(d.lang, () => printEmployeeCard(e, { permits: !!d.permits, notes: !!d.notes, money: money && !!d.money }));
-    printLog(`${t('بطاقة الموظف')}: ${e.name} (${e.id})${d.money ? ' — ' + t('مع البيانات المالية') : ''}`, 'employee');
+    withLang(d.lang, () => printEmployeeCard(e, { permits: !!d.permits, notes: !!d.notes, money: money && !!d.money, cost }));
+    printLog(`${t('بطاقة الموظف')}: ${e.name} (${e.id})${d.money ? ' — ' + t('مع البيانات المالية') : ''}${cost ? ' — ' + t('مع تكلفة المعاملات') : ''}`, 'employee');
   };
+}
+
+/* ----- 💰 تكلفة معاملات الموظف: البنود المنفّذة من كل العهد (custody.employee_cost) — تبويب في البطاقة، وطباعتها اختياري ----- */
+const EMP_COST = {};                               // الرقم المدني ← {state, data}: بتتجاب مرة مع كل تحميل للحالة
+async function empCost(id) {
+  const c = EMP_COST[id];
+  if (c && c.state === STATE) return c.data;
+  const data = await api('GET', `/api/employees/${encodeURIComponent(id)}/cost`);
+  EMP_COST[id] = { state: STATE, data };
+  return data;
+}
+/** جدول البنود + الإجمالي (print ← جدول التقرير) */
+function empCostTable(c, print) {
+  if (!c.lines.length) return `<div class="${print ? 'ec-none' : 'empty'}">${t('مفيش معاملات منفّذة من العهد للموظف ده')}</div>`;
+  const years = Object.entries(c.byYear).sort((a, b) => b[0].localeCompare(a[0]));
+  const st = x => x.closed ? t('مقفول') : t('تم — لسه ماتقفلش');
+  return `<table class="${print ? 'rpt' : 'data'}"><thead><tr><th>${t('التاريخ')}</th><th>${t('العهدة')}</th><th class="txt">${t('المعاملة')}</th><th class="txt">${t('البند')}</th>
+      <th class="txt">${t('الجهة')}</th><th>${t('المبلغ')}</th><th>${t('الحالة')}</th></tr></thead><tbody>
+    ${c.lines.map((x, i) => `<tr class="${print && i % 2 ? 'z' : ''}"><td class="num nowrap">${fmtDate(x.date) || '—'}</td><td class="num nowrap">${esc(x.custodyNo)}</td><td class="txt">${esc(custodyTypeLabel(x.txType))}</td>
+      <td class="txt">${esc(LANG === 'en' && x.itemEn ? x.itemEn : x.item || '')}</td><td class="txt">${esc(x.authority || '')}</td><td class="num nowrap">${fmtMoney(x.amount)}</td>
+      <td>${print ? esc(st(x)) : `<span class="chip" style="background:var(--${x.closed ? 'green' : 'orange'}-soft);color:var(--${x.closed ? 'green' : 'orange'})">${esc(st(x))}</span>`}</td></tr>`).join('')}
+    </tbody><tfoot><tr><td colspan="5">${t('الإجمالي')} (${c.lines.length} ${t('بند')})${years.length > 1 ? ` — ${years.map(([y, v]) => `${esc(y)}: ${fmtMoney(v)}`).join(' · ')}` : ''}</td>
+      <td class="num nowrap"><b>${fmtMoney(c.total)}</b></td><td></td></tr></tfoot></table>`;
+}
+function empCostHtml(c) {
+  const year = String(new Date().getFullYear());
+  const tile = (v, l, col) => `<div class="card cu-kpi"${col ? ` style="border-top:3px solid var(--${col})"` : ''}><b class="num">${esc(String(v))}</b><span>${esc(l)}</span></div>`;
+  return `<div class="cu-kpis">${tile(fmtMoney(c.byYear[year] || 0), `${t('السنة دي')} (${year})`, 'blue')}${tile(fmtMoney(c.total), t('على طول خدمته'), 'green')}${tile(c.lines.length, t('بند منفّذ'))}
+      ${c.pendingCount ? tile(fmtMoney(c.pending), `${t('لسه في عهد مفتوحة')} (${c.pendingCount} ${t('بند')})`, 'orange') : ''}</div>
+    <div class="small muted" style="margin:8px 0">${t('الرسوم الحكومية اللي اتنفّذت للموظف من كل العهد (تجديدات، رسوم، نقل) — من غير الدعم الإداري. بتتحسب لوحدها من بنود العهد، ومابتتطبعش غير لو اخترتها وقت الطباعة.')}</div>
+    <div class="table-wrap">${empCostTable(c, false)}</div>`;
+}
+async function loadEmpCost(id, root) {
+  const box = $('#emp-cost', root);
+  if (!box) return;
+  try { box.innerHTML = empCostHtml(await empCost(id)); }
+  catch (e) { box.innerHTML = `<div class="notice err">${esc(e.message)}</div>`; }
 }
 
 /** نافذة فرعية من بطاقة الموظف (التعديل، الحالة، المرحلة، الخطابات، التوقيع…): لما كل النوافذ تتقفل (بعد الحفظ أو
@@ -918,13 +959,14 @@ async function openProfileCard(id, tab = 'info') {
         <button data-tab="info" class="${tab === 'info' ? 'active' : ''}">البيانات</button>
         <button data-tab="docs" class="${tab === 'docs' ? 'active' : ''}">المستندات والتواريخ</button>
         <button data-tab="files" data-p="sensitive.documents" class="${tab === 'files' ? 'active' : ''}">المرفقات</button>
+        <button data-tab="cost" data-p="sensitive.salary" class="${tab === 'cost' ? 'active' : ''}">💰 ${t('التكلفة')}</button>
         <button data-tab="moves" class="${tab === 'moves' ? 'active' : ''}">🏢 ${t('التحركات')} (${moves.length})</button>
         <button data-tab="timeline" class="${tab === 'timeline' ? 'active' : ''}">السجل (${tl.length})</button>
       </div>
       <div data-pane="info" ${tab !== 'info' ? 'hidden' : ''}>${empCardInfoHtml(e)}</div>
       <div data-pane="docs" ${tab !== 'docs' ? 'hidden' : ''}>
         <table class="data"><thead><tr><th>المستند</th><th>الرقم</th><th>تاريخ الانتهاء</th><th>المتبقي</th><th class="write-only" data-p="employees.edit"></th></tr></thead><tbody>
-        ${EMP_DATE_FIELDS.filter(f => !f.driverOnly || e.isDriver).map(f => `<tr><td>${esc(t(f.label))}</td><td>${f.key === 'passportExp' ? esc(e.passportNo || '') : ''}</td><td>${datePill(e[f.key])}</td><td class="small">${esc(daysText(daysUntil(e[f.key])))}</td>
+        ${EMP_DATE_FIELDS.filter(f => (!f.driverOnly || e.isDriver) && (f.key !== 'residencyExp' || empNeedsResidency(e) || e.residencyExp)).map(f => `<tr><td>${esc(t(f.label))}</td><td>${f.key === 'passportExp' ? esc(e.passportNo || '') : ''}</td><td>${datePill(e[f.key])}</td><td class="small">${esc(daysText(daysUntil(e[f.key])))}</td>
           <td class="write-only" data-p="employees.edit"><button class="btn sm" data-renew="${f.key}">🔄 ${t('تجديد سريع')}</button></td></tr>`).join('')}
         </tbody></table>
         <div data-p="sensitive.documents"><h4>✍️ ${t('التوقيع')}</h4>
@@ -936,6 +978,7 @@ async function openProfileCard(id, tab = 'info') {
       </div>
       <div data-pane="files" ${tab !== 'files' ? 'hidden' : ''}><div id="emp-files"><div class="muted">${t('جاري التحميل…')}</div></div>
         <button class="btn write-only" data-p="employees.edit sensitive.documents" id="emp-upload" style="margin-top:10px">📎 ${t('رفع مرفق')}</button></div>
+      <div data-pane="cost" ${tab !== 'cost' ? 'hidden' : ''}><div id="emp-cost"><div class="muted">${t('جاري التحميل…')}</div></div></div>
       <div data-pane="moves" ${tab !== 'moves' ? 'hidden' : ''}>
         <div class="kv">${field('مسجّل على', (e.affiliations || []).map((a, i) => `${esc(companyName(a.companyId) || '—')}${a.projectId ? ` <span class="small muted">(${esc(projectName(a.projectId))})</span>` : ''}${i ? ` <span class="chip">${t('إضافي')}</span>` : ''}`).join('<br>'))}
           ${field('مركز التكلفة', esc(e.costCenter))}${field('شغال فعليًا في', esc(companyName(ccCo) || (e.costCenter ? t('غير محددة') : '')))}</div>
@@ -952,8 +995,10 @@ async function openProfileCard(id, tab = 'info') {
     $$('[data-tab]', m.el).forEach(x => x.classList.toggle('active', x === b));
     $$('[data-pane]', m.el).forEach(p => p.hidden = p.dataset.pane !== b.dataset.tab);
     if (b.dataset.tab === 'files') loadDriveFiles(e.id, m.el);
+    if (b.dataset.tab === 'cost') loadEmpCost(e.id, m.el);
   });
   if (tab === 'files' && can('sensitive.documents')) loadDriveFiles(e.id, m.el);
+  if (tab === 'cost' && can('sensitive.salary')) loadEmpCost(e.id, m.el);
   m.el.dataset.card = e.id;
   const curTab = () => ($('[data-tab].active', m.el) || {}).dataset?.tab || tab;
   // التعديل والنوافذ التانية بتفتح مكان البطاقة، ولما تتقفل البطاقة بترجع (مش بتقفل وخلاص)

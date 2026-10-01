@@ -549,6 +549,32 @@ def reopen(s, c, when):
     return n, None
 
 
+def employee_cost(s, emp_id):
+    """💰 تكلفة معاملات الموظف (بطاقة الموظف): البنود المنفّذة («تم») في كل العهد غير الملغاة — رسوم حكومية بس، من غير
+    الدعم الإداري. التاريخ = تاريخ التقفيل (زي لوحة المصروفات)، ولو لسه ماتقفلش ← يوم التنفيذ. والبنود اللي لسه مفتوحة في عهد شغالة بتتحسب «متوقع» بس."""
+    lines, pending, pending_n, custs = [], 0.0, 0, {}
+    for ln in s.scalars(select(M.CustodyLine).where(M.CustodyLine.personKind == "employee", M.CustodyLine.personId == emp_id)):
+        if ln.custodyId not in custs:
+            custs[ln.custodyId] = s.get(M.Custody, ln.custodyId)
+        c = custs[ln.custodyId]
+        if c is None or c.status == "cancelled":
+            continue
+        if not ln.done:
+            pending, pending_n = pending + amount(ln), pending_n + 1
+            continue
+        when = ln.closedDate or ln.doneDate or c.disbursedDate or c.requestDate
+        lines.append({"date": db.ser(when), "custodyId": c.id, "custodyNo": custody_no(c), "txType": c.txType, "item": ln.itemName,
+                      "itemEn": ln.itemNameEn, "authority": ln.authority, "amount": amount(ln), "receiptNo": ln.receiptNo,
+                      "closed": bool(ln.closedDate)})
+    lines.sort(key=lambda x: (x["date"] or "", x["custodyNo"]), reverse=True)
+    by_year = {}
+    for x in lines:
+        y = (x["date"] or "")[:4] or "—"
+        by_year[y] = round(by_year.get(y, 0) + x["amount"], 3)
+    return {"lines": lines, "total": round(sum(x["amount"] for x in lines), 3), "byYear": by_year,
+            "pending": round(pending, 3), "pendingCount": pending_n}
+
+
 def expenses(s, ctx):
     """لوحة المصروفات الحكومية (custody.expenses): فواتير **كل** العهد (مش عهد المستخدم بس) اللي مركز تكلفتها / شركتها في
     نطاقه، وبنودها المقفولة (للتقسيم بالجهة والبند)، والرصيد اللي لسه مع المستلمين. التجميع والفلاتر في الواجهة."""
