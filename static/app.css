@@ -521,6 +521,13 @@ table.ex-matrix td.clickable:hover { background: var(--primary-soft); }
 table.ex-matrix td.txt, table.ex-matrix th.txt { text-align: start; }
 table.ex-matrix tr.ex-co td { background: var(--surface-2); font-weight: 600; }
 table.ex-matrix td.ex-cc { padding-inline-start: 26px; }
+/* مسار «إنهاء خدمة — عمالة وطنية»: الخطوات بالترتيب */
+.kw-steps { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.kw-step { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; }
+.kw-step.on { border-color: var(--primary); background: var(--primary-soft); }
+.kw-step.done { background: var(--green-soft); }
+.kw-step.lock { opacity: .6; }
+.kw-n { font-size: 18px; line-height: 1.3; }
 /* تقرير جودة البيانات */
 .dq{border:1px solid var(--border);border-radius:8px;margin:6px 0;padding:6px 10px}.dq summary{cursor:pointer;padding:2px 0}.dq table{margin-top:6px}
 /* عهدة التجديد: الانتهاء الجديد (مطلوب قبل التقفيل) */

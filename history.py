@@ -19,6 +19,9 @@ GOV_STAGE_LABELS = {
     "awaiting_contract": "بانتظار عقد العمل", "awaiting_work_permit": "بانتظار إذن العمل",
     "health_insurance": "التأمين الصحي", "residency": "الإقامة", "civil_id": "البطاقة المدنية",
     "renewed": "تم التجديد", "awaiting_cancellation": "بانتظار إلغاء الإقامة وإذن العمل",
+    # مسار «إنهاء خدمة — عمالة وطنية» (app.KW_END_STAGES): المرحلة = الخطوة الشغالة دلوقتي
+    "kw_end_form": "إنهاء خدمة: طباعة استمارة 103 والتوقيع عليها", "kw_end_pifss": "إنهاء خدمة: إلغاء الاشتراك في التأمينات الاجتماعية",
+    "kw_end_permit": "إنهاء خدمة: إلغاء إذن العمل", "kw_end_done": "إنهاء خدمة: اكتملت الإجراءات",
 }
 EMP_STATUS_LABELS = {"active": "في الخدمة", "warning": "في فترة الإنذار", "resigned": "مستقيل", "terminated": "إنهاء خدمات",
                      "pending_completion": "قيد الاستكمال"}

@@ -666,6 +666,8 @@ def save_employee(orig_id):
                     db.rename_employee(s, orig_id, new_id)
                     e = s.get(M.Employee, new_id)
                 old = db.to_dict(e)
+                if e.govStage in KW_END_STAGES or data.get("govStage") in KW_END_STAGES:
+                    data.pop("govStage", None)             # مسار إنهاء خدمة العمالة الوطنية بيتغيّر من نافذته بس
                 db.apply(e, data)
                 new = db.to_dict(e)
                 if old.get("govStage") != new.get("govStage"):
@@ -723,6 +725,37 @@ def end_type_for_reason(reason):
     return "resigned" if "استقال" in (reason or "") else "terminated"
 
 
+# مسار «إنهاء خدمة — عمالة وطنية» (الكويتي والخليجي — اللي مالهمش إقامة): الخطوات بالترتيب، والمرحلة الشغالة في
+# employee.govStage (نفس KW_END_STAGES في static/js/core.js). دعم العمالة بيقف لوحده بعد إلغاء إذن العمل ← مالوش خطوة.
+KW_END_STAGES = ("kw_end_form", "kw_end_pifss", "kw_end_permit", "kw_end_done")
+KW_END_STEPS = {"kw_end_form": "طباعة استمارة 103 (إنهاء خدمة) والتوقيع عليها", "kw_end_pifss": "إلغاء الاشتراك في التأمينات الاجتماعية",
+                "kw_end_permit": "إلغاء إذن العمل"}
+LEAVING_STATUSES = ENDED_STATUSES + ("warning",)
+
+
+def _kw_end_applies(e):
+    return not pdf_forms.needs_residency(e.nationality)
+
+
+def _kw_end_set(s, e, stage, label, user, tl_type="gov_stage"):
+    e.govStage, e.govStageNote, e.lastUpdated, e.lastUpdatedBy = stage, None, db.now(), user
+    if stage == KW_END_STAGES[0]:
+        e.govStageStartDate = datetime.now().date()
+    db.push_timeline(s, e.id, tl_type, label, user)
+
+
+def _kw_end_sync(s, e, user):
+    """الحالة اتغيّرت: فترة إنذار / انتهاء خدمة ← المسار بيتفتح لوحده. رجوع للخدمة ← بيتلغي."""
+    if not _kw_end_applies(e):
+        return
+    leaving = (e.employmentStatus or "active") in LEAVING_STATUSES
+    if leaving and e.govStage not in KW_END_STAGES:
+        _kw_end_set(s, e, KW_END_STAGES[0], "إنهاء خدمة — عمالة وطنية: المسار اتفتح — (1) استمارة 103 والتوقيع ← (2) إلغاء الاشتراك في "
+                                             "التأمينات ← (3) إلغاء إذن العمل", user)
+    elif not leaving and e.govStage in KW_END_STAGES:
+        _kw_end_set(s, e, None, "إنهاء خدمة — عمالة وطنية: المسار اتلغى (رجع للخدمة)", user)
+
+
 def _set_employment_status(s, e, status, end_date=None, end_type=None, reason=None, note=None, user=None, source=None):
     """بيغيّر حالة الموظف ويسجّل في سجله. مستقيل / إنهاء خدمات: آخر يوم عمل لازم. في فترة الإنذار: النوع (مستقيل / إنهاء
     خدمات) وآخر يوم لازمين — بعد اليوم ده بيتحوّل لوحده (_finish_notice_periods)، ولو عدّى خلاص بيتحوّل على طول.
@@ -758,6 +791,7 @@ def _set_employment_status(s, e, status, end_date=None, end_type=None, reason=No
         + (f" — {note.strip()}" if note and note.strip() else "") + (f" ({source})" if source else "")
     db.push_timeline(s, e.id, "edit", label, user)
     db.log_audit(s, "employee_edit", f"{e.name} ({e.id}): {label}", user)
+    _kw_end_sync(s, e, user)                       # العمالة الوطنية: مسار إنهاء الخدمة بيتفتح / يتلغي مع الحالة
     return None
 
 
@@ -891,7 +925,7 @@ def renew_employees():
             setattr(e, field, new_date)
             e.lastUpdated, e.lastUpdatedBy = db.now(), user
             custody.fill_open_expiry(s, eid, field, new_date)      # بند التجديد المفتوح ياخد التاريخ الجديد
-            if d.get("setRenewedStage"):
+            if d.get("setRenewedStage") and e.govStage not in KW_END_STAGES:
                 e.govStage, e.govStageNote = "renewed", None
                 custody.sync_person(s, "employee", eid, "renewed")
             db.push_timeline(s, eid, "renew", f"تجديد {lab}: {old or '—'} ← {new_date.isoformat()}", user)
@@ -905,6 +939,51 @@ def renew_employees():
     return jsonify({"ok": True, "count": n, "unchanged": same})
 
 
+@app.post("/api/employees/<emp_id>/kw-end")
+@require("employees.edit")
+def kw_end_step(emp_id):
+    """مسار «إنهاء خدمة — عمالة وطنية»: {action: start | done | back, date, note}. الخطوات بالترتيب: الخطوة الشغالة بس
+    اللي بتتعلّم «تم» (فإلغاء إذن العمل مقفول لحد ما إلغاء التأمينات يخلص). كل خطوة بتتسجّل في سجل الموظف بنوعها."""
+    d = body()
+    action, today = d.get("action"), datetime.now().date()
+    with db.session_scope() as s:
+        e = s.get(M.Employee, emp_id)
+        if not e:
+            return err("الموظف غير موجود", 404)
+        if not emp_ok(s, emp_id):
+            return forbidden(OUT_OF_SCOPE)
+        if not _kw_end_applies(e):
+            return err("المسار ده للعمالة الوطنية والخليجيين بس")
+        cur = e.govStage if e.govStage in KW_END_STAGES else None
+        if action == "start":
+            if cur:
+                return err("المسار مفتوح بالفعل")
+            if (e.employmentStatus or "active") not in LEAVING_STATUSES:
+                return err("المسار بيتفتح لما الحالة تبقى «في فترة الإنذار» أو «مستقيل» أو «إنهاء خدمات»")
+            _kw_end_sync(s, e, uname())
+        elif action == "done":
+            if not cur or cur == KW_END_STAGES[-1]:
+                return err("مفيش خطوة مفتوحة في المسار")
+            when = db.parse_date(d.get("date")) or today
+            if when > today:
+                return err("التاريخ ده لسه ماجاش")
+            note = (d.get("note") or "").strip()
+            label = f"إنهاء خدمة — تم: {KW_END_STEPS[cur]} (بتاريخ {when.day:02d}/{when.month:02d}/{when.year})" + (f" — {note}" if note else "")
+            nxt = KW_END_STAGES[KW_END_STAGES.index(cur) + 1]
+            _kw_end_set(s, e, nxt, label, uname(), tl_type=cur)
+            if nxt == KW_END_STAGES[-1]:
+                db.push_timeline(s, e.id, "gov_stage", "إنهاء خدمة — عمالة وطنية: اكتملت الإجراءات (دعم العمالة بيقف لوحده بعد إلغاء إذن العمل)", uname())
+        elif action == "back":
+            if not cur or cur == KW_END_STAGES[0]:
+                return err("مفيش خطوة يتراجع عنها")
+            prev = KW_END_STAGES[KW_END_STAGES.index(cur) - 1]
+            _kw_end_set(s, e, prev, f"إنهاء خدمة — تراجع عن: {KW_END_STEPS[prev]}", uname())
+        else:
+            return err("إجراء غير معروف")
+        db.log_audit(s, "employee_edit", f"إنهاء خدمة (عمالة وطنية) — {e.name} ({emp_id}): {history.value_label('govStage', e.govStage) or '—'}", uname())
+        return jsonify({"ok": True, "govStage": e.govStage})
+
+
 @app.post("/api/employees/<emp_id>/gov-stage")
 @require("employees.edit")
 def set_gov_stage(emp_id):
@@ -915,6 +994,8 @@ def set_gov_stage(emp_id):
             return err("غير موجود", 404)
         if not emp_ok(s, emp_id):
             return forbidden(OUT_OF_SCOPE)
+        if "govStage" in d and (d.get("govStage") or None) != e.govStage and (e.govStage in KW_END_STAGES or d.get("govStage") in KW_END_STAGES):
+            return err("مسار «إنهاء خدمة — عمالة وطنية» بيتغيّر من نافذته (الخطوات بالترتيب)")
         keys = [k for k in ("govStage", "govStageNote", "govStageResponsible", "govStageStartDate", "govTransactionCost")
                 if k in d]
         before = [db.ser(getattr(e, k)) for k in keys]
@@ -1156,8 +1237,9 @@ def employee_official_form(emp_id, form):
             return forbidden(OUT_OF_SCOPE)
         if form == "residency" and not pdf_forms.needs_residency(emp.get("nationality")):
             return err("المواطنين الكويتيين ومواطني الخليج مالهمش إقامة")
-        if pdf_forms.FORMS[form].get("kuwaiti") and not pdf_forms.is_kuwaiti(emp.get("nationality")):
-            return err("النموذج ده للعمالة الوطنية بس (الكويتيين ومعاملة كويتية)")
+        nat = emp.get("nationality")
+        if pdf_forms.FORMS[form].get("kuwaiti") and not (pdf_forms.is_kuwaiti(nat) or (form == "pifss103" and not pdf_forms.needs_residency(nat))):
+            return err("النموذج ده للعمالة الوطنية بس (الكويتيين ومعاملة كويتية)")     # استمارة 103 للخليجي كمان
         if not me().can("sensitive.salary"):
             emp["salary"] = None                    # الراتب في استمارة 103 للي معاه صلاحية الرواتب بس
         cid = next((a["companyId"] for a in emp.get("affiliations") or [] if a.get("companyId")), None)
@@ -1177,6 +1259,11 @@ def employee_official_form(emp_id, form):
                 ch, msg = approvals.status_changes(e_obj, "warning", end, end_type_for_reason(reason), reason)
                 if ch and not msg:
                     approvals.request(s, e_obj, "service_end", ch, me(), "استمارة 103")
+        if form == "pifss103" and out[2] == "إنهاء خدمة" and me().can("employees.edit"):
+            e_obj = s.get(M.Employee, emp_id)       # الاستمارة اتطبعت ← أول خطوة في مسار إنهاء الخدمة «تم»
+            if e_obj.govStage == KW_END_STAGES[0]:
+                _kw_end_set(s, e_obj, KW_END_STAGES[1], f"إنهاء خدمة — تم: {KW_END_STEPS[KW_END_STAGES[0]]} (اتطبعت من السيستم)", uname(),
+                            tl_type=KW_END_STAGES[0])
     return _send_pdf(out[0], out[1])
 
 

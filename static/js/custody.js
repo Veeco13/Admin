@@ -453,7 +453,7 @@ function openRenewalPlanModal(period = 'next') {
   const m = openModal({ title: '📅 ' + t('خطة التجديدات'), size: 'wide', body: '<div id="rp"></div>',
     foot: '<div id="rp-f" class="row" style="width:100%;gap:8px;flex-wrap:wrap"></div>' });
   const E = m.el;
-  const stageLabel = s => t((GOV_STAGES.find(g => g.id === s) || {}).label || '');
+  const stageLabel = s => t((govStageInfo(s) || {}).label || '');
   const draw = () => {
     const rows = renewalPlan(P), ok = r => !r.busyOpen && !off.has(r.e.id), picked = rows.filter(ok);
     const groups = new Map();

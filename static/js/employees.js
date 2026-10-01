@@ -73,7 +73,7 @@ function empMsOptions(key, companies = []) {
     .map(p => ({ v: p.id, l: projectName(p.id) + (companies.length === 1 ? '' : ' — ' + companyName(p.companyId)) }))];
   if (key === 'agency') return [{ v: '__none', l: t('بدون وكالة') }, ...(STATE.agencies || []).map(a => ({ v: a.id, l: agencyName(a) }))];
   if (key === 'status') return Object.entries(EMP_STATUS_LABELS).map(([k, v]) => ({ v: k, l: LANG === 'en' ? v.en : v.ar }));
-  if (key === 'stage') return [{ v: '__none', l: t('بدون معاملة') }, { v: '__note', l: t('عليها ملاحظة تعطّل') }, ...GOV_STAGES.map(g => ({ v: g.id, l: g.dot + ' ' + t(g.label) }))];
+  if (key === 'stage') return [{ v: '__none', l: t('بدون معاملة') }, { v: '__note', l: t('عليها ملاحظة تعطّل') }, ...[...GOV_STAGES, ...KW_END_STAGES].map(g => ({ v: g.id, l: g.dot + ' ' + t(g.label) }))];
   if (key === 'nationality') return counted(e => e.nationality, natLabel);
   if (key === 'profession') return counted(e => e.profession, profLabel);
   if (key === 'costCenter') return (STATE.costCenters || []).map(c => ({ v: c.name, l: ccLabel(c.name) }));
@@ -952,6 +952,7 @@ async function openProfileCard(id, tab = 'info') {
     title: esc(t('بطاقة الموظف')), size: 'wide',
     body: `${empCardHeadHtml(e)}
       ${empEndNotice(e)}
+      ${kwEndBannerHtml(e)}
       ${approvalsBannerHtml(e.id)}
       ${e.govStageNote ? `<div class="notice warn" style="margin-top:10px">⚠️ ${esc(e.govStageNote)}</div>` : ''}
       ${e.transferNote ? `<div class="notice" style="margin-top:10px">ℹ️ ${esc(e.transferNote)}</div>` : ''}
@@ -1014,7 +1015,8 @@ async function openProfileCard(id, tab = 'info') {
     const dm = b.closest('details');
     if (dm) dm.open = false;
     if (a === 'edit') sub(() => openEmployeeModal(e.id));
-    else if (a === 'stage') sub(() => openGovStageModal(e.id));
+    else if (a === 'stage') sub(() => (kwEndStep(e) >= 0 ? openKwEndModal(e.id) : openGovStageModal(e.id)));
+    else if (a === 'kwend') sub(() => openKwEndModal(e.id));
     else if (a === 'status') sub(() => openEmployeeStatusModal(e.id));
     else if (a === 'signature') sub(() => openSignatureModal(e.id, e.name, canAll('employees.edit sensitive.documents')));
     else if (a === 'contract') { m.close(); VIEW_ARGS = { emp: e.id }; setView('contract'); }
@@ -1124,7 +1126,7 @@ function missingDataKit(fields, kind, rec) {
   };
 }
 /** form = residency | driving | pifss103 | social، kind = employee | candidate */
-function openOfficialFormModal(form, kind, id) {
+function openOfficialFormModal(form, kind, id, { action = '' } = {}) {
   const spec = OFFICIAL_FORMS[form];
   const rec = kind === 'employee' ? IDX.employee[id] : IDX.candidate[id];
   if (!rec) return toast('غير موجود', 'err');
@@ -1133,7 +1135,7 @@ function openOfficialFormModal(form, kind, id) {
   const m = openModal({
     title: esc(t(spec.title)) + ': ' + esc(rec.name), size: kit.missing.length > 3 || spec.extras ? '' : 'narrow',
     body: `<div class="form" id="of-form">
-        <label class="full">${t('نوع الإجراء')}<select name="__action">${spec.actions.map(x => opt(x, t(x), x === spec.action)).join('')}</select></label>
+        <label class="full">${t('نوع الإجراء')}<select name="__action">${spec.actions.map(x => opt(x, t(x), x === (action || spec.action))).join('')}</select></label>
         ${extras}${kit.html()}</div>${kit.notice()}${KUWAITI_DATALISTS}
       <div class="small muted" style="margin-top:6px">${t('أي خانة تانية فاضية تقدر تكتبها في النموذج نفسه قبل الطباعة.')}</div>`,
     foot: `<button class="btn primary" data-go>📄 ${t('حفظ وعرض النموذج')}</button><span class="spacer"></span><button class="btn" data-close>إلغاء</button>`,
@@ -1166,7 +1168,7 @@ function openOfficialFormModal(form, kind, id) {
         { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, ...extra, ...data }) });
       m.close();
       openPdfPreviewModal(res.blob, res.name, 1);
-      if (action === 'إنهاء خدمة' && extra.setStatus) reload().catch(() => {});   // الحالة الوظيفية اتغيّرت على السيرفر
+      if (action === 'إنهاء خدمة') reload().catch(() => {});   // الحالة الوظيفية / خطوة مسار إنهاء الخدمة اتغيّرت على السيرفر
     } catch (e) { toast(e.message, 'err'); b.disabled = false; }
   };
 }
@@ -1196,6 +1198,54 @@ function empEndNotice(e) {
     return `<div class="notice" style="margin-top:10px">🚪 ${esc(LANG === 'en' ? EMP_STATUS_LABELS[st].en : EMP_STATUS_LABELS[st].ar)}${e.serviceEndDate ? ` — ${t('آخر يوم عمل')} ${fmtDate(e.serviceEndDate)}` : ''}${e.serviceEndReason ? ` — ${esc(t(e.serviceEndReason))}` : ''}</div>`;
   }
   return '';
+}
+/* ---------- 🇰🇼 مسار «إنهاء خدمة — عمالة وطنية» (الكويتي والخليجي): استمارة 103 ← إلغاء التأمينات ← إلغاء إذن العمل ----------
+   بيتفتح لوحده من أول «فترة الإنذار» (app._kw_end_sync)، والخطوات بالترتيب (POST /api/employees/<id>/kw-end). */
+function kwEndBannerHtml(e) {
+  if (!kwEndApplies(e)) return '';
+  const i = kwEndStep(e), leaving = e.employmentStatus === 'warning' || empEnded(e);
+  const btn = l => `<button type="button" class="btn sm" data-a="kwend" style="margin-inline-start:8px">${l}</button>`;
+  if (i >= KW_END_STEPS) return `<div class="notice" style="margin-top:10px;background:var(--green-soft);color:var(--green)">✅ ${t('إنهاء خدمة — عمالة وطنية')}: ${t('اكتملت الإجراءات')}${btn(t('عرض الخطوات'))}</div>`;
+  if (i >= 0) return `<div class="notice err" style="margin-top:10px">🇰🇼 ${t('إنهاء خدمة — عمالة وطنية')}: ${t('الخطوة')} ${i + 1} ${t('من')} ${KW_END_STEPS} — <b>${esc(t(KW_END_STAGES[i].step))}</b>${btn(t('متابعة الخطوات'))}</div>`;
+  return leaving ? `<div class="notice warn write-only" data-p="employees.edit" style="margin-top:10px">🇰🇼 ${t('مسار إنهاء خدمة العمالة الوطنية لسه ماتفتحش للموظف ده')}${btn('▶️ ' + t('فتح المسار'))}</div>` : '';
+}
+function openKwEndModal(id) {
+  const e = IDX.employee[id];
+  if (!e) return toast('الموظف غير موجود', 'err');
+  const cur = kwEndStep(e), tl = STATE.employeeTimeline[e.id] || [];
+  const lastOf = type => tl.filter(x => x.type === type).pop();
+  const info = l => { const i = Math.max(l.lastIndexOf('(بتاريخ'), l.lastIndexOf('(اتطبعت')); return i >= 0 ? l.slice(i) : l; };   // «(بتاريخ …) — ملاحظة» من غير تكرار اسم الخطوة
+  const steps = KW_END_STAGES.slice(0, KW_END_STEPS).map((g, i) => {
+    const done = cur > i, active = cur === i, x = done ? lastOf(g.id) : null;
+    const act = !active ? '' : i === 0
+      ? `<div class="row write-only" data-p="employees.edit" style="gap:6px;flex-wrap:wrap;margin-top:6px"><button class="btn sm primary" data-kw-form>📄 ${t('فتح استمارة 103 (إنهاء خدمة)')}</button>
+          <button class="btn sm" data-kw-done>✅ ${t('اتطبعت واتوقّعت')}</button></div>`
+      : `<div class="row write-only" data-p="employees.edit" style="gap:6px;flex-wrap:wrap;margin-top:6px"><label class="row small" style="gap:6px">${t('تاريخ الإلغاء')}<input type="date" data-kw-date value="${todayISO()}" max="${todayISO()}"></label>
+          <button class="btn sm primary" data-kw-done>✅ ${t('تم الإلغاء')}</button></div>`;
+    return `<div class="kw-step ${done ? 'done' : active ? 'on' : 'lock'}"><span class="kw-n">${done ? '✅' : active ? '▶️' : '🔒'}</span>
+      <div><b>${i + 1}. ${esc(t(g.step))}</b>
+        ${done && x ? `<div class="small muted">${esc(info(x.label))} · ${t('اتسجّل')} ${fmtDateTime(x.date)} · ${esc(x.user || '')}</div>` : ''}
+        ${!done && !active && cur >= 0 ? `<div class="small muted">${t('بعد ما الخطوة اللي قبلها تخلص')}</div>` : ''}
+        ${i === KW_END_STEPS - 1 ? `<div class="small muted">ℹ️ ${t('دعم العمالة بيقف لوحده بعد إلغاء إذن العمل — مالوش إجراء.')}</div>` : ''}${act}</div></div>`;
+  }).join('');
+  const m = openModal({
+    title: `🇰🇼 ${t('إنهاء خدمة — عمالة وطنية')} — ${esc(e.name)}`,
+    body: `${empEndNotice(e)}
+      ${cur < 0 ? `<div class="notice warn" style="margin-top:10px">${t('المسار لسه ماتفتحش. بيتفتح لوحده لما الحالة تبقى «في فترة الإنذار» أو «مستقيل» أو «إنهاء خدمات».')}</div>` : ''}
+      ${cur >= KW_END_STEPS ? `<div class="notice" style="margin-top:10px;background:var(--green-soft);color:var(--green)">✅ ${t('اكتملت الإجراءات')}</div>` : ''}
+      <div class="kw-steps">${steps}</div>`,
+    foot: `${cur < 0 ? `<button class="btn primary write-only" data-p="employees.edit" data-kw-start>▶️ ${t('فتح المسار')}</button>` : ''}
+      ${cur > 0 ? `<button class="btn ghost write-only" data-p="employees.edit" data-kw-back>↩️ ${t('تراجع عن آخر خطوة')}</button>` : ''}
+      <span class="spacer"></span><button class="btn" data-close>${t('إغلاق')}</button>`,
+  });
+  const send = async (body, msg) => {
+    try { await persist('POST', `/api/employees/${encodeURIComponent(id)}/kw-end`, body, msg); m.close(); openKwEndModal(id); } catch (_) { /* ظاهر */ }
+  };
+  const on = (sel, fn) => { const b = $(sel, m.el); if (b) b.onclick = fn; };
+  on('[data-kw-start]', () => send({ action: 'start' }, 'تم'));
+  on('[data-kw-back]', async () => { if (await openConfirm(t('تتراجع عن آخر خطوة اتعلّمت «تم»؟'), { okLabel: t('تراجع') })) send({ action: 'back' }, 'تم'); });
+  on('[data-kw-done]', () => send({ action: 'done', date: ($('[data-kw-date]', m.el) || {}).value || todayISO() }, 'تم'));
+  on('[data-kw-form]', () => { m.close(); openOfficialFormModal('pifss103', 'employee', id, { action: 'إنهاء خدمة' }); });
 }
 function openEmployeeStatusModal(id) {
   const e = IDX.employee[id];
@@ -1459,7 +1509,7 @@ function openEmployeeModal(id) {
       <label class="check"><input type="checkbox" name="isDriver" ${e.isDriver ? 'checked' : ''}> 🚚 ${t('سائق')}</label>
       ${dt('drivingLicenseExp', 'انتهاء رخصة القيادة')}
       <h4>المعاملة الحكومية</h4>
-      <label>${t('المرحلة')}<select name="govStage">${opt('', '—', !e.govStage)}${GOV_STAGES.map(g => opt(g.id, g.dot + ' ' + t(g.label), g.id === e.govStage)).join('')}</select></label>
+      <label>${t('المرحلة')}<select name="govStage">${opt('', '—', !e.govStage)}${[...GOV_STAGES, ...KW_END_STAGES.filter(g => g.id === e.govStage)].map(g => opt(g.id, g.dot + ' ' + t(g.label), g.id === e.govStage)).join('')}</select></label>
       ${inp('govStageResponsible', 'المسؤول')}${dt('govStageStartDate', 'تاريخ بدء المعاملة')}${inp('govTransactionCost', 'تكلفة المعاملة', 'number', 'step="0.001" min="0"')}
       <label class="full">${t('ملاحظة تعطّل على المعاملة')}<input name="govStageNote" value="${v('govStageNote')}"></label>
       <label class="full">${t('حالة التحويل')}<input name="transferNote" value="${v('transferNote')}"></label>
