@@ -63,6 +63,18 @@ def main(argv):
             print("جوازات مكررة:", rep["duplicatePassports"] or "لا يوجد")
             print("موظفين بدون شركة/مشروع:", rep["employeesWithoutCompany"])
             print("\n✔ سليمة" if ok else "\n⚠ فيه ملاحظات")
+            # 🩺 الفحص الدوري الكامل (نفس «فحص السيستم» في البرنامج) — قراءة بس
+            import syscheck
+            print("\n== فحص السيستم ==")
+            with db.session_scope(commit=False) as s2:
+                res = syscheck.run(s2)
+            for it in res["items"]:
+                print({"ok": "✅", "warn": "⚠️", "bad": "❌"}[it["status"]], it["title"] + ":", it["detail"])
+                if it["hint"]:
+                    print("     ←", it["hint"])
+            print(f"\nالنتيجة: {res['bad']} مشكلة، {res['warn']} ملاحظة")
+            if res["bad"]:
+                return 2
     elif cmd == "backup":
         print("اتحفظت في:", db.write_backup(args[0] if args else None))
     elif cmd == "restore":

@@ -39,6 +39,7 @@ import docx_engine
 import history
 import importer
 import import_extra
+import syscheck
 import lunx_restore
 import models as M
 import perms
@@ -426,6 +427,10 @@ def api_state():
     except Exception as e:
         app.logger.warning("trash purge failed: %s", e)
     try:
+        syscheck.kick(data_quality)      # 🩺 فحص السيستم الأسبوعي — في الخلفية
+    except Exception as e:
+        app.logger.warning("system check failed: %s", e)
+    try:
         with db.session_scope() as s:
             _finish_notice_periods(s)    # فترة الإنذار خلصت ← مستقيل / إنهاء خدمات
     except Exception as e:
@@ -438,6 +443,7 @@ def api_state():
         state["valueTranslations"] = value_i18n.merged(s)       # الجنسيات والمهن للتقارير الإنجليزية
         state["exportPasswordSet"] = bool(u.isAdmin and db.get_meta(s, EXPORT_KEY))
         state["backupStatus"] = backup.status(s) if u.isAdmin else None      # تنبيه لو النسخة التلقائية وقفت
+        state["sysCheck"] = syscheck.summary(s) if u.isAdmin else None       # ❌ الفحص الدوري ← في الجرس
         state["approvals"] = approvals.visible(s, u, emp_ok)                # طلبات الموافقة (المستني + اللي اتقرر قريب)
         seen = {e["id"] for e in state.get("employees") or []}
         state["renewing"] = {k: v for k, v in custody.renewing(s).items() if k in seen}   # «🔄 قيد التجديد» في التنبيهات
@@ -3951,6 +3957,30 @@ def data_quality(s):
     if not db.get_meta(s, EXPORT_KEY):
         add("export_pw", "كلمة سر التصدير لسه ماتحددتش", "medium", [{"kind": "system", "id": "exportpw", "label": "كلمة سر التصدير", "detail": "تصدير CSV مقفول لحد ما تتحدد"}])
     return out
+
+
+@app.get("/api/expenses")
+@require("custody.view", "custody.expenses")
+def api_expenses():
+    """لوحة المصروفات الحكومية: الفواتير وبنودها المقفولة والرصيد مع المستلمين (كل العهد في نطاق المستخدم)."""
+    with db.session_scope(commit=False) as s:
+        return jsonify(custody.expenses(s, me()))
+
+
+@app.get("/api/system-check")
+@app.post("/api/system-check")
+@admin_required
+def api_system_check():
+    """🩺 فحص السيستم: GET ← آخر نتيجة (أو فحص جديد لو مفيش)، POST ← فحص دلوقتي. قراءة بس — مابيصلّحش حاجة."""
+    if request.method == "GET":
+        with db.session_scope(commit=False) as s:
+            r = syscheck.last(s)
+        if r:
+            return jsonify(r)
+    r = syscheck.run_and_save(data_quality)
+    with db.session_scope() as s:
+        db.log_audit(s, "system_check", f"فحص السيستم: {r['bad']} مشكلة، {r['warn']} ملاحظة", uname())
+    return jsonify(r)
 
 
 @app.get("/api/data-quality")

@@ -35,12 +35,12 @@ function dbCard(cls, title, body, { sub = '', link = '', linkId = '', tools = ''
   return `<section class="card db-card ${cls}"><div class="db-card-h"><div><h3>${esc(t(title))}</h3>${sub ? `<div class="db-sub">${sub}</div>` : ''}</div>
     <span class="spacer"></span>${tools}${link ? `<a href="#" class="db-link" id="${linkId}">${esc(t(link))} ${dbArrow()}</a>` : ''}</div>${body}</section>`;
 }
-/** أعمدة أفقية لسلسلة واحدة: القيمة عند طرف العمود. rows = [{label, n, attrs, tip}] */
+/** أعمدة أفقية لسلسلة واحدة: القيمة عند طرف العمود. rows = [{label, n, attrs, tip, text}] (text = شكل القيمة لو مش الرقم نفسه) */
 function dbBars(rows, color = 'var(--primary)') {
   const max = Math.max(1, ...rows.map(r => r.n));
   return `<div class="db-bars">${rows.map(r => `<div class="db-bar ${r.attrs ? 'clickable' : ''}" ${r.attrs || ''} ${r.attrs ? 'tabindex="0" role="button"' : ''} data-tip="${esc(r.tip || `${r.label}: ${r.n}`)}">
       <span class="db-bar-l" title="${esc(r.label)}">${r.html || esc(r.label)}</span>
-      <span class="db-bar-t"><i style="width:${(100 * r.n / max).toFixed(1)}%;background:${color}"></i><b>${r.n}</b></span></div>`).join('')}</div>`;
+      <span class="db-bar-t"><i style="width:${(100 * r.n / max).toFixed(1)}%;background:${color}"></i><b>${r.text ?? r.n}</b></span></div>`).join('')}</div>`;
 }
 /** تلميح عائم لأي عنصر عليه data-tip (بالماوس أو بالكيبورد) */
 function bindVizTips(root) {

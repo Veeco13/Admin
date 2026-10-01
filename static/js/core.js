@@ -1048,6 +1048,8 @@ function trackedAlertItems(maxDays = 90, system = false) {
   // النسخة الاحتياطية التلقائية وقفت أو فشلت (مدير النظام) ← بتفتح شاشة النسخ
   const bs = STATE.backupStatus;
   if (system && bs && backupStale(bs)) push({ kind: 'system', refId: 'backup', name: t('النسخ الاحتياطية'), what: backupStaleText(bs), date: (bs.lastOk || '').slice(0, 10) || todayISO() });
+  const sc = STATE.sysCheck;                    // 🩺 الفحص الدوري لقى مشكلة ← لمدير النظام
+  if (system && sc && sc.bad) push({ kind: 'system', refId: 'syscheck', name: t('فحص السيستم'), what: `${sc.bad} ${t('مشكلة محتاجة تتصلّح')}`, date: (sc.at || '').slice(0, 10) || todayISO() });
   // طلبات الموافقة: اللي معاه الصلاحية ← المستني، وصاحب الطلب ← القرار (آخر 7 أيام)
   if (system && typeof pendingApprovals === 'function') {
     const n = canApprove() ? pendingApprovals().length : 0;
@@ -1069,6 +1071,7 @@ function openAlertTarget(it) {
   else if (it.kind === 'candidate') { setView('recruitment'); setTimeout(() => openCandidateModal(it.refId), 50); }
   else if (it.kind === 'system' && it.refId === 'backup') openBackupsModal();
   else if (it.kind === 'system' && it.refId === 'approvals') openApprovalsModal();
+  else if (it.kind === 'system' && it.refId === 'syscheck') openSystemCheckModal();
 }
 function renderAlertCenterPanel(filter = 'all') {
   if (filter !== 'all') filter = tierFilterValue(filter) || 'all';        // «منتهي» من لوحة المعلومات ← خلال 30 يوم
@@ -1207,7 +1210,7 @@ function renderUserMenu() {
   m.innerHTML = `<div class="info">${esc(me.displayName || me.username)}${sub ? `<br><span class="small muted">${esc(sub)}</span>` : ''}</div>
     ${me.isAdmin ? `<button data-a="backup">💾 ${t('النسخ الاحتياطية')}${backupStale(STATE.backupStatus) ? ' ⚠️' : ''}</button><button data-a="users">🔑 ${t('المستخدمين والصلاحيات')}</button>
       <button data-a="exportpw">🔐 ${t('كلمة سر التصدير')}${STATE.exportPasswordSet ? '' : ' ⚠️'}</button>
-      <button data-a="dq">📋 ${t('جودة البيانات')}</button><button data-a="importx">📥 ${t('استيراد بيانات تكميلية')}</button>` : ''}
+      <button data-a="dq">📋 ${t('جودة البيانات')}</button><button data-a="syscheck">🩺 ${t('فحص السيستم')}${STATE.sysCheck && STATE.sysCheck.bad ? ` <span class="cu-badge">${STATE.sysCheck.bad}</span>` : ''}</button><button data-a="importx">📥 ${t('استيراد بيانات تكميلية')}</button>` : ''}
     ${canApprove() || (STATE.approvals || []).length ? `<button data-a="approvals">✋ ${t('طلبات الموافقة')}${pendingApprovals().length ? ` (${pendingApprovals().length})` : ''}</button>` : ''}
     ${canTrash() ? `<button data-a="trash">🗑️ ${t('سلة المحذوفات')}</button>` : ''}
     <button data-a="viewperms">👁️ ${t('إعدادات العرض')}</button>
@@ -1215,7 +1218,7 @@ function renderUserMenu() {
     <button data-a="logout">🚪 ${t('تسجيل الخروج')}</button>`;
   $$('button', m).forEach(b => b.onclick = () => {
     m.hidden = true;
-    ({ backup: openBackupsModal, trash: openTrashModal, approvals: openApprovalsModal, users: () => openUsersModal(), viewperms: renderViewSettingsModal, exportpw: openExportPasswordModal, dq: openDataQualityModal, importx: () => openImportExtraModal(),
+    ({ backup: openBackupsModal, trash: openTrashModal, approvals: openApprovalsModal, users: () => openUsersModal(), viewperms: renderViewSettingsModal, exportpw: openExportPasswordModal, dq: openDataQualityModal, syscheck: () => openSystemCheckModal(), importx: () => openImportExtraModal(),
        password: openPasswordModal, logout: () => location.href = '/logout' })[b.dataset.a]();
   });
 }
@@ -1254,6 +1257,37 @@ function openPasswordModal() {
    تقرير جودة البيانات (مدير النظام) — /api/data-quality
    ===================================================================== */
 const DQ_SEV = { high: ['🔴', 'مهم'], medium: ['🟠', 'متوسط'], low: ['🟡', 'بسيط'] };
+/* ---------- 🩺 فحص السيستم (مدير النظام) — syscheck.py: قراءة بس، بيشتغل لوحده كل أسبوع ---------- */
+const SYSCHECK_ICONS = { ok: '✅', warn: '⚠️', bad: '❌' };
+async function openSystemCheckModal(fresh = false) {
+  let r;
+  try { r = await api(fresh ? 'POST' : 'GET', '/api/system-check', fresh ? {} : undefined); } catch (e) { return toast(e.message, 'err'); }
+  if (STATE.sysCheck || fresh) STATE.sysCheck = { at: r.at, bad: r.bad, warn: r.warn };
+  if (typeof updateAlertCount === 'function') updateAlertCount();
+  const order = { bad: 0, warn: 1, ok: 2 }, items = r.items.slice().sort((a, b) => order[a.status] - order[b.status]);
+  const m = openModal({
+    title: '🩺 ' + t('فحص السيستم'), size: 'wide',
+    body: `<div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:10px">
+        <span class="chip" style="${r.bad ? 'background:var(--red-soft);color:var(--red)' : ''}">❌ ${t('مشاكل')} <b class="num">${r.bad}</b></span>
+        <span class="chip" style="${r.warn ? 'background:var(--orange-soft);color:var(--orange)' : ''}">⚠️ ${t('ملاحظات')} <b class="num">${r.warn}</b></span>
+        <span class="chip">✅ ${t('سليم')} <b class="num">${r.items.length - r.bad - r.warn}</b></span>
+        <span class="small muted">${t('آخر فحص')}: ${fmtDateTime(r.at)} — ${t('الفحص بيقرأ بس ومابيغيّرش حاجة، وبيشتغل لوحده كل أسبوع.')}</span></div>
+      ${!r.bad && !r.warn ? `<div class="notice">✅ ${t('كل حاجة سليمة')}</div>` : ''}
+      <table class="data"><tbody>${items.map(it => `<tr><td style="width:34px;font-size:18px">${SYSCHECK_ICONS[it.status]}</td>
+        <td><b>${esc(t(it.title))}</b><div class="small ${it.status === 'ok' ? 'muted' : ''}" style="${it.status === 'bad' ? 'color:var(--red)' : it.status === 'warn' ? 'color:var(--orange)' : ''}">${esc(it.detail)}</div>
+          ${it.hint ? `<div class="small muted">💡 ${esc(it.hint)}</div>` : ''}</td></tr>`).join('')}</tbody></table>
+      <div class="small muted" style="margin-top:8px">${t('نفس الفحص من سطر الأوامر قبل أي تحديث')}: <code dir="ltr">python manage_db.py check</code></div>`,
+    foot: `<button class="btn primary" data-refresh>🔄 ${t('فحص دلوقتي')}</button><button class="btn" data-print>🖨️ ${t('طباعة')}</button><span class="spacer"></span><button class="btn" data-close>${t('إغلاق')}</button>`,
+  });
+  $('[data-refresh]', m.el).onclick = () => { m.close(); openSystemCheckModal(true); };
+  $('[data-print]', m.el).onclick = () => {
+    openReportWindow({ title: t('فحص السيستم'), landscape: false, meta: [[t('آخر فحص'), fmtDateTime(r.at)]],
+      summary: [[r.bad, t('مشاكل')], [r.warn, t('ملاحظات')], [r.items.length - r.bad - r.warn, t('سليم')]],
+      body: `<table class="rpt"><thead><tr><th></th><th class="txt">${t('البند')}</th><th class="txt">${t('النتيجة')}</th><th class="txt">${t('الحل')}</th></tr></thead><tbody>
+        ${items.map((it, i) => `<tr class="${i % 2 ? 'z' : ''}"><td>${SYSCHECK_ICONS[it.status]}</td><td class="txt"><b>${esc(t(it.title))}</b></td><td class="txt">${esc(it.detail)}</td><td class="txt">${esc(it.hint || '')}</td></tr>`).join('')}</tbody></table>` });
+    printLog(t('فحص السيستم'), 'print');
+  };
+}
 async function openDataQualityModal() {
   let r;
   try { r = await api('GET', '/api/data-quality'); } catch (e) { return toast(e.message, 'err'); }

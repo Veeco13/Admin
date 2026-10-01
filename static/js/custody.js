@@ -109,6 +109,8 @@ function custodianBalances() {
 /* ---------- الشاشة ---------- */
 function renderCustody() {
   const U = UI.custody = Object.assign({ tab: 'list', q: '', status: '', type: '', custodian: '', iq: '', istatus: '', icc: '', owner: 'me' }, UI.custody || {});
+  if (U.tab === 'expenses' && !can('custody.expenses')) U.tab = 'list';
+  const exTab = U.tab === 'expenses';            // 📊 لوحة المصروفات (expenses.js): كل العهد في النطاق — ليها مؤشراتها
   const all = custodiesInView();
   const open = all.filter(c => c.status === 'disbursed').map(custodyTotals);
   const pending = invoicesInView().filter(i => i.status === 'pending');
@@ -124,9 +126,9 @@ function renderCustody() {
       <button class="btn" id="cu-plan">📅 ${t('خطة التجديدات')}</button>
       <button class="btn" data-p="custody.fees" id="cu-fees">⚙️ ${t('جدول الرسوم')}</button>
       <button class="btn" data-p="custody.fees" id="cu-set">🧾 ${t('إعدادات الفواتير')}</button></div></div>
-    <div class="cu-kpis">${kpi.map(([v, l, c]) => `<div class="card cu-kpi"${c ? ` style="border-top:3px solid var(--${c})"` : ''}><b class="num">${esc(v)}</b><span>${esc(t(l))}</span></div>`).join('')}</div>
-    <div class="tabs" style="margin:14px 0 10px">${[['list', 'العهد'], ['invoices', 'الفواتير'], ['balances', 'أرصدة المستلمين']].map(([k, l]) => `<button data-cutab="${k}" class="${U.tab === k ? 'active' : ''}">${esc(t(l))}${k === 'invoices' && pending.length ? ` <span class="cu-badge">${pending.length}</span>` : ''}</button>`).join('')}</div>
-    <div id="cu-pane">${U.tab === 'balances' ? custodyBalancesHtml() : U.tab === 'invoices' ? custodyInvoicesHtml() : custodyListHtml()}</div>`;
+    ${exTab ? '' : `<div class="cu-kpis">${kpi.map(([v, l, c]) => `<div class="card cu-kpi"${c ? ` style="border-top:3px solid var(--${c})"` : ''}><b class="num">${esc(v)}</b><span>${esc(t(l))}</span></div>`).join('')}</div>`}
+    <div class="tabs" style="margin:14px 0 10px">${[['list', 'العهد'], ['invoices', 'الفواتير'], ['balances', 'أرصدة المستلمين'], ...(can('custody.expenses') ? [['expenses', '📊 المصروفات']] : [])].map(([k, l]) => `<button data-cutab="${k}" class="${U.tab === k ? 'active' : ''}">${esc(t(l))}${k === 'invoices' && pending.length ? ` <span class="cu-badge">${pending.length}</span>` : ''}</button>`).join('')}</div>
+    <div id="cu-pane">${exTab ? expensesHtml() : U.tab === 'balances' ? custodyBalancesHtml() : U.tab === 'invoices' ? custodyInvoicesHtml() : custodyListHtml()}</div>`;
   const upd = p => { Object.assign(UI.custody, p); saveUiStateToLocalStorage(); render(); };
   $$('[data-cutab]').forEach(b => b.onclick = () => upd({ tab: b.dataset.cutab }));
   const add = $('#cu-add'); if (add) add.onclick = () => openCustodyRequestModal();
@@ -135,6 +137,7 @@ function renderCustody() {
   const set = $('#cu-set'); if (set) set.onclick = () => openCustodySettingsModal();
   const own = $('#cu-owner'); if (own) own.onchange = e => upd({ owner: e.target.value, custodian: '' });
   bindCustodyLang(viewRoot());
+  if (exTab) return bindExpenses();
   if (U.tab === 'invoices') {
     const iq = $('#cif-q');
     iq.addEventListener('input', debounce(e => { UI.custody.iq = e.target.value; render(); const i = $('#cif-q'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 250));

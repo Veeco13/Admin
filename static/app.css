@@ -21,6 +21,7 @@
   --shadow: 0 1px 2px rgba(0,0,0,.05), 0 4px 14px rgba(0,0,0,.05);
   --radius: 12px;
   --hero-bg: #163f32;
+  --viz-1: #2a78d6; --viz-2: #eb6834;            /* ألوان سلاسل الرسوم (لوحة المصروفات): الرسوم / الدعم */
   --font: "IBM Plex Sans Arabic", "Cairo", "IBM Plex Sans", "Segoe UI", Tahoma, sans-serif;
   color-scheme: light;
 }
@@ -43,6 +44,7 @@
   --grey: #97a39f;   --grey-soft: #25302d;
   --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 14px rgba(0,0,0,.25);
   --hero-bg: #184535;
+  --viz-1: #3987e5; --viz-2: #d95926;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -492,6 +494,33 @@ table.kids input:not([type=checkbox]), table.kids select { width: 100%; min-widt
 #emp-table td:nth-child(2) .small { max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #emp-table td:nth-child(5) { min-width: 110px; }
 
+/* لوحة المصروفات الحكومية: أعمدة شهرية متراكمة (فاصل 2px بلون الخلفية، والطرف مدوّر 4px) */
+.cu-kpi.clickable { cursor: pointer; }
+.cu-kpi .ex-sub { font-size: 11px; }
+.cu-kpis.ex-kpis { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+.ex-chart { padding-top: 6px; }
+.ex-plot { position: relative; height: 190px; margin-inline-start: 52px; margin-top: 14px; }
+.ex-grid { position: absolute; inset-inline: 0; border-top: 1px solid var(--border); }
+.ex-grid span { position: absolute; inset-inline-start: -52px; width: 46px; top: -9px; text-align: end; font-size: 11px; color: var(--muted); }
+.ex-cols { position: absolute; inset: 0; display: flex; align-items: stretch; }
+.ex-col { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 2px; border-radius: 6px 6px 0 0; }
+.ex-col.clickable { cursor: pointer; }
+.ex-col:hover, .ex-col:focus-visible { background: color-mix(in srgb, var(--surface-2) 70%, transparent); outline: none; }
+.ex-col i { display: block; width: 24px; max-width: 62%; min-height: 2px; }
+.ex-col i.top { border-radius: 4px 4px 0 0; }
+.ex-col b { font-size: 11px; font-weight: 600; white-space: nowrap; }
+.ex-col i.s1, .ex-sw.s1 { background: var(--viz-1); }
+.ex-col i.s2, .ex-sw.s2 { background: var(--viz-2); }
+.ex-xs { display: flex; margin-inline-start: 52px; padding: 5px 0 10px; }
+.ex-xs span { flex: 1; text-align: center; font-size: 11px; color: var(--muted); }
+.ex-sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; }
+.ex-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; margin-top: 12px; }
+table.ex-matrix th, table.ex-matrix td { white-space: nowrap; font-size: 12px; }
+table.ex-matrix td.clickable { cursor: pointer; }
+table.ex-matrix td.clickable:hover { background: var(--primary-soft); }
+table.ex-matrix td.txt, table.ex-matrix th.txt { text-align: start; }
+table.ex-matrix tr.ex-co td { background: var(--surface-2); font-weight: 600; }
+table.ex-matrix td.ex-cc { padding-inline-start: 26px; }
 /* تقرير جودة البيانات */
 .dq{border:1px solid var(--border);border-radius:8px;margin:6px 0;padding:6px 10px}.dq summary{cursor:pointer;padding:2px 0}.dq table{margin-top:6px}
 /* عهدة التجديد: الانتهاء الجديد (مطلوب قبل التقفيل) */

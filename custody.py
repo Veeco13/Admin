@@ -549,6 +549,42 @@ def reopen(s, c, when):
     return n, None
 
 
+def expenses(s, ctx):
+    """لوحة المصروفات الحكومية (custody.expenses): فواتير **كل** العهد (مش عهد المستخدم بس) اللي مركز تكلفتها / شركتها في
+    نطاقه، وبنودها المقفولة (للتقسيم بالجهة والبند)، والرصيد اللي لسه مع المستلمين. التجميع والفلاتر في الواجهة."""
+    cc_co = db.cost_center_companies(s)
+    custs = {c.id: c for c in s.scalars(select(M.Custody))}
+
+    def ok(company, cc):
+        return ctx is None or ctx.record_ok(company, cc_co.get(cc), cc)
+
+    invoices, status = [], {}
+    for inv in s.scalars(select(M.Invoice).order_by(M.Invoice.closingDate, M.Invoice.ccCode, M.Invoice.no)):
+        if not ok(inv.billCompanyId, inv.costCenter):
+            continue
+        c = custs.get(inv.custodyId)
+        invoices.append({"id": inv.id, "number": invoice_no(inv), "custodyId": inv.custodyId, "custodyNo": custody_no(c) if c else "",
+                         "txType": c.txType if c else None, "closingDate": db.ser(inv.closingDate), "costCenter": inv.costCenter,
+                         "companyId": inv.billCompanyId, "employees": inv.employees, "gov": inv.govAmount, "support": inv.supportAmount,
+                         "total": inv.total, "status": inv.status})
+        status[(inv.custodyId, inv.closingDate, inv.costCenter or "")] = inv.status
+    lines, by_custody = [], {}
+    for ln in s.scalars(select(M.CustodyLine)):
+        by_custody.setdefault(ln.custodyId, []).append(ln)
+        st = status.get((ln.custodyId, ln.closedDate, ln.costCenter or "")) if ln.closedDate else None
+        if st is None:
+            continue
+        c = custs.get(ln.custodyId)
+        lines.append({"closingDate": db.ser(ln.closedDate), "costCenter": ln.costCenter, "companyId": cc_co.get(ln.costCenter) or ln.companyId,
+                      "authority": ln.authority, "item": ln.itemName, "amount": amount(ln), "txType": c.txType if c else None, "status": st})
+    held = 0.0                                   # اتصرف للمستلمين ولسه ماتنفّذش (العهد المفتوحة اللي فيها حد من نطاقه)
+    for c in custs.values():
+        ls = by_custody.get(c.id, [])
+        if c.status == "disbursed" and any(ok(x.companyId, x.costCenter) for x in ls):
+            held += (c.disbursedAmount or 0) - sum(amount(x) for x in ls if x.done)
+    return {"invoices": invoices, "lines": lines, "held": round(held, 3)}
+
+
 def dump(s, ctx):
     """للواجهة: جدول الرسوم والإعدادات والعهد ببنودها وفواتيرها. المستخدم بيشوف عهده بس (وصاحب custody.all الكل)،
     والمحدود بشركات بيشوف العهدة لو فيها حد من نطاقه. custodyBusy = مين في عهد مفتوحة أو اتقفل قريب (من كل المستخدمين)."""
