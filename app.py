@@ -2036,17 +2036,19 @@ PROJECT_FORM_FIELDS = ("clientStartDate", "clientEndDate", "clientExtDate", "cli
 @app.post("/api/permit-forms/<kind>/pdf")
 @require("permits.view")
 def permit_forms_pdf(kind):
-    """نماذج تصاريح السيارات PDF: {forms: [clearance | checklist | undertaking | request | ratqa], data: {…}}.
-    data = اللي ظاهر في النافذة (متملّي من البرنامج والمستخدم عدّل اللي عايزه) — vehicles: [{id, plate, …}].
-    كل نموذج بيتسجّل في سجل تصاريح كل عربية."""
+    """نماذج التصاريح PDF: {holder: vehicle | employee, forms: [...], part, data: {…}}.
+    data = اللي ظاهر في النافذة (متملّي من البرنامج والمستخدم عدّل اللي عايزه) — vehicles: [{id, plate, …}] أو
+    people: [{id, name, …}]. كل نموذج بيتسجّل في سجل تصاريح كل عربية / موظف."""
     d = body()
     forms, data = d.get("forms") or [], d.get("data") or {}
-    msg = permit_forms.check(kind, forms, data)
+    holder = "employee" if d.get("holder") == "employee" else "vehicle"
+    msg = permit_forms.check(kind, forms, data, holder)
     if msg:
         return err(msg)
     if not permit_forms.available():
         return err("قوالب نماذج التصاريح مش موجودة على السيرفر (forms/permits)", 501)
-    names = dict(permit_forms.FORMS[kind])
+    names = dict(permit_forms.HOLDERS[holder][kind])
+    rows = data.get("people" if holder == "employee" else "vehicles") or []
     part_key = str(d.get("part") or "")
     with db.session_scope() as s:
         u = me()
@@ -2054,9 +2056,9 @@ def permit_forms_pdf(kind):
         if (part_key and part is None) or not (u.part_ok(part_key) if part_key else u.allParts):
             return forbidden("النماذج دي لجزء مش في نطاقك")
         ids = []
-        for v in data.get("vehicles") or []:
-            if v.get("id"):                              # عربية من البرنامج ← لازم تبقى في نطاق المستخدم
-                _, e = _permit_holder(s, "vehicle", v["id"], "view")
+        for v in rows:
+            if v.get("id"):                              # عربية / موظف من البرنامج ← لازم يبقى في نطاق المستخدم
+                _, e = _permit_holder(s, holder, v["id"], "view")
                 if e:
                     return e
                 ids.append(v["id"])
@@ -2066,9 +2068,9 @@ def permit_forms_pdf(kind):
             return err(str(ex), 501)
         label = f"{permit_forms.KINDS[kind]} — " + "، ".join(names[f] for f in forms) + (f" ({part['nameAr']})" if part else "")
         for vid in dict.fromkeys(ids):
-            _plog(s, "vehicle", vid, None, "form", f"نموذج: {label}")
-        plates = "، ".join(str(v.get("plate") or "") for v in data.get("vehicles") or [])
-        db.log_audit(s, "permit_print", f"طباعة نماذج تصاريح السيارات: {label} — {plates}"[:900], uname())
+            _plog(s, holder, vid, None, "form", f"نموذج: {label}")
+        who = "، ".join(str(v.get("name" if holder == "employee" else "plate") or "") for v in rows)
+        db.log_audit(s, "permit_print", f"طباعة نماذج تصاريح {'الموظفين' if holder == 'employee' else 'السيارات'}: {label} — {who}"[:900], uname())
     name = names[forms[0]] if len(forms) == 1 else f"نماذج {permit_forms.KINDS[kind]}"
     return send_file(io.BytesIO(pdf), mimetype="application/pdf", as_attachment=False, download_name=f"{name}.pdf")
 

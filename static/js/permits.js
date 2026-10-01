@@ -714,8 +714,7 @@ function openPermitHolderCard(kind, hid, tab = 'current') {
       <div data-pc-pane="log" ${tab !== 'log' ? 'hidden' : ''}><div id="pc-log"><div class="muted">${t('جاري التحميل…')}</div></div></div>`,
     foot: `${edit ? `<button class="btn primary write-only" data-p="permits.edit" data-pc-add="">➕ ${t('إضافة تصريح')}</button>` : ''}
       <button class="btn" data-pc-print>🖨️ ${t('طباعة بطاقة التصاريح')}</button>
-      ${kind === 'vehicle' ? `<button class="btn" data-pc-forms>📄 ${t('نماذج التصاريح')}</button>`
-        : `<details class="ec-menu"><summary class="btn">📄 ${t('نماذج التصاريح')} ▾</summary><div><div class="small muted" style="padding:8px 10px;max-width:260px">${t('لسه مفيش نماذج — هتتضاف هنا لما تبعتها، وهتتملى من بيانات البطاقة.')}</div></div></details>`}
+      <button class="btn" data-pc-forms>📄 ${t('نماذج التصاريح')}</button>
       <span class="spacer"></span><button class="btn" data-close>${t('إغلاق')}</button>`,
   });
   const E = m.el;
@@ -751,7 +750,7 @@ function openPermitHolderCard(kind, hid, tab = 'current') {
     if (p && p.fileUrl) openFileViewer(p.fileUrl, p.fileName || t('مرفق التصريح'));
   });
   $('[data-pc-print]', E).onclick = () => printPermitHolderCard(kind, hid);
-  const pf = $('[data-pc-forms]', E); if (pf) pf.onclick = () => openVehiclePermitForms({ vehicleIds: [hid], part: permitViewPart() });
+  const pf = $('[data-pc-forms]', E); if (pf) pf.onclick = () => openPermitForms(kind, { [kind === 'employee' ? 'employeeIds' : 'vehicleIds']: [hid], part: permitViewPart() });
 }
 /** طباعة بطاقة التصاريح: A4 طولي زي بطاقة الموظف (شعار الشركة، من غير توقيعات) + آخر 15 سطر في السجل */
 async function printPermitHolderCard(kind, hid) {
@@ -1004,7 +1003,7 @@ function renderPermits() {
       <div class="sub">${partX && partX.sub && !partX.own ? t('تصاريح الشركة وهي داخلة مقاول من الباطن — تحت كل تصريح عقد المقاول الرئيسي') : t('قسم مستقل — بيانات الموظفين والسيارات بتيجي من مراكزها للعرض بس')}</div></div>
     <div class="actions">${hasCards ? `<button class="btn" id="pm-parts">‹ ${t('الأجزاء')}</button>` : ''}<button class="btn primary write-only" data-p="permits.edit" id="pm-add">➕ ${t('إضافة تصريح')} — ${t(PERMIT_HOLDERS[kind].l)}</button>
       <button class="btn" id="pm-print">🖨️ ${t(PERMIT_HOLDERS[kind].report)}</button>
-      ${kind === 'vehicle' ? `<button class="btn" id="pm-forms">📄 ${t('نماذج التصاريح')}</button>` : ''}
+      <button class="btn" id="pm-forms">📄 ${t('نماذج التصاريح')}</button>
       ${can('admin') ? `${hasCards ? '' : `<button class="btn" id="pm-parts-cfg">⚙️ ${t('إعداد الأجزاء')}</button>`}<button class="btn" id="pm-lists">⚙️ ${t('الأنواع والأماكن')}</button><button class="btn" id="pm-export">📤 ${t('تصدير CSV')}</button>` : ''}</div></div>
     <div class="tabs" style="margin-bottom:10px">${Object.entries(PERMIT_HOLDERS).map(([k, v]) =>
       `<button data-ptab="${k}" class="${k === kind ? 'active' : ''}">${v.ico} ${t(v.tab)} (${allPermits(k, false, false).length})</button>`).join('')}</div>
@@ -1037,7 +1036,7 @@ function renderPermits() {
   $('#pm-clear').onclick = () => upd({ ...PERMIT_FILTER_DEFAULT, view: F.view });
   $('#pm-add').onclick = () => openPermitAddModal(kind);
   $('#pm-print').onclick = () => openPermitsReportModal(kind, F);
-  const forms = $('#pm-forms'); if (forms) forms.onclick = () => openVehiclePermitForms({ part: U.part });
+  const forms = $('#pm-forms'); if (forms) forms.onclick = () => openPermitForms(kind, { part: U.part });
   const back = $('#pm-parts'); if (back) back.onclick = () => { UI.permits.part = ''; saveUiStateToLocalStorage(); render(); };
   const cfg = $('#pm-parts-cfg'); if (cfg) cfg.onclick = () => openPermitPartsModal();
   const ls = $('#pm-lists'); if (ls) ls.onclick = () => openPermitListsModal('types');

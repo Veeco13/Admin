@@ -1,10 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-نماذج تصاريح السيارات (قسم التصاريح ← «نماذج التصاريح») — قوالب forms/permits/ بنفس شكل نماذج الجهة:
+نماذج التصاريح (قسم التصاريح ← «نماذج التصاريح») — قوالب forms/permits/ بنفس شكل نماذج الجهة:
 
+السيارات (FORMS):
 - KOC:               1) شهادة الفحص (Clearance Certificate — نسخة لكل مركبة)   2) قائمة المستندات المطلوبة
                      3) تعهد المركبات   4) نموذج طلب تصاريح المركبات الثقيلة
 - الرتقة والعبدلي:   1) قائمة المستندات   2) تعهد المركبات   3) نموذج طلب تصاريح الرتقة والعبدلي (Excel)
+
+الأفراد (PEOPLE_FORMS — الأسماء الزيادة بتتقسّم على ورق لوحدها، PER_SHEET):
+- KOC:               1) قائمة المستندات المطلوبة (Personnel Gate Pass)
+- الرتقة والعبدلي:   1) قائمة المستندات   2) نموذج طلب تصاريح المنطقة الحدودية (Excel — 10 أفراد في الورقة)
 
 البيانات بتيجي من الواجهة **بعد ما المستخدم راجعها وعدّلها** (كل الخانات ظاهرة في النافذة)، فالسيرفر بيملى القالب بيها
 زي ما هي. القوالب فيها {{حقول}} بس — مفيش اسم عميل ولا بيانات جوّه الملفات.
@@ -30,11 +35,21 @@ FORMS = {
     "ratqa": [("checklist", "قائمة المستندات المطلوبة"), ("undertaking", "تعهد المركبات"),
               ("ratqa", "نموذج طلب تصاريح الرتقة والعبدلي")],
 }
+PEOPLE_FORMS = {
+    "koc": [("p_checklist", "قائمة المستندات المطلوبة — أفراد")],
+    "ratqa": [("p_checklist", "قائمة المستندات المطلوبة — أفراد"), ("p_ratqa", "نموذج طلب تصاريح الرتقة والعبدلي — أفراد")],
+}
+HOLDERS = {"vehicle": FORMS, "employee": PEOPLE_FORMS}
 KINDS = {"koc": "تصريح KOC", "ratqa": "تصريح الرتقة والعبدلي"}
 TEMPLATES = {"clearance": "koc_clearance.docx", "checklist": "koc_checklist.docx", "undertaking": "vehicles_undertaking.docx",
-             "request": "koc_heavy_request.docx", "ratqa": "ratqa_request.xlsx"}
+             "request": "koc_heavy_request.docx", "ratqa": "ratqa_request.xlsx",
+             "p_checklist": "koc_people_checklist.docx", "p_ratqa": "ratqa_people_request.xlsx"}
 ROWS = {"undertaking": 10, "request": 10, "ratqa": 8, "checklist": 12, "clearance": 10}     # أقصى عدد سيارات في النموذج
+PER_SHEET = {"p_checklist": 4, "p_ratqa": 10}      # نماذج الأفراد: كام اسم في الورقة (الزيادة ← ورقة تانية)
+MAX_PEOPLE = 60
 REQUEST_TYPES = ("renew", "first", "lost", "damaged")
+ACTIONS = {"renew": "تجديد", "first": "أول مرة", "lost": "بدل فاقد", "damaged": "بدل تالف"}
+TICK = "ü"                                         # ✓ بخط Wingdings (خانات الرتقة / العبدلي في القالب)
 # طول القيمة في النموذج الأصلي (للسطور المتنسّقة بالمسافات) ← المسافات اللي بعد القيمة بتتظبط على الفرق
 WIDTHS = {"subcontractor": 0, "date": 10, "contract_no": 8, "start": 10, "end": 10, "ext": 10, "from": 10, "to": 10, "team": 36,
           "mandoub": 8, "mandoub_phone": 8, "mandoub_nationality": 4, "signatory": 12}
@@ -181,11 +196,50 @@ def _vehicle_rows(d, n, fields):
     return ctx
 
 
+def _sheets(people, n):
+    return [people[i:i + n] for i in range(0, len(people), n)] or [[]]
+
+
+def _people_documents(form, d, path, ctx):
+    """نماذج الأفراد: ورقة لكل PER_SHEET اسم."""
+    people = d.get("people") or []
+    out = []
+    if form == "p_checklist":
+        # اسم المقاول بالإنجليزي على سطرين زي النموذج («المقاول الأجنبي / وكيله»)
+        first, _, second = _txt(d.get("contractorEn")).partition("/")
+        ctx.update(contractor_en1=first.strip(), contractor_en2=second.strip(),
+                   permanent=ymd(d.get("permanent")), temporary=ymd(d.get("temporary")))
+        for sheet in _sheets(people, PER_SHEET[form]):
+            names = {f"names{i + 1}": _txt(sheet[i].get("name")) if i < len(sheet) else "" for i in range(PER_SHEET[form])}
+            out.append(("docx", fill_docx(path, dict(ctx, **names))))
+        return out
+    ctx["end"] = ymd(d.get("extDate") or d.get("endDate"))          # النموذج فيه «نهاية العقد» بس ← بعد التمديد
+    ctx["initials"] = d.get("initials")
+    used = {p.get("action") for p in people}
+    ctx.update({f"m_{k}": "●" if k in used else "○" for k in ACTIONS})
+    for sheet in _sheets(people, PER_SHEET[form]):
+        c = dict(ctx)
+        for i in range(1, PER_SHEET[form] + 1):
+            p = sheet[i - 1] if i <= len(sheet) else None
+            area = (p or {}).get("area") or "both"
+            c.update({f"p{i}_permit": p and p.get("oldPermitNo"), f"p{i}_name": p and p.get("name"), f"p{i}_nat": p and p.get("nationality"),
+                      f"p{i}_job": p and p.get("profession"), f"p{i}_id": p and (p.get("idNo") or p.get("id")),
+                      f"p{i}_res": ymd(p.get("residencyExp")) if p else "",
+                      f"p{i}_r": TICK if p and area == "ratqa" else "", f"p{i}_a": TICK if p and area == "abdali" else "",
+                      f"p{i}_ra": TICK if p and area == "both" else "",
+                      f"p{i}_action": ACTIONS.get(p.get("action"), "") if p else "",
+                      f"p{i}_from": ymd(p.get("from") or d.get("from")) if p else "", f"p{i}_to": ymd(p.get("to") or d.get("to")) if p else ""})
+        out.append(("xlsx", fill_xlsx(path, c)))
+    return out
+
+
 def documents(form, d):
-    """نموذج ← [(الامتداد، الملف المتملّي)] — شهادة الفحص نسخة لكل مركبة."""
+    """نموذج ← [(الامتداد، الملف المتملّي)] — شهادة الفحص نسخة لكل مركبة، ونماذج الأفراد ورقة لكل مجموعة أسماء."""
     path = os.path.join(DIR, TEMPLATES[form])
     vs = d.get("vehicles") or []
     ctx = _common(d)
+    if form in PER_SHEET:
+        return _people_documents(form, d, path, ctx)
     if form == "clearance":
         out = []
         for v in vs:
@@ -223,13 +277,22 @@ def documents(form, d):
     raise KeyError(form)
 
 
-def check(kind, forms, d):
-    """رسالة خطأ أو None."""
-    if kind not in FORMS:
+def check(kind, forms, d, holder="vehicle"):
+    """رسالة خطأ أو None. holder = vehicle | employee."""
+    if holder not in HOLDERS or kind not in HOLDERS[holder]:
         return "نوع التصريح غير معروف"
-    known = [k for k, _ in FORMS[kind]]
+    known = [k for k, _ in HOLDERS[holder][kind]]
     if not forms or any(f not in known for f in forms):
         return "النموذج غير معروف"
+    if holder == "employee":
+        people = d.get("people") or []
+        if not people:
+            return "اختار موظف واحد على الأقل"
+        if any(not _txt(p.get("name")) for p in people):
+            return "اسم ناقص لموظف في القايمة"
+        if len(people) > MAX_PEOPLE:
+            return f"الحد الأقصى {MAX_PEOPLE} موظف في الطلب — قسّم الطلب"
+        return None
     vs = d.get("vehicles") or []
     if not vs:
         return "اختار سيارة واحدة على الأقل"
