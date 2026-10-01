@@ -448,20 +448,20 @@ function renderVehicles() {
       <select id="v-cc">${opt('', t('— كل مراكز التكلفة —'), !V.cc)}${opt('__out', '⚠️ ' + t('برّه وكالة عقدها'), V.cc === '__out')}${STATE.costCenters.map(c => opt(c.name, `${c.code || ''} ${ccLabel(c.name)}`, c.name === V.cc)).join('')}</select>
       <button class="btn sm ghost" id="v-clear">✕ ${t('مسح الفلاتر')}</button></div>
     ${byAffairs
-      ? `<div class="table-wrap"><table class="data"><thead><tr><th>${t('رقم اللوحة')}</th><th>${t('النوع / الموديل')}</th><th>${t('الشركة')}</th><th>${t('مركز التكلفة')}</th><th>${t('مع مين')}</th><th>${t('العقد / المشروع')}</th><th>${t('انتهاء التأمين')}</th></tr></thead>
+      ? `<div class="table-wrap"><table class="data"><thead><tr><th>${t('رقم اللوحة')}</th><th>${t('النوع / الموديل')}</th><th>${t('الشركة')}</th><th>${t('مركز التكلفة')}</th><th>${t('مع مين')}</th><th>${t('العقد / المشروع')}</th><th>${t('انتهاء الرخصة والتأمين')}</th></tr></thead>
         <tbody>${affairsGroups().map(([k, vs]) => `<tr><td colspan="7" style="background:var(--surface-2)"><b>🗂️ ${k ? esc(affairsLabel(k)) : esc(t('بدون ملف شؤون'))}</b>
             ${k && IDX.project[k] && IDX.project[k].contractNo ? ` <span class="small muted">${t('رقم العقد')} ${esc(IDX.project[k].contractNo)}</span>` : ''} <span class="chip">${vs.length} ${t('سيارة')}</span></td></tr>`
           + vs.map(v => `${vrow(v)}<td>${esc(v.costCenter || '—')}</td><td>${vehicleUserHtml(v)}</td><td>${esc(projectName(v.projectId)) || '<span class="muted">—</span>'}</td><td>${datePill(v.insuranceExpiry)}</td></tr>`).join('')).join('')
           || `<tr><td colspan="7" class="empty">${t('لا توجد سيارات')}</td></tr>`}</tbody></table></div>
         <div class="small muted" style="margin-top:6px">${t('ملف الشؤون = الملف المسجّلة عليه العربية علشان العمالة — غير العقد اللي بيأثر على التصاريح.')}</div>`
-      : `<div class="table-wrap"><table class="data"><thead><tr><th>${t('رقم اللوحة')}</th><th>${t('النوع / الموديل')}</th><th>${t('الشركة')}</th><th>${t('ملف الشؤون')}</th><th>${t('العقد / المشروع')}</th><th>${t('مركز التكلفة')}</th><th>${t('مع مين')}</th><th>${t('انتهاء التأمين')}</th><th>${t('انتهاء الدفتر')}</th></tr></thead>
+      : `<div class="table-wrap"><table class="data"><thead><tr><th>${t('رقم اللوحة')}</th><th>${t('النوع / الموديل')}</th><th>${t('الشركة')}</th><th>${t('ملف الشؤون')}</th><th>${t('العقد / المشروع')}</th><th>${t('مركز التكلفة')}</th><th>${t('مع مين')}</th><th>${t('انتهاء الرخصة والتأمين')}</th></tr></thead>
     <tbody>${list.map(v => {
       const p = IDX.project[v.projectId], out = outsideAgency(v.projectId, v.costCenter), af = IDX.project[v.affairsProjectId];
       return `${vrow(v)}<td>${af ? `${esc(projectName(af.id))}${af.fileNumber ? `<div class="small muted num">${esc(af.fileNumber)}</div>` : ''}` : '<span class="muted">—</span>'}</td>
       <td>${p ? `${esc(projectName(p.id))}<div class="small muted">${esc(projectSummary(p))}</div>` : '<span class="muted">—</span>'}</td>
       <td>${esc(v.costCenter || '—')}${out ? `<div class="small" style="color:var(--orange)">⚠️ ${t('برّه وكالة عقدها')}</div>` : ''}</td>
-      <td>${vehicleUserHtml(v)}</td><td>${datePill(v.insuranceExpiry)}</td><td>${datePill(v.govLicenseExpiry)}</td></tr>`;
-    }).join('') || `<tr><td colspan="9" class="empty">${t('لا توجد سيارات')}</td></tr>`}</tbody></table></div>`}`;
+      <td>${vehicleUserHtml(v)}</td><td>${datePill(v.insuranceExpiry)}</td></tr>`;
+    }).join('') || `<tr><td colspan="8" class="empty">${t('لا توجد سيارات')}</td></tr>`}</tbody></table></div>`}`;
   $('#v-add').onclick = () => openVehicleModal(null);
   $('#v-q').addEventListener('input', debounce(e => { UI.vehicles.q = e.target.value; saveUiStateToLocalStorage(); render(); const i = $('#v-q'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 250));
   const vupd = p => { Object.assign(UI.vehicles, p); saveUiStateToLocalStorage(); render(); };
@@ -475,8 +475,8 @@ function renderVehicles() {
   $('#v-owner').onchange = e => vupd({ owner: e.target.value });
   $('#v-clear').onclick = () => vupd({ q: '', project: '', agency: '', type: '', cc: '', owner: '', affairs: '' });
   $$('tr[data-id]', viewRoot()).forEach(tr => tr.onclick = () => openVehicleModal(tr.dataset.id));
-  const vx = $('#v-export'); if (vx) vx.onclick = () => exportGuard(t('السيارات'), () => downloadBlob(toCsv([[t('رقم اللوحة'), t('النوع'), t('الموديل'), t('الشركة'), t('المالك الفعلي'), t('ملف الشؤون'), t('العقد / المشروع'), t('رقم العقد'), t('الوكالة'), t('مركز التكلفة'), t('مع مين'), t('انتهاء التأمين'), t('انتهاء الدفتر')],
-    ...list.map(v => [v.plate, t(VEHICLE_TYPES[v.vehicleType] || ''), v.model, companyName(v.companyId), companyName(vehicleOwnerId(v)), affairsLabel(v.affairsProjectId), projectName(v.projectId), (IDX.project[v.projectId] || {}).contractNo, agencyName(projectAgency(v.projectId)), v.costCenter, vehicleUserName(v), v.insuranceExpiry, v.govLicenseExpiry])]), `vehicles-${todayISO()}.csv`, 'text/csv'));
+  const vx = $('#v-export'); if (vx) vx.onclick = () => exportGuard(t('السيارات'), () => downloadBlob(toCsv([[t('رقم اللوحة'), t('النوع'), t('الموديل'), t('الشركة'), t('المالك الفعلي'), t('ملف الشؤون'), t('العقد / المشروع'), t('رقم العقد'), t('الوكالة'), t('مركز التكلفة'), t('مع مين'), t('انتهاء الرخصة والتأمين')],
+    ...list.map(v => [v.plate, t(VEHICLE_TYPES[v.vehicleType] || ''), v.model, companyName(v.companyId), companyName(vehicleOwnerId(v)), affairsLabel(v.affairsProjectId), projectName(v.projectId), (IDX.project[v.projectId] || {}).contractNo, agencyName(projectAgency(v.projectId)), v.costCenter, vehicleUserName(v), v.insuranceExpiry])]), `vehicles-${todayISO()}.csv`, 'text/csv'));
 }
 /** تقرير «السيارات المسجّلة على ملفات الشؤون» (مجمّع بالملف) — معاينة وطباعة */
 function printAffairsVehicles(groups, total) {
@@ -485,12 +485,12 @@ function printAffairsVehicles(groups, total) {
     let z = 0;
     body += `<tr class="grp"><td colspan="8">${esc(k ? affairsLabel(k) : t('بدون ملف شؤون'))}<small>${vs.length} ${t('سيارة')}</small></td></tr>`
       + vs.map((v, i) => `<tr class="${z++ % 2 ? 'z' : ''}"><td class="idx">${i + 1}</td><td class="num">${esc(v.plate)}</td><td class="txt">${esc(t(VEHICLE_TYPES[v.vehicleType] || ''))}</td>
-        <td class="txt">${esc(v.model || '')}</td><td class="txt">${esc(companyName(v.companyId))}</td><td class="txt">${esc(v.costCenter || '')}</td><td class="txt">${esc(vehicleUserName(v))}</td><td class="num"${tierOf(v.insuranceExpiry) === 'expired' ? ' style="color:#c0392b;font-weight:700"' : ''}>${fmtDate(v.insuranceExpiry) || '—'}</td></tr>`).join('');
+        <td class="txt">${esc(v.model || '')}</td><td class="txt" style="white-space:nowrap">${esc(companyName(v.companyId))}</td><td class="txt">${esc(v.costCenter || '')}</td><td class="txt">${esc(vehicleUserName(v))}</td><td class="num"${tierOf(v.insuranceExpiry) === 'expired' ? ' style="color:#c0392b;font-weight:700"' : ''}>${fmtDate(v.insuranceExpiry) || '—'}</td></tr>`).join('');
   });
   openReportWindow({
     title: t('السيارات المسجّلة على ملفات الشؤون'), landscape: false,
     summary: [[String(total), t('سيارة')], [String(groups.filter(([k]) => k).length), t('ملف شؤون')]],
-    body: `<table class="rpt"><thead><tr><th>#</th><th>${t('رقم اللوحة')}</th><th class="txt">${t('النوع')}</th><th class="txt">${t('الموديل')}</th><th class="txt">${t('الشركة')}</th><th class="txt">${t('مركز التكلفة')}</th><th class="txt">${t('مع مين')}</th><th>${t('انتهاء التأمين')}</th></tr></thead><tbody>${body}</tbody></table>`,
+    body: `<table class="rpt"><thead><tr><th>#</th><th>${t('رقم اللوحة')}</th><th class="txt">${t('النوع')}</th><th class="txt">${t('الموديل')}</th><th class="txt">${t('الشركة')}</th><th class="txt">${t('مركز التكلفة')}</th><th class="txt">${t('مع مين')}</th><th>${t('انتهاء الرخصة والتأمين')}</th></tr></thead><tbody>${body}</tbody></table>`,
   });
   printLog(t('السيارات المسجّلة على ملفات الشؤون'), 'vehicle');
 }
@@ -517,8 +517,7 @@ function openVehicleModal(id) {
       <label>${t('مركز التكلفة (مكان الشغل الفعلي)')}<select name="costCenter">${costCenterOptions(v.costCenter)}</select></label>
       <label>${t('مع مين / المستخدم')}<input name="withWhom" list="dl-veh-user" value="${esc(withWhom)}" placeholder="${esc(t('اختار موظف أو اكتب اسم'))}" autocomplete="off">
         <datalist id="dl-veh-user">${people.map(e => `<option value="${esc(personLabel(e))}">`).join('')}</datalist></label>
-      <label>${t('انتهاء التأمين')}<input type="date" name="insuranceExpiry" value="${esc(v.insuranceExpiry || '')}"></label>
-      <label>${t('انتهاء الدفتر')}<input type="date" name="govLicenseExpiry" value="${esc(v.govLicenseExpiry || '')}"></label>
+      <label title="${esc(t('الرخصة (الدفتر) والتأمين بينتهوا في نفس التاريخ'))}">${t('انتهاء الرخصة والتأمين')}<input type="date" name="insuranceExpiry" value="${esc(v.insuranceExpiry || '')}"></label>
       <label class="full">${t('ملاحظات')}<input name="notes" value="${esc(v.notes || '')}"></label></div>
       <div class="small muted" id="v-user-hint">${t('مع مين: اختار أي موظف من القايمة، أو اكتب اسم حر لو اللي معاه العربية مش موظف متسجّل. الربط مابيعلّمش على الموظف «سائق».')}</div>`,
     foot: `${id ? '<button class="btn danger write-only" data-p="vehicles.delete" data-del>🗑️ حذف</button><span class="spacer"></span>' : ''}<button class="btn primary write-only" data-p="vehicles.edit" data-save>حفظ</button><button class="btn" data-close>إلغاء</button>`,

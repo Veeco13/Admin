@@ -252,7 +252,7 @@ function projectSummary(p) {
   const a = p.agencyId && agencyById(p.agencyId);
   return [projectKindLabel(p), a && agencyName(a), p.contractNo && `${t('رقم العقد')} ${p.contractNo}`].filter(Boolean).join(' · ');
 }
-/** الإقامة / إذن العمل (أو تأمين العربية / دفترها) بعد نهاية العقد المسجّل عليه */
+/** الإقامة / إذن العمل (أو رخصة العربية وتأمينها) بعد نهاية العقد المسجّل عليه */
 function beyondLicense(obj, pid, keys) {
   const p = IDX.project[pid];
   return p && p.expiryDate ? keys.filter(k => obj[k] && obj[k] > p.expiryDate) : [];
@@ -1021,13 +1021,12 @@ function trackedAlertItems(maxDays = 90, system = false) {
   for (const p of STATE.projects) if (companyInScope(p.companyId)) {
     push({ kind: 'project', refId: p.companyId, name: projectName(p.id), what: 'العقد / المشروع', date: p.expiryDate });
     const ne = scopedEmployees().filter(e => !empEnded(e) && empProjectId(e) === p.id && beyondLicense(e, p.id, ['residencyExp', 'workPermitExp']).length).length;
-    const nv = STATE.vehicles.filter(v => v.projectId === p.id && beyondLicense(v, p.id, ['insuranceExpiry', 'govLicenseExpiry']).length).length;
+    const nv = STATE.vehicles.filter(v => v.projectId === p.id && beyondLicense(v, p.id, ['insuranceExpiry']).length).length;
     if (ne) push({ kind: 'project', refId: p.companyId, name: projectName(p.id), what: `${ne} ${t('موظف إقامته أو إذن عمله بعد نهاية العقد')}`, date: p.expiryDate });
-    if (nv) push({ kind: 'project', refId: p.companyId, name: projectName(p.id), what: `${nv} ${t('سيارة تأمينها أو دفترها بعد نهاية العقد')}`, date: p.expiryDate });
+    if (nv) push({ kind: 'project', refId: p.companyId, name: projectName(p.id), what: `${nv} ${t('سيارة رخصتها وتأمينها بعد نهاية العقد')}`, date: p.expiryDate });
   }
   for (const v of STATE.vehicles) if (companyInScope(v.companyId)) {
-    push({ kind: 'vehicle', refId: v.id, name: v.plate, what: 'تأمين السيارة', date: v.insuranceExpiry });
-    push({ kind: 'vehicle', refId: v.id, name: v.plate, what: 'دفتر السيارة', date: v.govLicenseExpiry });
+    push({ kind: 'vehicle', refId: v.id, name: v.plate, what: 'رخصة وتأمين السيارة', date: v.insuranceExpiry });   // تاريخ واحد للاتنين
   }
   // التصاريح (الموظف اللي خدمته انتهت مالوش تنبيه) ← بتفتح قسم التصاريح على التصريح نفسه
   for (const p of STATE.permits || []) {

@@ -213,7 +213,7 @@ function openImportExtraModal(tab) {
         <td>${b.undoneAt ? `<span class="chip">↩️ ${t('اترجعت')} ${fmtDateTime(b.undoneAt)}</span>` : `<span class="chip" style="color:var(--green)">${t('متطبّقة')}</span>`}</td>
         <td>${b.undoneAt ? '' : `<button class="btn sm danger" data-undo="${b.id}">↩️ ${t('تراجع')}</button>`}</td></tr>`; }).join('') || `<tr><td colspan="6" class="empty">${t('مفيش دفعات لسه')}</td></tr>`}</tbody></table></div>`;
     $$('[data-undo]', E).forEach(btn => btn.onclick = async () => {
-      if (!await openConfirm(t('ترجّع الدفعة دي؟ الخانات اللي اتملت هترجع زي ما كانت، إلا اللي اتعدّل بعد الاستيراد. والعربيات اللي اتضافت بتتشال، إلا لو اتضاف لها تصاريح أو تأمين أو دفتر أو عقد.'), { danger: true, okLabel: t('تراجع') })) return;
+      if (!await openConfirm(t('ترجّع الدفعة دي؟ الخانات اللي اتملت هترجع زي ما كانت، إلا اللي اتعدّل بعد الاستيراد. والعربيات اللي اتضافت بتتشال، إلا لو اتضاف لها تصاريح أو تاريخ رخصة أو عقد.'), { danger: true, okLabel: t('تراجع') })) return;
       btn.disabled = true;
       try {
         const r = await api('POST', `/api/import-extra/batches/${btn.dataset.undo}/undo`, {});

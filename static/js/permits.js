@@ -64,15 +64,14 @@ function permitProjectOptions(sel) {
 }
 /** العقد اللي بيتختار لوحده: العقد اللي صاحب التصريح مسجّل عليه — لو حكومي أو من الباطن ولسه ماخلصش */
 function permitDefaultProject(h) { const pr = h && IDX.project[h.projectId]; return permitProjectOk(pr) && !projectEnded(pr) ? pr.id : ''; }
-/** أقصى تاريخ للتصريح = أقرب تاريخ من: الموظف ← الإقامة (إذن العمل مش داخل)، والعربية ← التأمين والدفتر —
+/** أقصى تاريخ للتصريح = أقرب تاريخ من: الموظف ← الإقامة (إذن العمل مش داخل)، والعربية ← الرخصة والتأمين (تاريخ واحد) —
     ونهاية العقد اللي التصريح طالع عليه (مش العقد اللي صاحبه مسجّل عليه). [{l, d}] الأقرب الأول (نفس permit_cap على السيرفر). */
 function permitCaps(kind, h, projectId) {
   if (!h) return [];
   const out = [];
   if (kind === 'employee') { if (h.residencyExp) out.push({ l: t('الإقامة'), d: h.residencyExp, src: 'residency' }); }
   else {
-    if (h.insuranceExpiry) out.push({ l: t('التأمين'), d: h.insuranceExpiry, src: 'insurance' });
-    if (h.govLicenseExpiry) out.push({ l: t('الدفتر'), d: h.govLicenseExpiry, src: 'license' });
+    if (h.insuranceExpiry) out.push({ l: t('الرخصة والتأمين'), d: h.insuranceExpiry, src: 'insurance' });
   }
   const pr = IDX.project[projectId];
   if (permitProjectOk(pr) && pr.expiryDate) out.push({ l: `${t('العقد')} ${projectName(pr.id)}`, d: pr.expiryDate, src: 'contract' });
@@ -193,7 +192,7 @@ function permitIssuers() {
 function permitCapText(kind, hid, cs) {
   return !hid ? '' : cs.length
     ? `📌 ${t('أقصى تاريخ للتصريح')}: <b>${fmtDate(cs[0].d)}</b> (${esc(cs[0].l)})${cs.length > 1 ? ` <span class="muted">— ${cs.slice(1).map(c => `${esc(c.l)} ${fmtDate(c.d)}`).join(' · ')}</span>` : ''}`
-    : `<span class="muted">${t(kind === 'employee' ? 'مفيش تاريخ إقامة ولا عقد متسجّل للموظف ده — مفيش حد لتاريخ التصريح.' : 'مفيش تاريخ عقد ولا تأمين ولا دفتر متسجّل للعربية دي — مفيش حد لتاريخ التصريح.')}</span>`;
+    : `<span class="muted">${t(kind === 'employee' ? 'مفيش تاريخ إقامة ولا عقد متسجّل للموظف ده — مفيش حد لتاريخ التصريح.' : 'مفيش تاريخ عقد ولا رخصة وتأمين متسجّل للعربية دي — مفيش حد لتاريخ التصريح.')}</span>`;
 }
 
 /* ---------- إضافة تصريح أو أكتر لنفس الموظف / العربية ----------
@@ -589,12 +588,12 @@ function permitResidencyLines(h) {
 function permitLinesHtml(lines) {
   return `<ul class="pc-renew">${lines.map(x => `<li class="${x.tone}"><span>${x.ico}</span>${esc(x.text)}</li>`).join('')}</ul>`;
 }
-/** بيانات صاحب التصريح (للعرض) + الإقامة والعقد / التأمين والدفتر وملف الشؤون */
+/** بيانات صاحب التصريح (للعرض) + الإقامة والعقد / الرخصة والتأمين وملف الشؤون */
 function permitHolderInfoHtml(kind, h) {
   const f = (l, v) => `<div><span>${esc(t(l))}</span>${v || '<span class="muted">—</span>'}</div>`;
   const extra = kind === 'employee'
     ? f('الإقامة', h.residencyExp ? datePill(h.residencyExp) : '') + f('العقد المسجّل عليه', esc(permitProjectLabel(h.projectId)))
-    : f('التأمين', h.insuranceExpiry ? datePill(h.insuranceExpiry) : '') + f('الدفتر', h.govLicenseExpiry ? datePill(h.govLicenseExpiry) : '')
+    : f('الرخصة والتأمين', h.insuranceExpiry ? datePill(h.insuranceExpiry) : '')
       + f('ملف الشؤون', esc(projectName(h.affairsProjectId))) + f('عقد العربية', esc(permitProjectLabel(h.projectId)));
   return holderCardHtml(kind, h, extra);
 }
@@ -700,7 +699,7 @@ async function printPermitHolderCard(kind, hid) {
        ['الإقامة', h.residencyExp ? `<span class="pill ${tier(h.residencyExp)}">${fmtDate(h.residencyExp)}</span>` : ''], ['العقد المسجّل عليه', esc(permitProjectLabel(h.projectId))]]
     : [['رقم اللوحة', `<span class="num">${esc(h.plate)}</span>`], ['نوع المركبة', esc(t(VEHICLE_TYPES[h.vehicleType] || ''))], ['الموديل', esc(h.model || '')],
        ['الشركة', esc(companyName(h.companyId))], ['مع مين', esc(holderDriver(h))], ['مركز التكلفة', esc(ccLabel(h.costCenter))],
-       ['التأمين', h.insuranceExpiry ? `<span class="pill ${tier(h.insuranceExpiry)}">${fmtDate(h.insuranceExpiry)}</span>` : ''], ['ملف الشؤون', esc(projectName(h.affairsProjectId))]];
+       ['الرخصة والتأمين', h.insuranceExpiry ? `<span class="pill ${tier(h.insuranceExpiry)}">${fmtDate(h.insuranceExpiry)}</span>` : ''], ['ملف الشؤون', esc(projectName(h.affairsProjectId))]];
   const res = kind === 'employee' ? permitResidencyLines(h) : [];
   const body = `<style>${EMP_CARD_PRINT_CSS} .pc-renew{margin:0;padding:0;list-style:none;font-size:9.5px;line-height:1.5} .pc-renew li span{margin-inline-end:4px}</style>
     <div class="ec-id"><div class="ec-av">${esc(kind === 'employee' ? initials(h.name) : '🚗')}</div>

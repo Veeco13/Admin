@@ -1645,6 +1645,7 @@ def save_vehicle(vid=None):
     plate = (d.get("plate") or "").strip()
     if not plate:
         return err("رقم اللوحة مطلوب")
+    d.pop("govLicenseExpiry", None)                # تاريخ واحد للعربية: الرخصة والتأمين (insuranceExpiry)
     with db.session_scope() as s:
         old = s.get(M.Vehicle, vid) if vid else None
         if (old and not opt_company_ok(old.companyId)) or not opt_company_ok(d.get("companyId") or None):
@@ -1851,13 +1852,13 @@ def permit_holders(s, u):
         vehs.append({"id": v.id, "plate": v.plate, "model": v.model, "vehicleType": v.vehicleType, "companyId": v.companyId,
                      "ownerCompanyId": v.ownerCompanyId, "costCenter": v.costCenter, "driverName": dn[0], "driverNameEn": dn[1],
                      "projectId": v.projectId, "affairsProjectId": v.affairsProjectId,
-                     "insuranceExpiry": db.ser(v.insuranceExpiry), "govLicenseExpiry": db.ser(v.govLicenseExpiry)})
+                     "insuranceExpiry": db.ser(v.insuranceExpiry)})
     return {"employees": emps, "vehicles": vehs}
 
 
 def permit_cap(s, kind, hid, project_id=None):
     """أقصى تاريخ لانتهاء التصريح = أقرب تاريخ من: الموظف ← انتهاء الإقامة (إذن العمل مش داخل)، والعربية ←
-    التأمين / الدفتر — ونهاية **العقد اللي التصريح طالع عليه** (حكومي أو من الباطن؛ ممكن يختلف عن العقد اللي
+    الرخصة والتأمين (تاريخ واحد) — ونهاية **العقد اللي التصريح طالع عليه** (حكومي أو من الباطن؛ ممكن يختلف عن العقد اللي
     صاحبه مسجّل عليه). بيرجّع [(الوصف، التاريخ)] الأقرب الأول."""
     out = []
     if kind == "employee":
@@ -1867,7 +1868,7 @@ def permit_cap(s, kind, hid, project_id=None):
     else:
         v = s.get(M.Vehicle, hid)
         if v is not None:
-            out += [(lab, getattr(v, f)) for f, lab in (("insuranceExpiry", "انتهاء التأمين"), ("govLicenseExpiry", "انتهاء الدفتر")) if getattr(v, f)]
+            out += [("انتهاء الرخصة والتأمين", v.insuranceExpiry)] if v.insuranceExpiry else []
     project = s.get(M.Project, project_id) if project_id else None
     if project is not None and project.expiryDate and project.kind in PERMIT_PROJECT_KINDS:
         out.append((f"نهاية العقد «{project.nameAr}»", project.expiryDate))
@@ -1993,7 +1994,7 @@ def _permit_values(s, kind, hid, d, pid=None, batch_parent=None):
         return None, (f"«{project.nameAr}» مش عقد حكومي ولا عقد من الباطن — التصريح بيطلع على العقد", 400, True)
     if project.expiryDate and project.expiryDate < today and not (old is not None and old.projectId == proj):
         return None, (f"العقد «{project.nameAr}» خلص في {project.expiryDate.strftime('%d/%m/%Y')} — اختار عقد ساري", 400, True)
-    caps = permit_cap(s, kind, hid, proj)    # التصريح مايعدّيش أقرب تاريخ (الإقامة / العقد / التأمين / الدفتر)
+    caps = permit_cap(s, kind, hid, proj)    # التصريح مايعدّيش أقرب تاريخ (الإقامة / العقد / رخصة العربية)
     if parent_cap and parent_cap[1]:
         caps = sorted(caps + [parent_cap], key=lambda x: x[1])
     if caps and expiry > caps[0][1]:
@@ -3907,10 +3908,10 @@ def data_quality(s):
     vitems = {"veh_expired": [], "veh_no_dates": [], "veh_driver": [], "veh_no_company": []}
     for v in s.scalars(select(M.Vehicle)):
         it = lambda d="": {"kind": "vehicle", "id": v.id, "label": v.plate, "detail": d}
-        exp = [f"{lab} {fmt(getattr(v, f))}" for f, lab in (("insuranceExpiry", "التأمين"), ("govLicenseExpiry", "الدفتر")) if getattr(v, f) and getattr(v, f) < today]
+        exp = [f"الرخصة والتأمين {fmt(v.insuranceExpiry)}"] if v.insuranceExpiry and v.insuranceExpiry < today else []
         if exp:
             vitems["veh_expired"].append(it("، ".join(exp)))
-        miss = [lab for f, lab in (("insuranceExpiry", "التأمين"), ("govLicenseExpiry", "الدفتر")) if not getattr(v, f)]
+        miss = [] if v.insuranceExpiry else ["الرخصة والتأمين"]
         if miss:
             vitems["veh_no_dates"].append(it("، ".join(miss)))
         d = E.get(v.driverId) if v.driverId else None
@@ -3918,10 +3919,10 @@ def data_quality(s):
             vitems["veh_driver"].append(it(f"السائق خدمته منتهية: {d.name}"))
         if not v.companyId:
             vitems["veh_no_company"].append(it())
-    add("veh_expired", "سيارات تأمينها أو دفترها منتهي", "high", vitems["veh_expired"])
+    add("veh_expired", "سيارات رخصتها وتأمينها منتهي", "high", vitems["veh_expired"])
     add("veh_driver", "سيارات سايقها خدمته منتهية", "medium", vitems["veh_driver"])
     add("veh_no_company", "سيارات من غير شركة", "medium", vitems["veh_no_company"])
-    add("veh_no_dates", "سيارات من غير تاريخ تأمين أو دفتر", "low", vitems["veh_no_dates"])
+    add("veh_no_dates", "سيارات من غير تاريخ رخصة وتأمين", "low", vitems["veh_no_dates"])
 
     # ---------- التصاريح ----------
     over, cancel = [], []
@@ -3939,7 +3940,7 @@ def data_quality(s):
             cancel.append({**it, "detail": f"آخر يوم شغل {fmt(e.serviceEndDate) or '—'}"})
     add("permit_cancel", "تصاريح لازم تتلغي (موظف مستقيل أو إنهاء خدمات أو في فترة إنذار)", "high", cancel,
         "لغيها رسميًا وبعدين احذفها من قسم التصاريح.")
-    add("permit_over_cap", "تصاريح تاريخها بعد انتهاء الإقامة أو العقد أو التأمين أو الدفتر", "medium", over,
+    add("permit_over_cap", "تصاريح تاريخها بعد انتهاء الإقامة أو العقد أو رخصة العربية", "medium", over,
         "اتسجلت قبل قاعدة «أقرب تاريخ» — راجع التاريخ أو حدّث الأصل.")
 
     # ---------- الحسابات ----------

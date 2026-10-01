@@ -99,7 +99,7 @@ class Vehicle(Base):
     companyId: Mapped[Optional[str]] = col("company_id", ID, fk("companies.id"))
     driverId: Mapped[Optional[str]] = col("driver_id", ID, fk("employees.id"))
     insuranceExpiry: Mapped[Optional[date]] = col("insurance_expiry", Date)
-    govLicenseExpiry: Mapped[Optional[date]] = col("gov_license_expiry", Date)
+    govLicenseExpiry: Mapped[Optional[date]] = col("gov_license_expiry", Date)   # قديم ومش مستخدم: الرخصة والتأمين تاريخ واحد = insuranceExpiry
     notes: Mapped[Optional[str]] = col("notes", TEXT)
     projectId: Mapped[Optional[str]] = col("project_id", ID, fk("projects.id"))     # العقد / المشروع المسجّلة عليه
     costCenter: Mapped[Optional[str]] = col("cost_center", NAME)                    # مكان الشغل الفعلي (بالاسم زي الموظف)
