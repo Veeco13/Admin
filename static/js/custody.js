@@ -416,7 +416,7 @@ function openCustodyRequestModal(id = null, preset = null) {
       ${direct ? `<div class="notice small" style="margin-top:8px">${t('للإجراء اللي المستلم صرف عليه من فلوس عهدة معاه لشخص مش في أي طلب: بيتسجّل ويتقفل على طول وتطلع فواتيره، ورصيد المستلم بينقص بالمبلغ — والمبلغ بيتضاف على أقرب طلب عهدة له.')}</div>` : ''}
       <datalist id="dl-custodians">${uniq(custodiesInView().map(c => c.custodian)).map(x => `<option value="${esc(x)}">`).join('')}</datalist>
       <h4 class="cu-h">${t('الأشخاص')} <span class="small muted" id="cu-kind"></span></h4>
-      <div class="row" style="gap:8px;flex-wrap:wrap"><input type="search" id="cu-q" placeholder="${esc(t('بحث بالاسم أو الرقم المدني…'))}" style="flex:1;min-width:200px">
+      <div class="row" style="gap:8px;flex-wrap:wrap"><input type="search" id="cu-q" placeholder="${esc(t('بحث بالاسم (عربي أو إنجليزي) أو الرقم المدني…'))}" style="flex:1;min-width:200px">
         <span id="cu-quick"></span><span class="small muted" id="cu-sel-n"></span></div>
       <div class="cu-pick-list" id="cu-pick"></div>
       <h4 class="cu-h">${direct ? `${t('الإجراءات والمبالغ الفعلية')} <span class="small muted">(${t('علّم الإجراءات اللي اتعملت واكتب مبلغها الفعلي')})</span>`
@@ -434,10 +434,10 @@ function openCustodyRequestModal(id = null, preset = null) {
   const eligible = () => {
     const ty = CUSTODY_TYPES[S.tx];
     if (ty.kind === 'employee') return STATE.employees.filter(e => !empEnded(e) && isKuwaitiStaff(e) === ty.kuwaiti)
-      .map(e => { const doc = ty.doc || 'residencyExp'; return { id: e.id, name: e.name, sub: `${e.id} · ${companyName(empCompanyId(e)) || '—'}${e.costCenter ? ' · ' + e.costCenter : ''}`, exp: ty.kuwaiti ? null : e[doc],
+      .map(e => { const doc = ty.doc || 'residencyExp'; return { id: e.id, name: empName(e), alt: `${e.name} ${e.nameEn || ''}`, sub: `${e.id} · ${companyName(empCompanyId(e)) || '—'}${e.costCenter ? ' · ' + e.costCenter : ''}`, exp: ty.kuwaiti ? null : e[doc],
         tag: e[doc] && !ty.kuwaiti ? `${t(doc === 'passportExp' ? 'الجواز' : 'الإقامة')}: ${datePill(e[doc])}` : esc(t(e.govStage ? (GOV_STAGES.find(g => g.id === e.govStage) || {}).label || '' : '')) }; });
     return STATE.candidates.filter(c => (c.source || 'outside') === ty.source && !['rejected', 'all_completed'].includes(c.stage))
-      .map(c => ({ id: c.id, name: c.name, sub: `${c.civilId || c.passportNo || '—'} · ${companyName(c.targetCompanyId) || '—'}`,
+      .map(c => ({ id: c.id, name: c.name, alt: c.nameEn || '', sub: `${c.civilId || c.passportNo || '—'} · ${companyName(c.targetCompanyId) || '—'}`,
         tag: esc(t((recruitStageInfo(c.source || 'outside', c.stage) || {}).label || '')) }));
   };
   const info = pid => {
@@ -450,7 +450,8 @@ function openCustodyRequestModal(id = null, preset = null) {
     const q = norm($('#cu-q', E).value), soon = addDays(todayISO(), 90);
     $('#cu-kind', E).textContent = `(${t(kind() === 'employee' ? 'موظفين' : 'مترشّحين')}${CUSTODY_TYPES[S.tx].kuwaiti ? ' ' + t('كويتيين ومعاملة كويتية') : ''} — ${t(CUSTODY_TYPES[S.tx].kind === 'employee' ? 'الإقامات والموظفين' : 'تسجيل موظف جديد')})`;
     $('#cu-quick', E).innerHTML = S.tx === 'renewal' ? `<span class="chip clickable ${S.quick === 'soon' ? 'on' : ''}" data-quick="soon">${t('الإقامة بتنتهي خلال 90 يوم')}</span>` : '';
-    const list = eligible().filter(p => (!q || norm(p.name + ' ' + p.sub).includes(q)) && (S.quick !== 'soon' || (p.exp && p.exp <= soon)))
+    const list = eligible().filter(p => (!q || norm(`${p.name} ${p.sub} ${p.alt || ''}`).includes(q))      // الاسم بالعربي والإنجليزي والرقم المدني
+      && (S.quick !== 'soon' || (p.exp && p.exp <= soon)))
       .sort((a, b) => (S.persons.has(b.id) - S.persons.has(a.id)) || (a.exp && b.exp ? a.exp.localeCompare(b.exp) : 0) || a.name.localeCompare(b.name, 'ar'));
     $('#cu-pick', E).innerHTML = list.slice(0, 300).map(p => { const bo = busy(p.id, 'open'), br = busy(p.id, 'recent'); return `<label class="${S.persons.has(p.id) ? 'on' : ''} ${bo ? 'cu-busy' : ''}"><input type="checkbox" data-pick="${esc(p.id)}" ${S.persons.has(p.id) ? 'checked' : ''} ${bo && !S.persons.has(p.id) ? 'disabled' : ''}>
         <b>${esc(p.name)}</b><span class="small muted">${esc(p.sub)}</span><span class="spacer"></span>
