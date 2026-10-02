@@ -50,6 +50,13 @@ const VEHICLE_SHAPES = { 'قاطرة': 'TRUCK HEAD', 'وانيت': 'PICKUP', 'ج
 const NATIONALITY_ADJ = { 'مصر': 'مصري', 'الهند': 'هندي', 'باكستان': 'باكستاني', 'بنغلاديش': 'بنغلاديشي', 'بنجلاديش': 'بنغلاديشي', 'الفلبين': 'فلبيني', 'نيبال': 'نيبالي',
   'سوريا': 'سوري', 'الأردن': 'أردني', 'الاردن': 'أردني', 'لبنان': 'لبناني', 'الكويت': 'كويتي', 'السعودية': 'سعودي', 'سريلانكا': 'سريلانكي', 'السودان': 'سوداني', 'اليمن': 'يمني', 'إيران': 'إيراني', 'ايران': 'إيراني' };
 const permitFormPlate = p => String(p || '').replace(/-/g, '/');          // «91-57023» ← «91/57023» زي النماذج
+// تاريخ تقديم الطلب = يوم العمل اللي بعد النهارده (الجمعة والسبت إجازة — getDay)
+const PERMIT_WEEKEND = [5, 6];
+function permitNextWorkDay(iso) {
+  let d = addDays(iso, 1);
+  while (PERMIT_WEEKEND.includes(new Date(d + 'T00:00:00').getDay())) d = addDays(d, 1);
+  return d;
+}
 /** آخر تصريح لصاحبه من نوع النماذج (رقمه بيتكتب «التصريح القديم») */
 function permitFormOld(holder, id, typeId) {
   return permitsOf(holder, id).filter(p => p.typeId === typeId).sort((a, b) => (b.expiryDate || '').localeCompare(a.expiryDate || ''))[0] || {};
@@ -87,23 +94,33 @@ function openPermitForms(holder, pre = {}) {
   const preIds = (emp ? pre.employeeIds : pre.vehicleIds) || [];
   const first = byId(preIds[0]) || {}, known = id => projects.some(p => p.id === id);
   const store = (k, v) => { try { if (v === undefined) return localStorage.getItem('lunx.permitForms.' + k) || ''; localStorage.setItem('lunx.permitForms.' + k, v); } catch (e) { /* التخزين مقفول */ } return ''; };
-  const S = { kind: KINDS[pre.kind] ? pre.kind : 'koc', rows: [], mandoubId: '',
+  // المقاول من الباطن: بعلامة، ومن الشركات المتسجّلة باطن (في جزء شركة الباطن متعلّم وثابت)
+  const subs = permitSubParts();
+  const S = { kind: KINDS[pre.kind] ? pre.kind : 'koc', rows: [], mandoubId: '', subId: subX ? subX.id : '', unlock: false,
     projectId: [pre.projectId, first.projectId, first.affairsProjectId, store('project')].find(known) || projects[0].id };
-  const today = todayISO();
+  const sub = () => (S.subId ? permitPart('co:' + S.subId) : null);
+  const workDay = permitNextWorkDay(todayISO());
+  // بيانات العقد: اسم المقاول ثابت (من الوكالة)، والباقي مقفول لحد «تعديل بيانات العقد»
+  const FIXED = ['contractorAr', 'contractorEn'], CONTRACT = ['startDate', 'endDate', 'extDate', 'team', 'teamEn', 'teamCode', 'clearancePrefix'];
   const field = (f, label, type = 'text', cls = '') => `<label class="${cls}">${t(label)}<input ${type === 'date' ? 'type="date"' : ''} data-f="${f}"${type === 'ltr' ? ' dir="ltr"' : ''}></label>`;
   const m = openModal({
     title: '📄 ' + t(emp ? 'نماذج تصاريح الموظفين' : 'نماذج تصاريح السيارات') + (partX ? ' — ' + esc(permitPartName(part)) : ''), size: 'wide',
     body: `<div class="form" id="pf-top">
         <label>${t('نوع التصريح')}<select id="pf-kind">${Object.entries(KINDS).map(([k, v]) => opt(k, t(v.label), k === S.kind)).join('')}</select></label>
-        <label>${t('العقد')}<select id="pf-project">${projects.map(p => opt(p.id, projectName(p.id) + (p.contractNo ? ' · ' + p.contractNo : ''), p.id === S.projectId)).join('')}</select></label>
-        ${field('from', 'المدة المطلوبة — من', 'date')}${field('to', 'إلى', 'date')}${field('requestDate', 'تاريخ الطلب', 'date')}</div>
-      <div class="notice small" style="margin-top:8px">${t(emp ? 'كل البيانات تحت متملّية من البرنامج وتقدر تعدّل أي خانة قبل الطباعة. التعديل بيتطبّق على الطباعة دي بس — بيانات الموظف نفسها بتتعدّل من مركز الموظفين.'
-        : 'كل البيانات تحت متملّية من البرنامج وتقدر تعدّل أي خانة قبل الطباعة. التعديل بيتطبّق على الطباعة دي — ولو عايزه يتحفظ في بيانات السيارة والعقد اضغط «حفظ التعديلات في البيانات».')}</div>
-      <h4 class="cu-h">🏢 ${t('بيانات العقد')}</h4>
-      <div class="form">${field('contractorAr', 'اسم المقاول الرئيسي (عربي)', 'text', 'full')}${field('contractorEn', 'اسم المقاول الرئيسي (إنجليزي)', 'ltr', 'full')}
-        ${field('subcontractor', 'المقاول من الباطن')}${field('contractNo', 'رقم العقد')}${field('startDate', 'تاريخ بدء العقد', 'date')}${field('endDate', 'تاريخ انتهاء العقد', 'date')}
+        <label>${t('رقم العقد')}<select id="pf-project" dir="ltr">${projects.map(p => opt(p.id, p.contractNo || projectName(p.id), p.id === S.projectId)).join('')}</select><span class="small muted" id="pf-project-name"></span></label>
+        ${field('from', 'المدة المطلوبة — من', 'date')}${field('to', 'إلى', 'date')}
+        <label title="${esc(t('يوم العمل اللي بعد النهارده — الجمعة والسبت إجازة (وتقدر تغيّره)'))}">${t('تاريخ الطلب')}<input type="date" data-f="requestDate"></label></div>
+      <div class="notice small" style="margin-top:8px">${t(emp ? 'البيانات متملّية من البرنامج. بيانات الموظفين والمندوب والتواريخ تتعدّل للطباعة دي بس — بيانات الموظف نفسها بتتعدّل من مركز الموظفين. بيانات العقد مقفولة.'
+        : 'البيانات متملّية من البرنامج. بيانات السيارات والمندوب والتواريخ تتعدّل قبل الطباعة، ولو عايز تعديل السيارة يتحفظ اضغط «حفظ التعديلات في البيانات». بيانات العقد مقفولة.')}</div>
+      <h4 class="cu-h">🏢 ${t('بيانات العقد')} <span class="small muted">— ${t('من بيانات العقد والوكالة')}</span>
+        ${can('permits.edit') && can('companies.edit') ? `<button type="button" class="btn sm" id="pf-unlock" style="margin-inline-start:8px">✏️ ${t('تعديل بيانات العقد')}</button>` : ''}</h4>
+      <div class="form" id="pf-contract">${field('contractorAr', 'اسم المقاول الرئيسي (عربي)', 'text', 'full')}${field('contractorEn', 'اسم المقاول الرئيسي (إنجليزي)', 'ltr', 'full')}
+        ${field('startDate', 'تاريخ بدء العقد', 'date')}${field('endDate', 'تاريخ انتهاء العقد', 'date')}
         ${field('extDate', 'تمديد العقد حتى', 'date')}${field('team', 'فريق العمل المسؤول')}${field('teamEn', 'فريق العمل (إنجليزي)', 'ltr')}${field('teamCode', 'رمز فريق العمل', 'ltr')}
         ${emp ? '' : field('clearancePrefix', 'الجزء الثابت من رقم شهادة الفحص', 'ltr')}</div>
+      <div id="pf-missing"></div>
+      ${subs.length ? `<div class="row" style="gap:10px;margin-top:10px;align-items:center;flex-wrap:wrap"><label class="check"><input type="checkbox" id="pf-sub-on" ${S.subId ? 'checked' : ''} ${subX ? 'disabled' : ''}> ${t('داخل مقاول من الباطن')}</label>
+        <select id="pf-sub" ${subX ? 'disabled' : ''} ${S.subId ? '' : 'hidden'}>${subs.map(x => opt(x.id, permitPartName(x.key), x.id === S.subId)).join('')}</select></div>` : ''}
       <h4 class="cu-h">👤 ${t('المندوب والمعتمد')}</h4>
       <div class="form"><label>${t('المندوب')}<select id="pf-mandoub"></select></label>${field('mandoubName', 'اسم المندوب في النموذج')}${field('mandoubNationality', 'الجنسية')}
         ${field('mandoubCivil', 'الرقم المدني', 'ltr')}${field('mandoubPhone', 'التليفون', 'ltr')}
@@ -121,20 +138,36 @@ function openPermitForms(holder, pre = {}) {
   const E = m.el, F = f => $(`[data-f="${f}"]`, E), val = f => (F(f) ? F(f).value || '' : '').trim(), set = (f, v) => { if (F(f)) F(f).value = v || ''; };
   const project = () => IDX.project[S.projectId] || {};
   const agency = () => agencyById(project().agencyId) || {};
-  // ---- بيانات العقد والمقاول من العقد ووكالته
-  const fillContract = () => {
-    const p = project(), a = agency(), end = p.clientExtDate || p.clientEndDate || p.expiryDate || '';
-    set('contractorAr', a.contractorAr || companyName(p.companyId)); set('contractorEn', a.contractorEn || (IDX.company[p.companyId] || {}).nameEn);
-    set('subcontractor', subX ? subX.nameAr : ''); set('contractNo', p.contractNo); set('startDate', p.clientStartDate || p.startDate); set('endDate', p.clientEndDate || p.expiryDate);
-    set('extDate', p.clientExtDate); set('team', p.clientTeam); set('teamEn', p.clientTeamEn); set('teamCode', p.clientTeamCode); set('clearancePrefix', p.clearancePrefix);
-    set('from', today); set('to', end); set('requestDate', today);
-    const ids = uniq([...(subX ? subX.mandoubs || [] : []), ...(a.mandoubs || [])]).filter(id => IDX.employee[id]);    // مناديب المقاول من الباطن الأول
+  const lock = () => {
+    FIXED.forEach(f => { if (F(f)) F(f).readOnly = true; });
+    CONTRACT.forEach(f => { if (F(f)) F(f).readOnly = !S.unlock; });
+  };
+  /** الخانات الفاضية في بيانات العقد ← تنبيه (هتطلع فاضية في النماذج) */
+  const missing = () => {
+    const need = [['contractorEn', 'اسم المقاول الرئيسي (إنجليزي)'], ['team', 'فريق العمل المسؤول'], ['teamEn', 'فريق العمل (إنجليزي)'], ['teamCode', 'رمز فريق العمل'],
+      ...(!emp && S.kind === 'koc' ? [['clearancePrefix', 'الجزء الثابت من رقم شهادة الفحص']] : [])].filter(([f]) => !val(f)).map(([, l]) => t(l));
+    $('#pf-missing', E).innerHTML = need.length ? `<div class="notice warn small" style="margin-top:6px">⚠️ ${t('بيانات العقد ناقصة')}: ${need.map(esc).join('، ')} — ${t('هتطلع فاضية في النماذج.')}</div>` : '';
+  };
+  // ---- المندوب والمعتمد: بتوع المقاول من الباطن الأول (لو متعلّم)، وبعدهم بتوع وكالة العقد
+  const fillPeople = () => {
+    const a = agency(), sx = sub();
+    const ids = uniq([...(sx ? sx.mandoubs || [] : []), ...(a.mandoubs || [])]).filter(id => IDX.employee[id]);
     S.mandoubId = ids[0] || '';
     $('#pf-mandoub', E).innerHTML = ids.map((id, i) => opt(id, IDX.employee[id].name + (i ? '' : ` (${t('الأساسي')})`), id === S.mandoubId)).join('') + opt('', t('— مندوب تاني (اكتب بياناته) —'), !S.mandoubId);
     fillMandoub();
-    const signs = uniq([...(subX ? subX.signatories || [] : []), ...(a.signatories || [])]);
+    const signs = uniq([...(sx ? sx.signatories || [] : []), ...(a.signatories || [])]);
     $('#pf-signs', E).innerHTML = signs.map(x => `<option value="${esc(x)}">`).join('');
     set('signatory', signs[0]);
+  };
+  // ---- بيانات العقد والمقاول من العقد ووكالته
+  const fillContract = () => {
+    const p = project(), a = agency(), end = p.clientExtDate || p.clientEndDate || p.expiryDate || '';
+    $('#pf-project-name', E).textContent = projectName(p.id);
+    set('contractorAr', a.contractorAr || companyName(p.companyId)); set('contractorEn', a.contractorEn || (IDX.company[p.companyId] || {}).nameEn);
+    set('startDate', p.clientStartDate || p.startDate); set('endDate', p.clientEndDate || p.expiryDate);
+    set('extDate', p.clientExtDate); set('team', p.clientTeam); set('teamEn', p.clientTeamEn); set('teamCode', p.clientTeamCode); set('clearancePrefix', p.clearancePrefix);
+    set('from', workDay); set('to', end); set('requestDate', workDay);      // الطلب بيتقدّم يوم العمل اللي بعده، والمدة بتبدأ منه
+    lock(); missing(); fillPeople();
   };
   const fillMandoub = () => {
     const e = IDX.employee[S.mandoubId];
@@ -151,7 +184,7 @@ function openPermitForms(holder, pre = {}) {
     return `<input ${at} value="${esc(r[c] || '')}" ${type === 'date' ? 'type="date"' : ''} ${type === 'shape' ? 'list="pf-shapes"' : ''} ${/^(shapeEn|modelEn|chassis|permitCode|ref|idNo)$/.test(c) ? 'dir="ltr"' : ''}>`;
   };
   // أصحاب العقد المختار (أو شركة الباطن) أول القايمة
-  const mine = x => ((subX ? x.companyId === subX.id || x.ownerCompanyId === subX.id : x.projectId === S.projectId || x.affairsProjectId === S.projectId) ? 0 : 1);
+  const mine = x => ((S.subId ? x.companyId === S.subId || x.ownerCompanyId === S.subId : x.projectId === S.projectId || x.affairsProjectId === S.projectId) ? 0 : 1);
   const pickLabel = x => (emp ? `${x.id} — ${x.name}` : permitFormPlate(x.plate));
   const drawRows = () => {
     const cols = KINDS[S.kind].cols;
@@ -163,7 +196,7 @@ function openPermitForms(holder, pre = {}) {
         || `<tr><td colspan="${cols.length + 2}" class="empty">${t(emp ? 'أضف موظف من الخانة اللي فوق' : 'أضف سيارة من الخانة اللي فوق')}</td></tr>`}</tbody>`;
     const used = new Set(S.rows.map(r => r.id));
     $('#pf-vehicles', E).innerHTML = holders.filter(x => !used.has(x.id)).sort((a, b) => mine(a) - mine(b) || pickLabel(a).localeCompare(pickLabel(b), 'ar'))
-      .map(x => `<option value="${esc(pickLabel(x))}">${esc([emp ? x.profession : x.model, mine(x) ? '' : subX ? permitPartName(part) : projectName(S.projectId)].filter(Boolean).join(' · '))}</option>`).join('');
+      .map(x => `<option value="${esc(pickLabel(x))}">${esc([emp ? x.profession : x.model, mine(x) ? '' : S.subId ? permitPartName('co:' + S.subId) : projectName(S.projectId)].filter(Boolean).join(' · '))}</option>`).join('');
     $$('[data-vrm]', E).forEach(b => b.onclick = () => { S.rows.splice(Number(b.dataset.vrm), 1); drawRows(); drawForms(); });
   };
   const drawForms = () => {
@@ -186,7 +219,7 @@ function openPermitForms(holder, pre = {}) {
   const addRow = x => { if (!x || S.rows.some(r => r.id === x.id)) return; S.rows.push(rowOf(x, S.kind)); };
   // ---- جمع البيانات اللي ظاهرة
   const collect = () => ({
-    contractorAr: val('contractorAr'), contractorEn: val('contractorEn'), subcontractor: val('subcontractor'), subcontractorEn: subX && val('subcontractor') === subX.nameAr ? subX.nameEn || '' : '', contractNo: val('contractNo'),
+    contractorAr: val('contractorAr'), contractorEn: val('contractorEn'), subcontractor: (sub() || {}).nameAr || '', subcontractorEn: (sub() || {}).nameEn || '', contractNo: project().contractNo || '',     // رقم العقد من العقد المختار (مش بيتكتب)
     startDate: val('startDate'), endDate: val('endDate'), extDate: val('extDate'), team: val('team'), teamEn: val('teamEn'), teamCode: val('teamCode'),
     from: val('from'), to: val('to'), requestDate: val('requestDate'), signatory: val('signatory'),
     mandoub: { name: val('mandoubName'), nationality: val('mandoubNationality'), civilId: val('mandoubCivil'), phone: val('mandoubPhone') },
@@ -201,7 +234,7 @@ function openPermitForms(holder, pre = {}) {
     if (F('initials')) store('initials', val('initials'));
     toast(t('جاري تجهيز المعاينة…'));
     try {
-      const r = await postForBlob(`/api/permit-forms/${S.kind}/pdf`, { holder, forms, data: collect(), part: part || permitPartKey('', S.projectId) });
+      const r = await postForBlob(`/api/permit-forms/${S.kind}/pdf`, { holder, forms, data: collect(), part: S.subId ? 'co:' + S.subId : part || permitPartKey('', S.projectId) });
       const name = forms.length === 1 ? t(K.forms.find(x => x[0] === forms[0])[1]) : `${t('نماذج')} ${t(K.label)}`;
       openPdfPreviewModal(r.blob, name + '.pdf', 1, 'permit');
     } catch (e) { openBlockAlert(esc(e.message)); }
@@ -216,6 +249,7 @@ function openPermitForms(holder, pre = {}) {
       if (c === 'shape' && VEHICLE_SHAPES[el.value]) { r.shapeEn = VEHICLE_SHAPES[el.value]; const x = $(`[data-vf="${i}|shapeEn"]`, E); if (x) x.value = r.shapeEn; }
       if (c === 'permitCode' && r.refAuto) { r.ref = refOf(r); const x = $(`[data-vf="${i}|ref"]`, E); if (x) x.value = r.ref; }
     } else if (el.dataset.f === 'clearancePrefix') { syncAuto(); S.rows.forEach((r, i) => { const x = $(`[data-vf="${i}|ref"]`, E); if (x) x.value = r.ref; }); }
+    if (CONTRACT.includes(el.dataset.f)) missing();
   };
   E.addEventListener('input', edit);
   E.addEventListener('change', ev => { if (ev.target.tagName === 'SELECT' && ev.target.dataset.vf) edit(ev); });
@@ -230,24 +264,30 @@ function openPermitForms(holder, pre = {}) {
     // التصريح القديم بيختلف بالنوع (ومعاه نوع الإجراء للموظف) ← من البرنامج تاني
     S.rows = S.rows.map(r => { const x = byId(r.id), fresh = x ? rowOf(x, S.kind) : {};
       return { ...r, oldPermitNo: fresh.oldPermitNo || '', oldPermitExpiry: fresh.oldPermitExpiry || '', ...(emp ? { action: fresh.action || 'first' } : {}) }; });
-    drawRows(); drawForms();
+    drawRows(); drawForms(); missing();
   };
+  const subOn = $('#pf-sub-on', E), subSel = $('#pf-sub', E);
+  if (subOn) {
+    const pick = () => { subSel.hidden = !subOn.checked; S.subId = subOn.checked ? subSel.value : ''; fillPeople(); drawRows(); };
+    subOn.onchange = pick; subSel.onchange = pick;
+  }
+  const un = $('#pf-unlock', E);
+  if (un) un.onclick = () => { S.unlock = true; lock(); un.hidden = true; toast(t('بيانات العقد اتفتحت للتعديل — اضغط «حفظ التعديلات في البيانات» عشان تتسجّل.')); const x = F('team'); if (x) x.focus(); };
   $('#pf-project', E).onchange = ev => { S.projectId = ev.target.value; store('project', S.projectId); fillContract(); drawRows(); drawForms(); };
   $('#pf-mandoub', E).onchange = ev => { S.mandoubId = ev.target.value; fillMandoub(); };
   $('[data-all]', E).onclick = () => print(KINDS[S.kind].forms.map(x => x[0]));
   $('[data-store]', E).onclick = async () => {
-    const p = project(), a = agency();
+    const p = project();
     // تاريخ العقد عند الجهة: لو الخانة لسه على البديل (تاريخ الترخيص) ومتسجّلش قبل كده ← مايتسجّلش
     const own = (f, saved, fallback) => (saved || val(f) !== (fallback || '') ? val(f) : '');
     const body = { vehicles: emp ? [] : S.rows.filter(r => IDX.vehicle[r.id]).map(r => ({ id: r.id, color: r.color, color2: r.color2, shape: r.shape, shapeEn: r.shapeEn, chassisNo: r.chassis,
         modelYear: r.modelYear, modelEn: r.modelEn, permitCode: r.permitCode })),
       project: p.id ? { id: p.id, clientStartDate: own('startDate', p.clientStartDate, p.startDate), clientEndDate: own('endDate', p.clientEndDate, p.expiryDate), clientExtDate: val('extDate'), clientTeam: val('team'), clientTeamEn: val('teamEn'),
         clientTeamCode: val('teamCode'), ...(emp ? {} : { clearancePrefix: val('clearancePrefix') }) } : null,
-      agency: a.id ? { id: a.id, contractorAr: own('contractorAr', a.contractorAr, companyName(p.companyId)),
-        contractorEn: own('contractorEn', a.contractorEn, (IDX.company[p.companyId] || {}).nameEn) } : null,
+      agency: null,                               // اسم المقاول ثابت هنا — بيتعدّل من بيانات الوكالة
       mandoub: S.mandoubId ? { id: S.mandoubId, phone: val('mandoubPhone') } : null };
-    if (!await openConfirm(t(emp ? 'حفظ بيانات العقد والمقاول وتليفون المندوب اللي في النافذة؟ (بيانات الموظفين بتتعدّل من مركز الموظفين، وتواريخ الطلب مابتتحفظش)'
-      : 'حفظ اللي في النافذة في بيانات السيارات والعقد والمقاول وتليفون المندوب؟ (رقم التصريح القديم وتواريخ الطلب مابتتحفظش)'), { okLabel: t('حفظ') })) return;
+    if (!await openConfirm(t(emp ? 'حفظ بيانات العقد وتليفون المندوب اللي في النافذة؟ (بيانات الموظفين بتتعدّل من مركز الموظفين، وتواريخ الطلب مابتتحفظش)'
+      : 'حفظ اللي في النافذة في بيانات السيارات والعقد وتليفون المندوب؟ (رقم التصريح القديم وتواريخ الطلب مابتتحفظش)'), { okLabel: t('حفظ') })) return;
     try {
       const r = await persist('PUT', '/api/permit-forms/data', body);
       toast(r.saved && r.saved.length ? `${t('اتحفظ')}: ${r.saved.join('، ')}` : t('مفيش تعديلات جديدة تتحفظ'), 'ok');
